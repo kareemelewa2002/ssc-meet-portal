@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,15 +21,25 @@ import {
   scoreHeatResult,
 } from "@/lib/results";
 import { createClient } from "@/lib/supabase/client";
-import type { DqReason, ResultOutcome } from "@/lib/supabase/types";
+import { ATTENDANCE_LABELS } from "@/lib/attendance";
+import type { AttendanceStatus, DqReason, ResultOutcome } from "@/lib/supabase/types";
+import { AthleteLink } from "@/components/athletes/athlete-link";
 
 export interface HeatLaneAthlete {
   heatLaneId: string;
   laneNumber: number;
   athleteName: string;
+  athleteId?: string;
   teamName?: string;
   seedTimeMs?: number | null;
   entryId?: string;
+  attendanceStatus?: AttendanceStatus;
+}
+
+function attendanceBadgeVariant(status: AttendanceStatus): "default" | "destructive" | "outline" {
+  if (status === "present") return "default";
+  if (status === "absent") return "destructive";
+  return "outline";
 }
 
 export interface LaneDraft {
@@ -82,6 +92,32 @@ export function HeatResultEntry({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() =>
+    Object.fromEntries(lanes.map((l) => [l.heatLaneId, l.attendanceStatus ?? "pending"])),
+  );
+
+  // Ushers mark call-room attendance from a separate portal — reflect it here
+  // live so referees know who's checked in before starting the heat.
+  useEffect(() => {
+    const laneIds = new Set(lanes.map((l) => l.heatLaneId));
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`referee-heat-attendance-${heatId}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "heat_lanes" },
+        (payload) => {
+          const row = payload.new as { id?: string; attendance_status?: AttendanceStatus };
+          if (!row.id || !row.attendance_status || !laneIds.has(row.id)) return;
+          setAttendance((prev) => ({ ...prev, [row.id!]: row.attendance_status! }));
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [heatId, lanes]);
 
   const allReady = useMemo(
     () =>
@@ -191,7 +227,15 @@ export function HeatResultEntry({
                       outdoorMode && "text-yellow-300",
                     )}
                   >
-                    {lane.athleteName}
+                    {lane.athleteId ? (
+                      <AthleteLink
+                        athleteId={lane.athleteId}
+                        name={lane.athleteName}
+                        className={outdoorMode ? "text-yellow-300" : undefined}
+                      />
+                    ) : (
+                      lane.athleteName
+                    )}
                   </p>
                   {lane.teamName && (
                     <p
@@ -204,6 +248,12 @@ export function HeatResultEntry({
                     </p>
                   )}
                 </div>
+                <Badge
+                  variant={attendanceBadgeVariant(attendance[lane.heatLaneId] ?? "pending")}
+                  className="h-7 shrink-0 px-2 text-xs"
+                >
+                  {ATTENDANCE_LABELS[attendance[lane.heatLaneId] ?? "pending"]}
+                </Badge>
               </div>
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">

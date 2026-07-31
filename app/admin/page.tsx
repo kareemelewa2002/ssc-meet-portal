@@ -22,7 +22,7 @@ export default function AdminPage() {
             key={t.id}
             type="button"
             variant={tab === t.id ? "default" : "ghost"}
-            className={cn("min-h-[44px] min-w-0 truncate sm:flex-none")}
+            className={cn("min-h-[48px] min-w-0 truncate sm:flex-none")}
             onClick={() => setTab(t.id)}
           >
             <span className="sm:hidden">{t.shortLabel}</span>

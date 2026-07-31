@@ -11,6 +11,7 @@
 export type UserRole =
   | "admin"
   | "referee"
+  | "usher"
   | "coach"
   | "team_captain"
   | "athlete"
@@ -39,6 +40,14 @@ export type ResultOutcome = "valid" | "dq" | "no_show";
 
 export type SkinsResponse = "pending" | "accepted" | "declined";
 
+export type Gender = "male" | "female";
+
+export type VolumeStatus = "planned" | "scheduled" | "completed";
+
+export type AttendanceStatus = "pending" | "present" | "absent";
+
+export type AwardType = "best_swimmer" | "most_improved";
+
 export type AppSettingsRow = {
   id: boolean;
   superadmin_email: string;
@@ -50,6 +59,7 @@ export type UserRow = {
   email: string;
   full_name: string;
   phone: string | null;
+  profile_image_url: string | null;
   role: UserRole;
   created_at: string;
   updated_at: string;
@@ -81,12 +91,24 @@ export type AthleteRow = {
   date_of_birth: string;
   age: number;
   age_group: AgeGroup;
+  gender: Gender;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MeetVolumeRow = {
+  id: string;
+  volume_number: number;
+  name: string;
+  meet_date: string | null;
+  status: VolumeStatus;
   created_at: string;
   updated_at: string;
 };
 
 export type SessionRow = {
   id: string;
+  meet_volume_id: string;
   session_number: 1 | 2 | 3;
   name: string;
   meet_date: string;
@@ -131,6 +153,9 @@ export type HeatLaneRow = {
   heat_id: string;
   lane_number: number;
   entry_id: string | null;
+  attendance_status: AttendanceStatus;
+  attendance_marked_at: string | null;
+  attendance_marked_by: string | null;
 };
 
 export type ResultRow = {
@@ -151,12 +176,68 @@ export type ResultRow = {
 
 export type LeaderboardRow = {
   id: string;
+  meet_volume_id: string;
   athlete_id: string;
   category: AgeGroup;
   placement_points: number;
   improvement_points: number;
   total_points: number;
   updated_at: string;
+};
+
+export type AwardRow = {
+  id: string;
+  athlete_id: string;
+  meet_volume_id: string;
+  award_type: AwardType;
+  category: AgeGroup;
+  gender: Gender;
+  created_at: string;
+};
+
+// public.series_leaderboards — read-only view summing every volume's
+// leaderboard rows per athlete/category.
+export type SeriesLeaderboardRow = {
+  athlete_id: string;
+  category: AgeGroup;
+  placement_points: number;
+  improvement_points: number;
+  total_points: number;
+  volumes_counted: number;
+};
+
+export type AllTimeBestPerformanceRow = {
+  result_id: string;
+  athlete_id: string;
+  athlete_name: string;
+  profile_image_url: string | null;
+  team_name: string | null;
+  gender: Gender;
+  age_group: AgeGroup;
+  stroke: string;
+  distance_m: number;
+  event_name: string;
+  meet_volume_id: string;
+  volume_number: number;
+  volume_name: string;
+  official_time_ms: number;
+  finish_place: number | null;
+  swam_at: string;
+  rank: number;
+};
+
+export type AllTimeBestPerformerRow = {
+  athlete_id: string;
+  athlete_name: string;
+  profile_image_url: string | null;
+  team_name: string | null;
+  gender: Gender;
+  age_group: AgeGroup;
+  stroke: string;
+  distance_m: number;
+  best_time_ms: number;
+  races_counted: number;
+  rank: number;
 };
 
 export type SkinsQualificationRow = {
@@ -194,6 +275,12 @@ type Table<Row> = {
   Relationships: [];
 };
 
+// Matches GenericView's non-updatable shape (Row/Relationships only).
+type View<Row> = {
+  Row: Row;
+  Relationships: [];
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -202,6 +289,7 @@ export type Database = {
       teams: Table<TeamRow>;
       team_memberships: Table<TeamMembershipRow>;
       athletes: Table<AthleteRow>;
+      meet_volumes: Table<MeetVolumeRow>;
       sessions: Table<SessionRow>;
       events: Table<EventRow>;
       entries: Table<EntryRow>;
@@ -209,9 +297,14 @@ export type Database = {
       heat_lanes: Table<HeatLaneRow>;
       results: Table<ResultRow>;
       leaderboards: Table<LeaderboardRow>;
+      awards: Table<AwardRow>;
       skins_qualifications: Table<SkinsQualificationRow>;
     };
-    Views: Record<string, never>;
+    Views: {
+      series_leaderboards: View<SeriesLeaderboardRow>;
+      all_time_best_performances: View<AllTimeBestPerformanceRow>;
+      all_time_best_performers: View<AllTimeBestPerformerRow>;
+    };
     Functions: {
       get_skins_qualifiers: {
         Args: { event_id_param: string };
@@ -232,6 +325,10 @@ export type Database = {
       dq_reason: DqReason;
       result_outcome: ResultOutcome;
       skins_response: SkinsResponse;
+      gender: Gender;
+      volume_status: VolumeStatus;
+      attendance_status: AttendanceStatus;
+      award_type: AwardType;
     };
   };
 };

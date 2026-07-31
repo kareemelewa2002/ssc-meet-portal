@@ -11,73 +11,164 @@ create extension if not exists pgcrypto;
 -- 1. ENUM TYPES
 -- =============================================================================
 
-create type public.user_role as enum (
-  'admin',
-  'referee',
-  'coach',
-  'team_captain',
-  'athlete',
-  'parent'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'user_role') then
+    create type public.user_role as enum (
+      'admin',
+      'referee',
+      'usher',
+      'coach',
+      'team_captain',
+      'athlete',
+      'parent'
+    );
+  end if;
+end $$;
 
 -- Roles a member of the public may select for themselves at sign-up.
 -- 'admin' and 'team_captain' are intentionally excluded — team_captain is
 -- granted by promoting a team's captain_id, admin only by an existing admin.
-create type public.public_signup_role as enum (
-  'athlete',
-  'parent',
-  'coach',
-  'referee'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'public_signup_role') then
+    create type public.public_signup_role as enum (
+      'athlete',
+      'parent',
+      'coach',
+      'referee'
+    );
+  end if;
+end $$;
 
-create type public.age_group as enum (
-  'U13_14',
-  'U17',
-  'Open'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'age_group') then
+    create type public.age_group as enum (
+      'U13_14',
+      'U17',
+      'Open'
+    );
+  end if;
+end $$;
 
 -- Used for heats.status and results.status
-create type public.publish_status as enum (
-  'draft',
-  'published'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'publish_status') then
+    create type public.publish_status as enum (
+      'draft',
+      'published'
+    );
+  end if;
+end $$;
 
-create type public.membership_status as enum (
-  'pending',
-  'accepted'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'membership_status') then
+    create type public.membership_status as enum (
+      'pending',
+      'accepted'
+    );
+  end if;
+end $$;
 
 -- The two heat-scheduling phases: U13-14 swims first, U17 + Open swim
 -- together afterward (see lib/seeding.ts).
-create type public.heat_group as enum (
-  'U13_14',
-  'U17_OPEN'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'heat_group') then
+    create type public.heat_group as enum (
+      'U13_14',
+      'U17_OPEN'
+    );
+  end if;
+end $$;
 
-create type public.dq_reason as enum (
-  'false_start',
-  'stroke_infraction',
-  'turn_infraction',
-  'turn_stroke_violation',
-  'finish_infraction',
-  'unsporting_conduct',
-  'other'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'dq_reason') then
+    create type public.dq_reason as enum (
+      'false_start',
+      'stroke_infraction',
+      'turn_infraction',
+      'turn_stroke_violation',
+      'finish_infraction',
+      'unsporting_conduct',
+      'other'
+    );
+  end if;
+end $$;
 
 -- Explicit outcome for a recorded heat result. DQ and NS both score 0
 -- placement/improvement points; NS is additionally excluded from Skins
 -- qualification ranking.
-create type public.result_outcome as enum (
-  'valid',
-  'dq',
-  'no_show'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'result_outcome') then
+    create type public.result_outcome as enum (
+      'valid',
+      'dq',
+      'no_show'
+    );
+  end if;
+end $$;
 
-create type public.skins_response as enum (
-  'pending',
-  'accepted',
-  'declined'
-);
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'skins_response') then
+    create type public.skins_response as enum (
+      'pending',
+      'accepted',
+      'declined'
+    );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'gender') then
+    create type public.gender as enum (
+      'male',
+      'female'
+    );
+  end if;
+end $$;
+
+-- 'planned'   -> future volume with no confirmed date yet ("Coming Soon").
+-- 'scheduled' -> has a real meet_date, not yet completed.
+-- 'completed' -> the meet has happened; results are historical.
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'volume_status') then
+    create type public.volume_status as enum (
+      'planned',
+      'scheduled',
+      'completed'
+    );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'attendance_status') then
+    create type public.attendance_status as enum (
+      'pending',
+      'present',
+      'absent'
+    );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'award_type') then
+    create type public.award_type as enum (
+      'best_swimmer',
+      'most_improved'
+    );
+  end if;
+end $$;
 
 -- =============================================================================
 -- 2. CORE TABLES
@@ -87,7 +178,7 @@ create type public.skins_response as enum (
 -- app_settings — single-row configuration table. Holds the email of the
 -- system creator (the only account allowed to self-bootstrap as 'admin').
 -- ---------------------------------------------------------------------------
-create table public.app_settings (
+create table if not exists public.app_settings (
   id boolean primary key default true constraint app_settings_singleton check (id),
   superadmin_email text not null,
   updated_at timestamptz not null default now()
@@ -100,11 +191,13 @@ comment on table public.app_settings is
 -- ---------------------------------------------------------------------------
 -- users — extends auth.users with SSC-specific profile & role data.
 -- ---------------------------------------------------------------------------
-create table public.users (
+create table if not exists public.users (
   id uuid primary key references auth.users (id) on delete cascade,
   email text not null,
   full_name text not null,
   phone text,
+  -- Optional deck credential / public profile photo (ushers, athletes, officials).
+  profile_image_url text,
   role public.user_role not null default 'athlete',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -118,7 +211,7 @@ comment on column public.users.role is
 -- ---------------------------------------------------------------------------
 -- teams
 -- ---------------------------------------------------------------------------
-create table public.teams (
+create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   captain_id uuid references public.users (id) on delete set null,
@@ -130,7 +223,7 @@ create table public.teams (
 -- ---------------------------------------------------------------------------
 -- team_memberships
 -- ---------------------------------------------------------------------------
-create table public.team_memberships (
+create table if not exists public.team_memberships (
   id uuid primary key default gen_random_uuid(),
   team_id uuid not null references public.teams (id) on delete cascade,
   user_id uuid not null references public.users (id) on delete cascade,
@@ -143,7 +236,7 @@ create table public.team_memberships (
 -- ---------------------------------------------------------------------------
 -- athletes
 -- ---------------------------------------------------------------------------
-create table public.athletes (
+create table if not exists public.athletes (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references public.users (id) on delete cascade,
   team_id uuid references public.teams (id) on delete set null,
@@ -151,6 +244,7 @@ create table public.athletes (
   date_of_birth date not null,
   age integer not null check (age >= 0 and age < 120),
   age_group public.age_group not null,
+  gender public.gender not null,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -160,22 +254,42 @@ comment on column public.athletes.parent_id is
   'entries when age < 15 (see entries RLS policies).';
 
 -- ---------------------------------------------------------------------------
--- sessions — the 3 sessions of the Oct 2, 2026 meet.
+-- meet_volumes — the SSC series is a numbered sequence of meets ("SSC Vol.
+-- 1", "SSC Vol. 2", ...). Each volume gets its own isolated leaderboard;
+-- the series standing is the sum across every volume (see
+-- public.series_leaderboards below).
 -- ---------------------------------------------------------------------------
-create table public.sessions (
+create table if not exists public.meet_volumes (
   id uuid primary key default gen_random_uuid(),
-  session_number integer not null unique check (session_number in (1, 2, 3)),
+  volume_number integer not null unique check (volume_number >= 1),
+  name text not null,
+  meet_date date,
+  status public.volume_status not null default 'planned',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- ---------------------------------------------------------------------------
+-- sessions — the 3 sessions of a single meet volume.
+-- ---------------------------------------------------------------------------
+create table if not exists public.sessions (
+  id uuid primary key default gen_random_uuid(),
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
+  session_number integer not null check (session_number in (1, 2, 3)),
   name text not null,
   meet_date date not null,
   start_time time not null,
   end_time time not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  unique (meet_volume_id, session_number)
 );
+
+create index if not exists sessions_meet_volume_id_idx on public.sessions (meet_volume_id);
 
 -- ---------------------------------------------------------------------------
 -- events
 -- ---------------------------------------------------------------------------
-create table public.events (
+create table if not exists public.events (
   id uuid primary key default gen_random_uuid(),
   session_id uuid not null references public.sessions (id) on delete cascade,
   name text not null,
@@ -186,12 +300,12 @@ create table public.events (
   created_at timestamptz not null default now()
 );
 
-create index events_session_id_idx on public.events (session_id);
+create index if not exists events_session_id_idx on public.events (session_id);
 
 -- ---------------------------------------------------------------------------
 -- entries — event registrations
 -- ---------------------------------------------------------------------------
-create table public.entries (
+create table if not exists public.entries (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references public.events (id) on delete cascade,
   athlete_id uuid not null references public.athletes (id) on delete cascade,
@@ -205,13 +319,13 @@ create table public.entries (
   )
 );
 
-create index entries_event_id_idx on public.entries (event_id);
-create index entries_athlete_id_idx on public.entries (athlete_id);
+create index if not exists entries_event_id_idx on public.entries (event_id);
+create index if not exists entries_athlete_id_idx on public.entries (athlete_id);
 
 -- ---------------------------------------------------------------------------
 -- heats & heat_lanes — 6 lanes per heat.
 -- ---------------------------------------------------------------------------
-create table public.heats (
+create table if not exists public.heats (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references public.events (id) on delete cascade,
   heat_group public.heat_group not null,
@@ -223,24 +337,29 @@ create table public.heats (
   unique (event_id, heat_number)
 );
 
-create index heats_event_id_idx on public.heats (event_id);
-create index heats_status_idx on public.heats (status);
+create index if not exists heats_event_id_idx on public.heats (event_id);
+create index if not exists heats_status_idx on public.heats (status);
 
-create table public.heat_lanes (
+create table if not exists public.heat_lanes (
   id uuid primary key default gen_random_uuid(),
   heat_id uuid not null references public.heats (id) on delete cascade,
   lane_number integer not null check (lane_number between 1 and 6),
   entry_id uuid references public.entries (id) on delete cascade,
+  -- Call-room check-in by Ushers before the heat starts behind the blocks.
+  attendance_status public.attendance_status not null default 'pending',
+  attendance_marked_at timestamptz,
+  attendance_marked_by uuid references public.users (id) on delete set null,
   unique (heat_id, lane_number),
   unique (heat_id, entry_id)
 );
 
-create index heat_lanes_heat_id_idx on public.heat_lanes (heat_id);
+create index if not exists heat_lanes_heat_id_idx on public.heat_lanes (heat_id);
+create index if not exists heat_lanes_attendance_idx on public.heat_lanes (attendance_status);
 
 -- ---------------------------------------------------------------------------
 -- results
 -- ---------------------------------------------------------------------------
-create table public.results (
+create table if not exists public.results (
   id uuid primary key default gen_random_uuid(),
   heat_lane_id uuid not null unique references public.heat_lanes (id) on delete cascade,
   -- null while still an incomplete draft; required once published.
@@ -280,15 +399,15 @@ create table public.results (
   )
 );
 
-create index results_status_idx on public.results (status);
-create index results_outcome_idx on public.results (result_outcome);
+create index if not exists results_status_idx on public.results (status);
+create index if not exists results_outcome_idx on public.results (result_outcome);
 
 -- ---------------------------------------------------------------------------
 -- skins_qualifications — accept / decline responses for Session 3 Skins.
 -- Athletes never self-register for skins events; invitations are created
 -- from published meet results and roll over when a qualifier declines.
 -- ---------------------------------------------------------------------------
-create table public.skins_qualifications (
+create table if not exists public.skins_qualifications (
   id uuid primary key default gen_random_uuid(),
   skins_event_id uuid not null references public.events (id) on delete cascade,
   athlete_id uuid not null references public.athletes (id) on delete cascade,
@@ -303,7 +422,7 @@ create table public.skins_qualifications (
   unique (skins_event_id, athlete_id, category)
 );
 
-create index skins_qualifications_event_idx
+create index if not exists skins_qualifications_event_idx
   on public.skins_qualifications (skins_event_id, category, source_rank);
 
 -- ---------------------------------------------------------------------------
@@ -315,18 +434,134 @@ create index skins_qualifications_event_idx
 -- Every athlete accumulates points into their native-age-group category AND
 -- into 'Open' (see public.apply_result_points() below).
 -- ---------------------------------------------------------------------------
-create table public.leaderboards (
+create table if not exists public.leaderboards (
   id uuid primary key default gen_random_uuid(),
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
   athlete_id uuid not null references public.athletes (id) on delete cascade,
   category public.age_group not null,
   placement_points numeric(8, 2) not null default 0,
   improvement_points numeric(8, 2) not null default 0,
   total_points numeric(8, 2) generated always as (placement_points + improvement_points) stored,
   updated_at timestamptz not null default now(),
-  unique (athlete_id, category)
+  unique (meet_volume_id, athlete_id, category)
 );
 
-create index leaderboards_category_idx on public.leaderboards (category, total_points desc);
+create index if not exists leaderboards_volume_category_idx
+  on public.leaderboards (meet_volume_id, category, total_points desc);
+
+-- ---------------------------------------------------------------------------
+-- awards — Best Swimmer / Most Improved per volume × category × gender.
+-- ---------------------------------------------------------------------------
+create table if not exists public.awards (
+  id uuid primary key default gen_random_uuid(),
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
+  award_type public.award_type not null,
+  category public.age_group not null,
+  gender public.gender not null,
+  created_at timestamptz not null default now(),
+  unique (meet_volume_id, award_type, category, gender)
+);
+
+create index if not exists awards_athlete_id_idx on public.awards (athlete_id);
+create index if not exists awards_volume_idx on public.awards (meet_volume_id);
+
+-- =============================================================================
+-- series_leaderboards — sums every volume's leaderboard rows per athlete, so
+-- the series standing accumulates automatically as new volumes publish
+-- results. Read-only: it's a derived view over public.leaderboards, and
+-- inherits that table's RLS (public can already SELECT all leaderboard rows).
+-- =============================================================================
+create or replace view public.series_leaderboards as
+select
+  athlete_id,
+  category,
+  sum(placement_points) as placement_points,
+  sum(improvement_points) as improvement_points,
+  sum(total_points) as total_points,
+  count(distinct meet_volume_id) as volumes_counted
+from public.leaderboards
+group by athlete_id, category;
+
+-- =============================================================================
+-- All-Time SSC Record Book views
+-- =============================================================================
+
+-- Best Performances: every valid race time ranked (one athlete may appear
+-- multiple times). Partitioned by stroke / distance / age group / gender.
+create or replace view public.all_time_best_performances as
+select
+  r.id as result_id,
+  a.id as athlete_id,
+  u.full_name as athlete_name,
+  u.profile_image_url,
+  t.name as team_name,
+  a.gender,
+  a.age_group,
+  e.stroke,
+  e.distance_m,
+  e.name as event_name,
+  mv.id as meet_volume_id,
+  mv.volume_number,
+  mv.name as volume_name,
+  r.official_time_ms,
+  r.finish_place,
+  r.created_at as swam_at,
+  dense_rank() over (
+    partition by e.stroke, e.distance_m, a.age_group, a.gender
+    order by r.official_time_ms asc, r.created_at asc
+  ) as rank
+from public.results r
+join public.heat_lanes hl on hl.id = r.heat_lane_id
+join public.entries en on en.id = hl.entry_id
+join public.athletes a on a.id = en.athlete_id
+join public.users u on u.id = a.user_id
+join public.events e on e.id = en.event_id
+join public.sessions s on s.id = e.session_id
+join public.meet_volumes mv on mv.id = s.meet_volume_id
+left join public.teams t on t.id = a.team_id
+where r.status = 'published'
+  and r.result_outcome = 'valid'
+  and r.official_time_ms is not null
+  and e.is_skins = false;
+
+-- Best Performers: each athlete's single fastest time per event key, then
+-- ranked — one row per athlete per stroke/distance/age/gender.
+create or replace view public.all_time_best_performers as
+with personal_bests as (
+  select
+    a.id as athlete_id,
+    u.full_name as athlete_name,
+    u.profile_image_url,
+    t.name as team_name,
+    a.gender,
+    a.age_group,
+    e.stroke,
+    e.distance_m,
+    min(r.official_time_ms) as best_time_ms,
+    count(*)::integer as races_counted
+  from public.results r
+  join public.heat_lanes hl on hl.id = r.heat_lane_id
+  join public.entries en on en.id = hl.entry_id
+  join public.athletes a on a.id = en.athlete_id
+  join public.users u on u.id = a.user_id
+  join public.events e on e.id = en.event_id
+  left join public.teams t on t.id = a.team_id
+  where r.status = 'published'
+    and r.result_outcome = 'valid'
+    and r.official_time_ms is not null
+    and e.is_skins = false
+  group by
+    a.id, u.full_name, u.profile_image_url, t.name,
+    a.gender, a.age_group, e.stroke, e.distance_m
+)
+select
+  personal_bests.*,
+  dense_rank() over (
+    partition by stroke, distance_m, age_group, gender
+    order by best_time_ms asc
+  ) as rank
+from personal_bests;
 
 -- =============================================================================
 -- 3. HELPER FUNCTIONS (SECURITY DEFINER — bypass RLS for role lookups so
@@ -377,6 +612,32 @@ as $$
   select exists (
     select 1 from public.users
     where id = auth.uid() and role in ('admin', 'referee')
+  );
+$$;
+
+create or replace function public.is_usher()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.users where id = auth.uid() and role = 'usher'
+  );
+$$;
+
+-- Deck staff who may view call-room / heat-lane attendance boards.
+create or replace function public.is_deck_official()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.users
+    where id = auth.uid() and role in ('admin', 'referee', 'usher')
   );
 $$;
 
@@ -475,7 +736,7 @@ exception
 end;
 $$;
 
-create trigger on_auth_user_created
+create or replace trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_auth_user();
 
@@ -500,11 +761,11 @@ begin
 end;
 $$;
 
-create trigger enforce_role_change_trigger
+create or replace trigger enforce_role_change_trigger
   before update on public.users
   for each row execute function public.enforce_role_change();
 
-create trigger users_set_updated_at
+create or replace trigger users_set_updated_at
   before update on public.users
   for each row execute function public.set_updated_at();
 
@@ -526,6 +787,7 @@ as $$
 declare
   v_athlete_id uuid;
   v_age_group public.age_group;
+  v_meet_volume_id uuid;
   old_placement numeric(6, 2) := 0;
   old_improvement numeric(6, 2) := 0;
   was_published boolean := false;
@@ -557,19 +819,22 @@ begin
     return new;
   end if;
 
-  select a.id, a.age_group into v_athlete_id, v_age_group
+  select a.id, a.age_group, s.meet_volume_id
+    into v_athlete_id, v_age_group, v_meet_volume_id
   from public.heat_lanes hl
   join public.entries e on e.id = hl.entry_id
   join public.athletes a on a.id = e.athlete_id
+  join public.events ev on ev.id = e.event_id
+  join public.sessions s on s.id = ev.session_id
   where hl.id = new.heat_lane_id;
 
   if v_athlete_id is null then
     return new;
   end if;
 
-  insert into public.leaderboards (athlete_id, category, placement_points, improvement_points)
-  values (v_athlete_id, v_age_group, delta_placement, delta_improvement)
-  on conflict (athlete_id, category) do update
+  insert into public.leaderboards (meet_volume_id, athlete_id, category, placement_points, improvement_points)
+  values (v_meet_volume_id, v_athlete_id, v_age_group, delta_placement, delta_improvement)
+  on conflict (meet_volume_id, athlete_id, category) do update
     set placement_points = public.leaderboards.placement_points + excluded.placement_points,
         improvement_points = public.leaderboards.improvement_points + excluded.improvement_points,
         updated_at = now();
@@ -577,9 +842,9 @@ begin
   -- 'Open' is a combined ranking of every age group (Results Filter rule),
   -- so non-Open athletes also accumulate into it.
   if v_age_group <> 'Open' then
-    insert into public.leaderboards (athlete_id, category, placement_points, improvement_points)
-    values (v_athlete_id, 'Open', delta_placement, delta_improvement)
-    on conflict (athlete_id, category) do update
+    insert into public.leaderboards (meet_volume_id, athlete_id, category, placement_points, improvement_points)
+    values (v_meet_volume_id, v_athlete_id, 'Open', delta_placement, delta_improvement)
+    on conflict (meet_volume_id, athlete_id, category) do update
       set placement_points = public.leaderboards.placement_points + excluded.placement_points,
           improvement_points = public.leaderboards.improvement_points + excluded.improvement_points,
           updated_at = now();
@@ -589,24 +854,28 @@ begin
 end;
 $$;
 
-create trigger results_apply_points
+create or replace trigger results_apply_points
   after insert or update on public.results
   for each row execute function public.apply_result_points();
 
-create trigger results_set_updated_at
+create or replace trigger results_set_updated_at
   before update on public.results
   for each row execute function public.set_updated_at();
 
-create trigger teams_set_updated_at
+create or replace trigger teams_set_updated_at
   before update on public.teams
   for each row execute function public.set_updated_at();
 
-create trigger athletes_set_updated_at
+create or replace trigger athletes_set_updated_at
   before update on public.athletes
   for each row execute function public.set_updated_at();
 
-create trigger heats_set_updated_at
+create or replace trigger heats_set_updated_at
   before update on public.heats
+  for each row execute function public.set_updated_at();
+
+create or replace trigger meet_volumes_set_updated_at
+  before update on public.meet_volumes
   for each row execute function public.set_updated_at();
 
 -- Only an admin may toggle team approval.
@@ -624,7 +893,7 @@ begin
 end;
 $$;
 
-create trigger enforce_team_approval_change_trigger
+create or replace trigger enforce_team_approval_change_trigger
   before update on public.teams
   for each row execute function public.enforce_team_approval_change();
 
@@ -661,7 +930,7 @@ begin
 end;
 $$;
 
-create trigger enforce_result_scoring_trigger
+create or replace trigger enforce_result_scoring_trigger
   before insert or update on public.results
   for each row execute function public.enforce_result_scoring();
 
@@ -687,11 +956,11 @@ begin
 end;
 $$;
 
-create trigger enforce_no_direct_skins_entry_trigger
+create or replace trigger enforce_no_direct_skins_entry_trigger
   before insert on public.entries
   for each row execute function public.enforce_no_direct_skins_entry();
 
-create trigger skins_qualifications_set_updated_at
+create or replace trigger skins_qualifications_set_updated_at
   before update on public.skins_qualifications
   for each row execute function public.set_updated_at();
 
@@ -725,7 +994,7 @@ begin
 end;
 $$;
 
-create trigger enforce_skins_qualification_columns_trigger
+create or replace trigger enforce_skins_qualification_columns_trigger
   before update on public.skins_qualifications
   for each row execute function public.enforce_skins_qualification_columns();
 
@@ -912,6 +1181,7 @@ alter table public.users enable row level security;
 alter table public.teams enable row level security;
 alter table public.team_memberships enable row level security;
 alter table public.athletes enable row level security;
+alter table public.meet_volumes enable row level security;
 alter table public.sessions enable row level security;
 alter table public.events enable row level security;
 alter table public.entries enable row level security;
@@ -924,56 +1194,78 @@ alter table public.skins_qualifications enable row level security;
 -- ---------------------------------------------------------------------------
 -- app_settings — admins only, never public.
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_manage_app_settings" on public.app_settings;
 create policy "admins_manage_app_settings" on public.app_settings
   for all using (public.is_admin()) with check (public.is_admin());
 
 -- ---------------------------------------------------------------------------
 -- users
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_users" on public.users;
 create policy "admins_full_access_users" on public.users
   for all using (public.is_admin()) with check (public.is_admin());
 
+drop policy if exists "users_view_own_profile" on public.users;
 create policy "users_view_own_profile" on public.users
   for select using (id = auth.uid());
 
 -- Authenticated members can see basic profile info of others (team rosters,
 -- captain names, referee/athlete listings) — never role changes though,
 -- which remain gated by enforce_role_change_trigger regardless of RLS.
+drop policy if exists "authenticated_view_profiles" on public.users;
 create policy "authenticated_view_profiles" on public.users
   for select using (auth.role() = 'authenticated');
 
+-- Public athlete directory / all-time record book need display names + photos.
+-- Clients must not render email on public surfaces.
+drop policy if exists "public_view_athlete_and_deck_users" on public.users;
+create policy "public_view_athlete_and_deck_users" on public.users
+  for select using (
+    exists (select 1 from public.athletes a where a.user_id = id)
+    or role in ('usher', 'referee', 'admin')
+  );
+
+drop policy if exists "users_update_own_profile" on public.users;
 create policy "users_update_own_profile" on public.users
   for update using (id = auth.uid()) with check (id = auth.uid());
 
 -- ---------------------------------------------------------------------------
 -- teams
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_teams" on public.teams;
 create policy "admins_full_access_teams" on public.teams
   for all using (public.is_admin()) with check (public.is_admin());
 
+drop policy if exists "public_view_approved_teams" on public.teams;
 create policy "public_view_approved_teams" on public.teams
   for select using (approved_by_admin = true or captain_id = auth.uid());
 
+drop policy if exists "authenticated_create_team" on public.teams;
 create policy "authenticated_create_team" on public.teams
   for insert with check (auth.uid() is not null and captain_id = auth.uid());
 
+drop policy if exists "captain_update_own_team" on public.teams;
 create policy "captain_update_own_team" on public.teams
   for update using (captain_id = auth.uid()) with check (captain_id = auth.uid());
 
 -- ---------------------------------------------------------------------------
 -- team_memberships
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_memberships" on public.team_memberships;
 create policy "admins_full_access_memberships" on public.team_memberships
   for all using (public.is_admin()) with check (public.is_admin());
 
+drop policy if exists "user_view_own_memberships" on public.team_memberships;
 create policy "user_view_own_memberships" on public.team_memberships
   for select using (
     user_id = auth.uid() or public.is_team_captain_of(team_id)
   );
 
+drop policy if exists "user_request_membership" on public.team_memberships;
 create policy "user_request_membership" on public.team_memberships
   for insert with check (user_id = auth.uid());
 
+drop policy if exists "captain_manage_membership_status" on public.team_memberships;
 create policy "captain_manage_membership_status" on public.team_memberships
   for update using (public.is_team_captain_of(team_id))
   with check (public.is_team_captain_of(team_id));
@@ -981,48 +1273,83 @@ create policy "captain_manage_membership_status" on public.team_memberships
 -- ---------------------------------------------------------------------------
 -- athletes
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_athletes" on public.athletes;
 create policy "admins_full_access_athletes" on public.athletes
   for all using (public.is_admin()) with check (public.is_admin());
 
+-- Public athlete directory + profiles (safe biographical fields only when
+-- joined carefully; email lives on users and remains gated separately).
+drop policy if exists "public_view_athletes" on public.athletes;
+create policy "public_view_athletes" on public.athletes
+  for select using (true);
+
+drop policy if exists "athlete_view_own_row" on public.athletes;
 create policy "athlete_view_own_row" on public.athletes
   for select using (
     user_id = auth.uid()
     or parent_id = auth.uid()
     or public.is_team_captain_of(team_id)
-    or public.is_admin_or_referee()
+    or public.is_deck_official()
   );
 
+drop policy if exists "athlete_update_own_row" on public.athletes;
 create policy "athlete_update_own_row" on public.athletes
   for update using (user_id = auth.uid() or parent_id = auth.uid())
   with check (user_id = auth.uid() or parent_id = auth.uid());
 
+drop policy if exists "user_create_own_athlete_row" on public.athletes;
 create policy "user_create_own_athlete_row" on public.athletes
   for insert with check (user_id = auth.uid());
 
 -- ---------------------------------------------------------------------------
--- sessions & events — public schedule information.
+-- meet_volumes, sessions & events — public schedule information.
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_meet_volumes" on public.meet_volumes;
+create policy "admins_full_access_meet_volumes" on public.meet_volumes
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "public_view_meet_volumes" on public.meet_volumes;
+create policy "public_view_meet_volumes" on public.meet_volumes
+  for select using (true);
+
+drop policy if exists "admins_full_access_sessions" on public.sessions;
 create policy "admins_full_access_sessions" on public.sessions
   for all using (public.is_admin()) with check (public.is_admin());
 
+drop policy if exists "public_view_sessions" on public.sessions;
 create policy "public_view_sessions" on public.sessions
   for select using (true);
 
+drop policy if exists "admins_full_access_events" on public.events;
 create policy "admins_full_access_events" on public.events
   for all using (public.is_admin()) with check (public.is_admin());
 
+drop policy if exists "public_view_events" on public.events;
 create policy "public_view_events" on public.events
   for select using (true);
 
 -- ---------------------------------------------------------------------------
 -- entries
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_entries" on public.entries;
 create policy "admins_full_access_entries" on public.entries
   for all using (public.is_admin()) with check (public.is_admin());
 
-create policy "referees_view_entries" on public.entries
-  for select using (public.is_admin_or_referee());
+drop policy if exists "deck_officials_view_entries" on public.entries;
+create policy "deck_officials_view_entries" on public.entries
+  for select using (public.is_deck_official());
 
+-- Entries carry no PII of their own (event_id, athlete_id, seed_time_ms,
+-- is_nt) — athlete names/events are already public. Without this, spectators
+-- can see a published heat's lanes but not who's actually swimming in them,
+-- since heat_lanes -> entries -> athletes is one join and RLS blocks the
+-- middle table: the live heat sheet and athlete career-ledger features both
+-- silently render empty without this policy.
+drop policy if exists "public_view_entries" on public.entries;
+create policy "public_view_entries" on public.entries
+  for select using (true);
+
+drop policy if exists "athlete_manage_own_entries" on public.entries;
 create policy "athlete_manage_own_entries" on public.entries
   for all using (public.owns_athlete(athlete_id))
   with check (public.owns_athlete(athlete_id));
@@ -1030,31 +1357,81 @@ create policy "athlete_manage_own_entries" on public.entries
 -- ---------------------------------------------------------------------------
 -- heats & heat_lanes
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_referees_full_access_heats" on public.heats;
 create policy "admins_referees_full_access_heats" on public.heats
   for all using (public.is_admin_or_referee()) with check (public.is_admin_or_referee());
 
+drop policy if exists "ushers_view_heats" on public.heats;
+create policy "ushers_view_heats" on public.heats
+  for select using (public.is_usher());
+
+drop policy if exists "public_view_published_heats" on public.heats;
 create policy "public_view_published_heats" on public.heats
   for select using (status = 'published');
 
+drop policy if exists "admins_referees_full_access_heat_lanes" on public.heat_lanes;
 create policy "admins_referees_full_access_heat_lanes" on public.heat_lanes
   for all using (public.is_admin_or_referee()) with check (public.is_admin_or_referee());
 
+drop policy if exists "ushers_view_heat_lanes" on public.heat_lanes;
+create policy "ushers_view_heat_lanes" on public.heat_lanes
+  for select using (public.is_usher());
+
+-- Ushers (and referees via the full-access policy above) update call-room
+-- attendance. A trigger below locks ushers to attendance columns only.
+drop policy if exists "ushers_update_heat_lane_attendance" on public.heat_lanes;
+create policy "ushers_update_heat_lane_attendance" on public.heat_lanes
+  for update using (public.is_usher())
+  with check (public.is_usher());
+
+drop policy if exists "public_view_published_heat_lanes" on public.heat_lanes;
 create policy "public_view_published_heat_lanes" on public.heat_lanes
   for select using (
     exists (select 1 from public.heats h where h.id = heat_id and h.status = 'published')
   );
 
+-- Ushers may only flip attendance fields — never reassign lanes / entries.
+create or replace function public.enforce_usher_attendance_only()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if public.is_usher() and not public.is_admin_or_referee() then
+    if new.heat_id is distinct from old.heat_id
+      or new.lane_number is distinct from old.lane_number
+      or new.entry_id is distinct from old.entry_id then
+      raise exception 'Ushers may only update attendance_status on heat lanes.';
+    end if;
+    new.attendance_marked_at := now();
+    new.attendance_marked_by := auth.uid();
+  elsif new.attendance_status is distinct from old.attendance_status then
+    new.attendance_marked_at := coalesce(new.attendance_marked_at, now());
+    new.attendance_marked_by := coalesce(new.attendance_marked_by, auth.uid());
+  end if;
+  return new;
+end;
+$$;
+
+create or replace trigger enforce_usher_attendance_only_trigger
+  before update on public.heat_lanes
+  for each row execute function public.enforce_usher_attendance_only();
+
 -- ---------------------------------------------------------------------------
 -- results
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_results" on public.results;
 create policy "admins_full_access_results" on public.results
   for all using (public.is_admin()) with check (public.is_admin());
 
 -- Referees insert/update result drafts only (publishing is admin-only,
 -- enforced by enforce_result_publish trigger below).
+drop policy if exists "referees_manage_result_drafts" on public.results;
 create policy "referees_manage_result_drafts" on public.results
   for all using (public.is_referee()) with check (public.is_referee());
 
+drop policy if exists "public_view_published_results" on public.results;
 create policy "public_view_published_results" on public.results
   for select using (status = 'published');
 
@@ -1072,32 +1449,37 @@ begin
 end;
 $$;
 
-create trigger enforce_result_publish_trigger
+create or replace trigger enforce_result_publish_trigger
   before insert or update on public.results
   for each row execute function public.enforce_result_publish();
 
 -- ---------------------------------------------------------------------------
 -- leaderboards — public read, system-maintained writes only.
 -- ---------------------------------------------------------------------------
+drop policy if exists "public_view_leaderboards" on public.leaderboards;
 create policy "public_view_leaderboards" on public.leaderboards
   for select using (true);
 
+drop policy if exists "admins_full_access_leaderboards" on public.leaderboards;
 create policy "admins_full_access_leaderboards" on public.leaderboards
   for all using (public.is_admin()) with check (public.is_admin());
 
 -- ---------------------------------------------------------------------------
 -- skins_qualifications
 -- ---------------------------------------------------------------------------
+drop policy if exists "admins_referees_manage_skins_qualifications" on public.skins_qualifications;
 create policy "admins_referees_manage_skins_qualifications"
   on public.skins_qualifications
   for all using (public.is_admin_or_referee())
   with check (public.is_admin_or_referee());
 
+drop policy if exists "athlete_view_own_skins_qualification" on public.skins_qualifications;
 create policy "athlete_view_own_skins_qualification"
   on public.skins_qualifications
   for select using (public.owns_athlete(athlete_id));
 
 -- Athletes (or their under-15 parent) may accept / decline their own slot.
+drop policy if exists "athlete_respond_own_skins_qualification" on public.skins_qualifications;
 create policy "athlete_respond_own_skins_qualification"
   on public.skins_qualifications
   for update using (public.owns_athlete(athlete_id))
@@ -1106,19 +1488,80 @@ create policy "athlete_respond_own_skins_qualification"
     and response in ('accepted', 'declined')
   );
 
+drop policy if exists "public_view_active_skins_qualifications" on public.skins_qualifications;
 create policy "public_view_active_skins_qualifications"
   on public.skins_qualifications
   for select using (true);
 
+-- ---------------------------------------------------------------------------
+-- awards — public read; admin write.
+-- ---------------------------------------------------------------------------
+alter table public.awards enable row level security;
+
+drop policy if exists "public_view_awards" on public.awards;
+create policy "public_view_awards" on public.awards
+  for select using (true);
+
+drop policy if exists "admins_full_access_awards" on public.awards;
+create policy "admins_full_access_awards" on public.awards
+  for all using (public.is_admin()) with check (public.is_admin());
+
 -- =============================================================================
--- 7. SEED DATA — Oct 2, 2026 meet sessions
+-- 6b. REALTIME — spectator heat sheets / results subscribe to live changes.
+-- Guarded so this file stays idempotent (re-running it errors on an already-
+-- registered table) and harmless when run somewhere with no such publication
+-- (e.g. a plain local Postgres used for schema testing, not a Supabase project).
 -- =============================================================================
 
-insert into public.sessions (session_number, name, meet_date, start_time, end_time) values
-  (1, 'Session 1', '2026-10-02', '09:00', '12:00'),
-  (2, 'Session 2', '2026-10-02', '14:00', '16:00'),
-  (3, 'Session 3 — Skins', '2026-10-02', '17:00', '19:00')
-on conflict (session_number) do nothing;
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'results'
+    ) then
+      alter publication supabase_realtime add table public.results;
+    end if;
+
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'heats'
+    ) then
+      alter publication supabase_realtime add table public.heats;
+    end if;
+
+    -- Call-room attendance flips must reach referees behind the blocks live.
+    if not exists (
+      select 1 from pg_publication_tables
+      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'heat_lanes'
+    ) then
+      alter publication supabase_realtime add table public.heat_lanes;
+    end if;
+  end if;
+end $$;
+
+-- =============================================================================
+-- 7. SEED DATA — SSC Vol. 1 (Oct 2, 2026) + a placeholder Vol. 2
+-- =============================================================================
+
+insert into public.meet_volumes (volume_number, name, meet_date, status) values
+  (1, 'SSC Vol. 1', '2026-10-02', 'scheduled'),
+  (2, 'SSC Vol. 2', null, 'planned')
+on conflict (volume_number) do update set
+  name = excluded.name,
+  meet_date = coalesce(public.meet_volumes.meet_date, excluded.meet_date);
+
+insert into public.sessions (meet_volume_id, session_number, name, meet_date, start_time, end_time)
+select v.id, s.session_number, s.name, v.meet_date, s.start_time, s.end_time
+from public.meet_volumes v
+cross join (
+  values
+    (1, 'Session 1', '09:00'::time, '12:00'::time),
+    (2, 'Session 2', '14:00'::time, '16:00'::time),
+    (3, 'Session 3 — Skins', '17:00'::time, '19:00'::time)
+) as s(session_number, name, start_time, end_time)
+where v.volume_number = 1
+on conflict (meet_volume_id, session_number) do nothing;
 
 -- System creator / first-boot admin. Subsequent admins must be promoted via
 -- the user-role-management panel by an existing admin. Uses do-update (not

@@ -4,15 +4,16 @@ import { useState } from "react";
 import { Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HeatResultEntry, type HeatLaneAthlete } from "@/components/referee/heat-result-entry";
+import { AttendanceBoard } from "@/components/referee/attendance-board";
 import { cn } from "@/lib/utils";
 
 const DEMO_LANES: HeatLaneAthlete[] = [
-  { heatLaneId: "hl-1", laneNumber: 1, athleteName: "Mia Reyes", teamName: "Blue Marlins", seedTimeMs: 31000 },
-  { heatLaneId: "hl-2", laneNumber: 2, athleteName: "Noah Alvi", teamName: "Riptide", seedTimeMs: 30500 },
-  { heatLaneId: "hl-3", laneNumber: 3, athleteName: "Zara Khan", teamName: "Blue Marlins", seedTimeMs: 29800 },
-  { heatLaneId: "hl-4", laneNumber: 4, athleteName: "Leo Fontaine", teamName: "Tidal Wave", seedTimeMs: 29200 },
-  { heatLaneId: "hl-5", laneNumber: 5, athleteName: "Ava Thompson", teamName: "Riptide", seedTimeMs: 31500 },
-  { heatLaneId: "hl-6", laneNumber: 6, athleteName: "Kian Osei", teamName: "Tidal Wave", seedTimeMs: 32000 },
+  { heatLaneId: "hl-1", laneNumber: 1, athleteName: "Mia Reyes", teamName: "Blue Marlins", seedTimeMs: 31000, athleteId: "ath-mia", attendanceStatus: "pending" },
+  { heatLaneId: "hl-2", laneNumber: 2, athleteName: "Noah Alvi", teamName: "Riptide", seedTimeMs: 30500, athleteId: "ath-noah", attendanceStatus: "present" },
+  { heatLaneId: "hl-3", laneNumber: 3, athleteName: "Zara Khan", teamName: "Blue Marlins", seedTimeMs: 29800, athleteId: "ath-zara", attendanceStatus: "pending" },
+  { heatLaneId: "hl-4", laneNumber: 4, athleteName: "Leo Fontaine", teamName: "Tidal Wave", seedTimeMs: 29200, athleteId: "ath-leo", attendanceStatus: "present" },
+  { heatLaneId: "hl-5", laneNumber: 5, athleteName: "Ava Thompson", teamName: "Riptide", seedTimeMs: 31500, athleteId: "ath-ava", attendanceStatus: "absent" },
+  { heatLaneId: "hl-6", laneNumber: 6, athleteName: "Kian Osei", teamName: "Tidal Wave", seedTimeMs: 32000, athleteId: "ath-kian", attendanceStatus: "pending" },
 ];
 
 export default function RefereePage() {
@@ -31,7 +32,7 @@ export default function RefereePage() {
             Referee heat entry
           </h1>
           <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
-            Record Valid Time, DQ with official reason code, or NS (No-Show).
+            Confirm call-room attendance, then record Valid Time, DQ, or NS.
           </p>
         </div>
         <Button
@@ -46,6 +47,8 @@ export default function RefereePage() {
           <Sun className="size-5" />
         </Button>
       </div>
+
+      <AttendanceBoard outdoorMode={outdoorMode} />
 
       <HeatResultEntry
         heatId="demo-heat-1"
