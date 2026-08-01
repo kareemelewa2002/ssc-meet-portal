@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { FilterPillGroup } from "@/components/events/filter-pill-group";
+import { AppHeader } from "@/components/layout/app-header";
 import {
   AGE_GROUP_LABELS,
   AWARD_TYPE_LABELS,
@@ -44,7 +45,9 @@ export default function AthletesDirectoryPage() {
   );
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
+    <div className="min-h-screen">
+      <AppHeader title="Athlete Directory" />
+      <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
       <header className="space-y-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h1 className="text-2xl font-bold tracking-tight">All athletes</h1>
@@ -152,6 +155,7 @@ export default function AthletesDirectoryPage() {
           })}
         </div>
       )}
-    </main>
+      </main>
+    </div>
   );
 }

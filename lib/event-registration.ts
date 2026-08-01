@@ -46,7 +46,10 @@ export interface RegisterableEvent {
 
 /** Skins events are excluded — public.enforce_no_direct_skins_entry blocks
  * non-admin inserts into them entirely; slots are assigned automatically
- * from official results (see lib/skins-qualification.ts), never self-entered. */
+ * from official results (see lib/skins-qualification.ts), never self-entered.
+ * Relay events are excluded too — there is no relay-team-of-4 entry model;
+ * they're scheduled/displayed like any other event but never self-entered
+ * by an individual athlete (see events.is_relay in supabase/schema.sql). */
 export async function fetchRegisterableEvents(meetVolumeId: string): Promise<RegisterableEvent[]> {
   try {
     const supabase = createClient();
@@ -59,9 +62,10 @@ export async function fetchRegisterableEvents(meetVolumeId: string): Promise<Reg
     const sessionNumberById = new Map(sessions.map((s) => [s.id, s.session_number]));
     const { data: events, error } = await supabase
       .from("events")
-      .select("id, name, stroke, distance_m, session_id, is_skins")
+      .select("id, name, stroke, distance_m, session_id, is_skins, is_relay")
       .in("session_id", sessions.map((s) => s.id))
       .eq("is_skins", false)
+      .eq("is_relay", false)
       .order("event_order", { ascending: true });
     if (error || !events) return [];
 

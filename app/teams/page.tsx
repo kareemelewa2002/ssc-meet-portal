@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Building2, Loader2, Plus, ShieldCheck } from "lucide-react";
+import { Building2, Loader2, Plus, ShieldCheck, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,9 +18,12 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { createTeam, fetchTeams } from "@/lib/teams";
+import { AppHeader } from "@/components/layout/app-header";
+import { createTeam, fetchTeamDetail, fetchTeams, type TeamDetail } from "@/lib/teams";
 import { createClient } from "@/lib/supabase/client";
 import type { TeamRow } from "@/lib/supabase/types";
+
+const AGE_GROUP_LABELS: Record<string, string> = { U13_14: "U13-14", U17: "U17", Open: "Open" };
 
 export default function TeamsPage() {
   const [teams, setTeams] = useState<TeamRow[]>([]);
@@ -32,6 +34,16 @@ export default function TeamsPage() {
   const [logoUrl, setLogoUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [rosterTeam, setRosterTeam] = useState<TeamRow | null>(null);
+  const [rosterDetail, setRosterDetail] = useState<TeamDetail | null>(null);
+  const [rosterLoading, setRosterLoading] = useState(false);
+
+  const openRoster = async (team: TeamRow) => {
+    setRosterTeam(team);
+    setRosterLoading(true);
+    setRosterDetail(await fetchTeamDetail(team.id));
+    setRosterLoading(false);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -80,12 +92,10 @@ export default function TeamsPage() {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
-      <div className="flex items-center justify-between gap-3">
-        <Link href="/" className="flex min-h-[48px] items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-4" />
-          All Events
-        </Link>
+    <div className="min-h-screen">
+      <AppHeader title="Club Directory" />
+      <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
+      <div className="flex items-center justify-end gap-3">
         <Dialog open={modalOpen} onOpenChange={setModalOpen}>
           <DialogTrigger render={<Button className="min-h-[48px] gap-2" />}>
             <Plus className="size-4" />
@@ -168,10 +178,77 @@ export default function TeamsPage() {
                   </Badge>
                 )}
               </CardHeader>
+              <CardContent>
+                <Button
+                  variant="outline"
+                  className="min-h-[44px] w-full gap-2"
+                  onClick={() => void openRoster(team)}
+                >
+                  <Users className="size-4" />
+                  View Roster & Captain Contact
+                </Button>
+              </CardContent>
             </Card>
           ))}
         </div>
       )}
-    </main>
+
+      <Dialog open={rosterTeam != null} onOpenChange={(open) => !open && setRosterTeam(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{rosterTeam?.name}</DialogTitle>
+            <DialogDescription>Captain contact and current member roster.</DialogDescription>
+          </DialogHeader>
+          {rosterLoading ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">Loading roster…</p>
+          ) : (
+            <div className="space-y-4 py-2">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Captain</p>
+                {rosterDetail?.captain ? (
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="font-medium">{rosterDetail.captain.fullName}</p>
+                    <p className="text-muted-foreground">{rosterDetail.captain.email}</p>
+                    {rosterDetail.captain.phone && (
+                      <p className="text-muted-foreground">{rosterDetail.captain.phone}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No captain assigned yet.</p>
+                )}
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                  Roster ({rosterDetail?.roster.length ?? 0})
+                </p>
+                {rosterDetail?.roster.length ? (
+                  <ul className="max-h-64 space-y-1 overflow-y-auto">
+                    {rosterDetail.roster.map((m) => (
+                      <li
+                        key={m.athleteId}
+                        className="flex items-center justify-between gap-2 rounded-lg border p-2 text-sm"
+                      >
+                        <span className="truncate font-medium">{m.fullName}</span>
+                        <span className="flex shrink-0 gap-1">
+                          <Badge variant="outline" className="text-[10px]">
+                            {AGE_GROUP_LABELS[m.ageGroup] ?? m.ageGroup}
+                          </Badge>
+                          <Badge variant="outline" className="text-[10px] capitalize">
+                            {m.gender}
+                          </Badge>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No members yet.</p>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      </main>
+    </div>
   );
 }

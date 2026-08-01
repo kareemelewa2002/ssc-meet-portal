@@ -10,6 +10,8 @@ import { Label } from "@/components/ui/label";
 import { HeatResultEntry, type HeatLaneAthlete } from "@/components/referee/heat-result-entry";
 import { AttendanceBoard } from "@/components/referee/attendance-board";
 import { useLanePresence } from "@/hooks/use-lane-presence";
+import { useCurrentUser } from "@/hooks/use-current-user";
+import { AppHeader } from "@/components/layout/app-header";
 import {
   LANE_NUMBERS,
   findLaneOccupant,
@@ -42,10 +44,15 @@ export default function RefereePage() {
   const [outdoorMode, setOutdoorMode] = useState(false);
   const [refereeName, setRefereeName] = useState("Deck Referee");
   const [refereeId, setRefereeId] = useState("ssr-ref");
+  const { user } = useCurrentUser();
 
   useEffect(() => {
     setRefereeId(getOrCreateRefereeId());
   }, []);
+
+  useEffect(() => {
+    if (user?.fullName) setRefereeName(user.fullName);
+  }, [user?.fullName]);
 
   const presence = useLanePresence({
     heatId: HEAT_ID,
@@ -54,12 +61,13 @@ export default function RefereePage() {
   });
 
   return (
-    <main
-      className={cn(
-        "mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6",
-        outdoorMode && "bg-black text-yellow-300",
-      )}
-    >
+    <div className={cn("min-h-screen", outdoorMode && "bg-black text-yellow-300")}>
+      <AppHeader title="Referee Deck" className={cn(outdoorMode && "border-yellow-300/30 bg-black/95")} />
+      <main
+        className={cn(
+          "mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6",
+        )}
+      >
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className={cn("text-2xl font-bold tracking-tight", outdoorMode && "text-yellow-300")}>
@@ -192,6 +200,7 @@ export default function RefereePage() {
         readOnly={presence.mode === "observer"}
         allowPublish={presence.mode === "chief"}
       />
-    </main>
+      </main>
+    </div>
   );
 }

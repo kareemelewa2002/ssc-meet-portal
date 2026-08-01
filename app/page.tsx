@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Calendar, Lock, Radio, Trophy, Users, Waves } from "lucide-react";
+import { Building2, Calendar, Lock, Radio, Trophy, Users, Waves } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -81,6 +81,12 @@ export default function HomePage() {
       label: "All-Time Records",
       description: "Best performers and fastest race times in SSC history.",
       icon: Trophy,
+    },
+    {
+      href: "/teams",
+      label: "Club Directory",
+      description: "Approved clubs, captains, and team rosters.",
+      icon: Building2,
     },
   ];
 

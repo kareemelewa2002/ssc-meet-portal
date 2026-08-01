@@ -25,7 +25,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import type { UserRole, UserRow } from "@/lib/supabase/types";
 
@@ -44,16 +44,18 @@ const DEMO_USERS: UserRow[] = [
   { id: "u6", email: "parent.thompson@ssc.dev", full_name: "Grace Thompson", phone: null, profile_image_url: null, role: "parent", created_at: "", updated_at: "" },
 ];
 
-const ELEVATABLE_ROLES: Extract<UserRole, "admin" | "referee" | "usher">[] = [
+const ELEVATABLE_ROLES: Extract<UserRole, "admin" | "referee" | "usher" | "entry_helper">[] = [
   "admin",
   "referee",
   "usher",
+  "entry_helper",
 ];
 
 function roleBadgeVariant(role: UserRole): "default" | "secondary" | "outline" | "destructive" {
   if (role === "admin") return "destructive";
   if (role === "referee") return "default";
   if (role === "usher") return "secondary";
+  if (role === "entry_helper") return "secondary";
   if (role === "team_captain") return "secondary";
   return "outline";
 }
@@ -76,10 +78,17 @@ export function UserRoleManagement({ initialUsers, className }: UserRoleManageme
         .from("users")
         .select("*")
         .order("full_name", { ascending: true });
-      if (fetchError) throw fetchError;
+      // Supabase/Postgrest errors are plain objects, not `Error` instances —
+      // checking `err instanceof Error` below would never be true for them,
+      // silently swallowing the real reason and always showing a generic
+      // fallback. Read fetchError.message directly instead.
+      if (fetchError) {
+        setError(fetchError.message);
+        return;
+      }
       if (data) setUsers(data as UserRow[]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load users — showing cached list.");
+      setError(getErrorMessage(err, "Failed to load users — showing cached list."));
     } finally {
       setLoading(false);
     }
@@ -112,13 +121,13 @@ export function UserRoleManagement({ initialUsers, className }: UserRoleManageme
       if (updateError) throw updateError;
     } catch (err) {
       setUsers(previous);
-      setError(err instanceof Error ? err.message : "Failed to update role.");
+      setError(getErrorMessage(err, "Failed to update role."));
     } finally {
       setPendingUserId(null);
     }
   };
 
-  const toggleRole = (user: UserRow, role: Extract<UserRole, "admin" | "referee" | "usher">) => {
+  const toggleRole = (user: UserRow, role: Extract<UserRole, "admin" | "referee" | "usher" | "entry_helper">) => {
     const hasRole = user.role === role;
     applyRoleChange([user.id], hasRole ? "athlete" : role);
   };
@@ -138,7 +147,7 @@ export function UserRoleManagement({ initialUsers, className }: UserRoleManageme
     );
   };
 
-  const batchGrant = (role: Extract<UserRole, "admin" | "referee" | "usher">) => {
+  const batchGrant = (role: Extract<UserRole, "admin" | "referee" | "usher" | "entry_helper">) => {
     applyRoleChange(Array.from(selected), role);
     setSelected(new Set());
   };

@@ -329,3 +329,26 @@ export async function fetchLiveEventsForSession(sessionId: string): Promise<Live
     return DEMO_LIVE_EVENTS;
   }
 }
+
+/** Resolves which session number a specific event belongs to — used when a
+ * link deep-links straight to one event (?event=<id>) without a ?session=
+ * hint, so the live view can select the right session tab before filtering
+ * down to that single event. */
+export async function fetchEventSessionNumber(eventId: string): Promise<number | null> {
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("events")
+      .select("sessions ( session_number )")
+      .eq("id", eventId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const session = firstOf(
+      (data as unknown as { sessions: { session_number: number } | { session_number: number }[] | null })
+        .sessions,
+    );
+    return session?.session_number ?? null;
+  } catch {
+    return null;
+  }
+}

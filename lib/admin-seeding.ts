@@ -11,6 +11,7 @@ export interface SessionEventSeedingInfo {
   stroke: string;
   distanceM: number;
   isSkins: boolean;
+  isRelay: boolean;
   status: SeedingStatus;
   entryCount: number;
 }
@@ -96,7 +97,7 @@ export async function fetchSessionSeedingOverview(sessionId: string): Promise<Se
   const supabase = createClient();
   const { data: events, error } = await supabase
     .from("events")
-    .select("id, name, stroke, distance_m, is_skins")
+    .select("id, name, stroke, distance_m, is_skins, is_relay")
     .eq("session_id", sessionId)
     .order("event_order", { ascending: true });
   if (error || !events?.length) return [];
@@ -122,6 +123,7 @@ export async function fetchSessionSeedingOverview(sessionId: string): Promise<Se
       stroke: ev.stroke,
       distanceM: ev.distance_m,
       isSkins: ev.is_skins,
+      isRelay: ev.is_relay,
       status,
       entryCount,
     };
@@ -193,15 +195,17 @@ export async function seedEventAndWrite(eventId: string): Promise<SeedEventResul
   return { success: true, heatsCreated };
 }
 
-/** "Seed Entire Session" — runs seedEventAndWrite for every non-Skins event
- * in the session (Skins slots are assigned automatically from results, never
- * self-registered or admin-seeded the same way — see enforce_no_direct_skins_entry). */
+/** "Seed Entire Session" — runs seedEventAndWrite for every non-Skins,
+ * non-relay event in the session. Skins slots are assigned automatically
+ * from results (see enforce_no_direct_skins_entry); relay events have no
+ * relay-team-of-4 entry model at all (see events.is_relay), so neither ever
+ * has individual entries to seed. */
 export async function seedEntireSession(
   sessionId: string,
 ): Promise<{ eventId: string; result: SeedEventResult }[]> {
   const overview = await fetchSessionSeedingOverview(sessionId);
   const results: { eventId: string; result: SeedEventResult }[] = [];
-  for (const ev of overview.filter((e) => !e.isSkins && e.status === "unseeded")) {
+  for (const ev of overview.filter((e) => !e.isSkins && !e.isRelay && e.status === "unseeded")) {
     results.push({ eventId: ev.eventId, result: await seedEventAndWrite(ev.eventId) });
   }
   return results;

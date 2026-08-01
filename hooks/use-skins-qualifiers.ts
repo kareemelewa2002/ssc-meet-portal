@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { getErrorMessage } from "@/lib/utils";
 import {
   buildSkinsQualifierBoards,
   populateSkinsHeatSheets,
@@ -59,7 +60,7 @@ export function useSkinsQualifiers(skinsEventId: string | null): UseSkinsQualifi
       if (rpcError) throw rpcError;
       setCandidates((data ?? []).map(mapRpcRow));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load Skins qualifiers.");
+      setError(getErrorMessage(err, "Failed to load Skins qualifiers."));
     } finally {
       setLoading(false);
     }

@@ -14,7 +14,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import type { SkinsCandidate } from "@/lib/skins-qualification";
 import type { AgeGroup, SkinsResponse } from "@/lib/supabase/types";
 
@@ -57,7 +57,7 @@ export function SkinsQualificationModal({
       await onRespond(invitation.athleteId, invitation.category, response);
       setDone(response);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save your response.");
+      setError(getErrorMessage(err, "Could not save your response."));
     } finally {
       setBusy(false);
     }

@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, UserRoundX, Users } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import {
   applyAttendancePatch,
@@ -99,11 +99,6 @@ export function CallRoom({ usher, className }: CallRoomProps) {
     [events, sessionId],
   );
 
-  const activeHeats = useMemo(
-    () => heats.filter((h) => h.eventName === (sessionEvents.find((e) => e.id === eventId)?.name ?? heats[0]?.eventName)),
-    [heats, sessionEvents, eventId],
-  );
-
   const loadSchedule = useCallback(async () => {
     try {
       const supabase = createClient();
@@ -134,7 +129,12 @@ export function CallRoom({ usher, className }: CallRoomProps) {
     }
   }, []);
 
+  // Tracks the most recently *requested* event so an out-of-order network
+  // response for a stale selection can never clobber the current one.
+  const latestRequestRef = useRef<string | null>(null);
+
   const loadHeats = useCallback(async (selectedEventId: string) => {
+    latestRequestRef.current = selectedEventId;
     try {
       const supabase = createClient();
       const { data, error: fetchError } = await supabase
@@ -144,7 +144,19 @@ export function CallRoom({ usher, className }: CallRoomProps) {
         )
         .eq("event_id", selectedEventId)
         .order("heat_number", { ascending: true });
-      if (fetchError || !data?.length) return;
+
+      // This response is for a selection the usher has since navigated away
+      // from — discard it rather than render heats for the wrong event.
+      if (latestRequestRef.current !== selectedEventId) return;
+
+      if (fetchError) throw fetchError;
+      if (!data?.length) {
+        // A real, successful query for THIS event came back empty — that's
+        // a genuine "no heats seeded yet," never a reason to keep showing a
+        // previous event's stale lanes (and their non-UUID demo lane ids).
+        setHeats(DEMO_EVENTS.some((e) => e.id === selectedEventId) ? DEMO_HEATS : []);
+        return;
+      }
 
       // Nested embeds aren't modeled in our hand-written Relationships metadata.
       type RawHeat = {
@@ -230,9 +242,13 @@ export function CallRoom({ usher, className }: CallRoomProps) {
         };
       });
 
-      if (mapped.length) setHeats(mapped);
+      setHeats(mapped);
     } catch {
-      // Keep demo heats.
+      if (latestRequestRef.current !== selectedEventId) return;
+      // Real fetch failed (network/RLS) — only show the bundled demo heat
+      // while we're still on the bundled demo event; otherwise show empty
+      // rather than a mismatched previous event's data.
+      setHeats(DEMO_EVENTS.some((e) => e.id === selectedEventId) ? DEMO_HEATS : []);
     }
   }, []);
 
@@ -301,7 +317,7 @@ export function CallRoom({ usher, className }: CallRoomProps) {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save attendance.");
+      setError(getErrorMessage(err, "Could not save attendance."));
     } finally {
       setSavingLaneId(null);
     }
@@ -379,7 +395,14 @@ export function CallRoom({ usher, className }: CallRoomProps) {
         </p>
       )}
 
-      {(activeHeats.length ? activeHeats : heats).map((heat) => {
+      {heats.length === 0 && (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
+            No heats seeded for this event yet.
+          </CardContent>
+        </Card>
+      )}
+      {heats.map((heat) => {
         const summary = summarizeAttendance(heat.lanes);
         return (
           <Card key={heat.id}>

@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { LANE_SEQUENCE } from "@/lib/seeding";
 import { DQ_REASON_LABELS, scoreHeatResult } from "@/lib/results";
@@ -233,7 +233,7 @@ export function SkinsKnockout({
       setRestSeconds(REST_SECONDS);
       onRoundPublished?.(round, advancing);
     } catch (err) {
-      setPublishError(err instanceof Error ? err.message : "Failed to publish round results.");
+      setPublishError(getErrorMessage(err, "Failed to publish round results."));
     } finally {
       setPublishing(false);
     }

@@ -70,6 +70,72 @@ export async function createTeam(input: TeamCreateInput): Promise<{ success: boo
   return { success: true };
 }
 
+export interface TeamCaptainContact {
+  fullName: string;
+  email: string;
+  phone: string | null;
+}
+
+export interface TeamRosterMember {
+  athleteId: string;
+  fullName: string;
+  ageGroup: string;
+  gender: string;
+}
+
+export interface TeamDetail {
+  captain: TeamCaptainContact | null;
+  roster: TeamRosterMember[];
+}
+
+/** Club profile detail — captain contact + current member roster (athletes
+ * whose current team_id is this club; independent of any single volume's
+ * representation, which volume_team_affiliations tracks separately). */
+export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
+  try {
+    const supabase = createClient();
+    const [{ data: team }, { data: roster }] = await Promise.all([
+      supabase.from("teams").select("captain_id, users ( full_name, email, phone )").eq("id", teamId).maybeSingle(),
+      supabase
+        .from("athletes")
+        .select("id, age_group, gender, users ( full_name )")
+        .eq("team_id", teamId),
+    ]);
+
+    type RawTeam = {
+      captain_id: string | null;
+      users: { full_name: string; email: string; phone: string | null } | { full_name: string; email: string; phone: string | null }[] | null;
+    };
+    type RawMember = {
+      id: string;
+      age_group: string;
+      gender: string;
+      users: { full_name: string } | { full_name: string }[] | null;
+    };
+
+    const rawTeam = team as unknown as RawTeam | null;
+    const captainUser = rawTeam ? firstOf(rawTeam.users) : null;
+    const captain =
+      rawTeam?.captain_id && captainUser
+        ? { fullName: captainUser.full_name, email: captainUser.email, phone: captainUser.phone }
+        : null;
+
+    const members = ((roster ?? []) as unknown as RawMember[]).map((row) => {
+      const user = firstOf(row.users);
+      return {
+        athleteId: row.id,
+        fullName: user?.full_name ?? "Athlete",
+        ageGroup: row.age_group,
+        gender: row.gender,
+      };
+    });
+
+    return { captain, roster: members };
+  } catch {
+    return { captain: null, roster: [] };
+  }
+}
+
 interface RawAffiliationRow {
   team_id: string | null;
   meet_volumes: { volume_number: number; name: string } | { volume_number: number; name: string }[] | null;

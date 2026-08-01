@@ -26,6 +26,19 @@ begin
   end if;
 end $$;
 
+-- Entry Desk Helpers (ground / system registration guidance) — like 'usher',
+-- an admin-assigned staff role, never a public_signup_role.
+do $$
+begin
+  if not exists (
+    select 1 from pg_enum
+    where enumlabel = 'entry_helper'
+      and enumtypid = (select oid from pg_type where typname = 'user_role')
+  ) then
+    alter type public.user_role add value 'entry_helper';
+  end if;
+end $$;
+
 -- Roles a member of the public may select for themselves at sign-up.
 -- 'admin' and 'team_captain' are intentionally excluded — team_captain is
 -- granted by promoting a team's captain_id, admin only by an existing admin.
@@ -370,8 +383,19 @@ create table if not exists public.events (
   distance_m integer not null check (distance_m > 0),
   event_order integer not null default 0,
   is_skins boolean not null default false,
+  -- Relay events (4x50m/4x100m, Male/Female/Mixed) are scheduled and
+  -- displayed like any other event, but individual athletes never
+  -- self-register for them the way they do 1-per-lane races — there is no
+  -- relay-team-of-4 entry model. Kept distinct from is_skins (which DOES
+  -- have an auto-assignment pipeline) so seeding/registration UIs can tell
+  -- "no direct entries by design" apart from "not yet seeded."
+  is_relay boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+-- Idempotent column add for databases created before is_relay existed.
+alter table public.events
+  add column if not exists is_relay boolean not null default false;
 
 create index if not exists events_session_id_idx on public.events (session_id);
 
@@ -1747,8 +1771,10 @@ drop policy if exists "admins_full_access_results" on public.results;
 create policy "admins_full_access_results" on public.results
   for all using (public.is_admin()) with check (public.is_admin());
 
--- Referees insert/update result drafts only (publishing is admin-only,
--- enforced by enforce_result_publish trigger below).
+-- Referees insert/update result drafts AND may publish (a Chief Referee is
+-- simply a referee who has claimed "Chief Referee Mode" via the deck lane-
+-- presence system — see hooks/use-lane-presence.ts — not a distinct DB
+-- role), enforced by enforce_result_publish below.
 drop policy if exists "referees_manage_result_drafts" on public.results;
 create policy "referees_manage_result_drafts" on public.results
   for all using (public.is_referee()) with check (public.is_referee());
@@ -1757,6 +1783,11 @@ drop policy if exists "public_view_published_results" on public.results;
 create policy "public_view_published_results" on public.results
   for select using (status = 'published');
 
+-- Referee -> Chief Referee -> Admin workflow: lane referees save drafts,
+-- the Chief Referee (a referee in "Chief Referee Mode") reviews the full
+-- heat card and publishes. Admins may also publish directly. Ushers,
+-- athletes, coaches, and parents can never reach this — they hold no
+-- results RLS policy at all (default-deny).
 create or replace function public.enforce_result_publish()
 returns trigger
 language plpgsql
@@ -1764,8 +1795,8 @@ security definer
 set search_path = public
 as $$
 begin
-  if new.status = 'published' and not public.is_admin() then
-    raise exception 'Only an admin may publish results.';
+  if new.status = 'published' and not public.is_admin_or_referee() then
+    raise exception 'Only a referee or admin may publish results.';
   end if;
   return new;
 end;
@@ -1774,6 +1805,51 @@ $$;
 create or replace trigger enforce_result_publish_trigger
   before insert or update on public.results
   for each row execute function public.enforce_result_publish();
+
+-- Finish places are never entered manually — they're always derived from
+-- ranking each heat's official times fastest-first (DQ/NS excluded, per the
+-- results_outcome_consistency check above which keeps their finish_place
+-- null). Recomputing server-side means every device sees identical,
+-- authoritative placements regardless of which client (lane referee vs.
+-- Chief Referee) most recently wrote a time.
+create or replace function public.recompute_heat_finish_places()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_heat_id uuid;
+  v_max_points numeric := 6;
+begin
+  select heat_id into v_heat_id from public.heat_lanes where id = new.heat_lane_id;
+  if v_heat_id is null then
+    return new;
+  end if;
+
+  with ranked as (
+    select r.id, row_number() over (order by r.official_time_ms asc) as computed_place
+    from public.results r
+    join public.heat_lanes hl on hl.id = r.heat_lane_id
+    where hl.heat_id = v_heat_id and r.result_outcome = 'valid'
+  )
+  update public.results r
+  set finish_place = ranked.computed_place,
+      placement_points = greatest(0, v_max_points + 1 - ranked.computed_place)
+  from ranked
+  where r.id = ranked.id
+    and (
+      r.finish_place is distinct from ranked.computed_place
+      or r.placement_points is distinct from greatest(0, v_max_points + 1 - ranked.computed_place)
+    );
+
+  return new;
+end;
+$$;
+
+create or replace trigger recompute_heat_finish_places_trigger
+  after insert or update of result_outcome, official_time_ms on public.results
+  for each row execute function public.recompute_heat_finish_places();
 
 -- ---------------------------------------------------------------------------
 -- leaderboards — public read, system-maintained writes only.
@@ -1878,8 +1954,8 @@ select v.id, s.session_number, s.name, v.meet_date, s.start_time, s.end_time
 from public.meet_volumes v
 cross join (
   values
-    (1, 'Session 1', '09:00'::time, '12:00'::time),
-    (2, 'Session 2', '14:00'::time, '16:00'::time),
+    (1, 'Session 1 — Morning', '09:00'::time, '12:00'::time),
+    (2, 'Session 2 — Afternoon', '14:00'::time, '17:00'::time),
     (3, 'Session 3 — Skins', '17:00'::time, '19:00'::time)
 ) as s(session_number, name, start_time, end_time)
 where v.volume_number = 1

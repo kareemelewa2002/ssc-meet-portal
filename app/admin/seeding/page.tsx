@@ -179,7 +179,10 @@ export default function AdminSeedingPage() {
         <Button
           type="button"
           className="min-h-[48px] gap-2"
-          disabled={busySession || overview.every((e) => e.status !== "unseeded")}
+          disabled={
+            busySession ||
+            overview.filter((e) => !e.isSkins && !e.isRelay).every((e) => e.status !== "unseeded")
+          }
           onClick={() => void handleSeedSession()}
         >
           {busySession ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
@@ -207,12 +210,13 @@ export default function AdminSeedingPage() {
                   <CardDescription>
                     {ev.entryCount} {ev.entryCount === 1 ? "entry" : "entries"}
                     {ev.isSkins && " · Skins (auto-assigned)"}
+                    {ev.isRelay && " · Relay (no individual entries)"}
                   </CardDescription>
                 </div>
                 <Badge variant={statusBadgeVariant(ev.status)}>{STATUS_LABEL[ev.status]}</Badge>
               </CardHeader>
               <CardContent className="flex flex-wrap gap-2">
-                {!ev.isSkins && ev.status === "unseeded" && (
+                {!ev.isSkins && !ev.isRelay && ev.status === "unseeded" && (
                   <Button
                     type="button"
                     size="sm"

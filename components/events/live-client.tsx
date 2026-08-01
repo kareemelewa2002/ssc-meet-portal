@@ -14,6 +14,7 @@ import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
 import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { fetchSessionsForVolume, fetchVolumeByNumber } from "@/lib/volumes";
 import {
+  fetchEventSessionNumber,
   fetchLiveEventsForSession,
   type LiveEventView,
   type LiveHeatView,
@@ -148,6 +149,9 @@ export function LiveEventsClient({ volId }: { volId: string }) {
     const raw = Number(searchParams.get("session"));
     return raw === 2 || raw === 3 ? raw : 1;
   });
+  // A single-event deep link (?event=<id>) scopes the whole page to just
+  // that event's heats — never a session-wide (let alone site-wide) wall.
+  const eventFilterId = searchParams.get("event");
   const [events, setEvents] = useState<LiveEventView[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [live, setLive] = useState(false);
@@ -171,6 +175,21 @@ export function LiveEventsClient({ volId }: { volId: string }) {
       cancelled = true;
     };
   }, [volId]);
+
+  // Deep-linking straight to an event doesn't always carry ?session= — look
+  // up which session it belongs to so the right tab (and thus the right
+  // fetch) is selected before we filter down to that one event below.
+  useEffect(() => {
+    if (!eventFilterId || searchParams.get("session")) return;
+    let cancelled = false;
+    (async () => {
+      const sess = await fetchEventSessionNumber(eventFilterId);
+      if (!cancelled && (sess === 1 || sess === 2 || sess === 3)) setSessionNumber(sess);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [eventFilterId, searchParams]);
 
   const currentSession = useMemo(
     () => sessions.find((s) => s.session_number === sessionNumber) ?? null,
@@ -213,6 +232,7 @@ export function LiveEventsClient({ volId }: { volId: string }) {
 
   const filteredEvents = useMemo(() => {
     return events
+      .filter((ev) => !eventFilterId || ev.eventId === eventFilterId)
       .filter((ev) => !strokeFilter || ev.stroke === strokeFilter)
       .map((ev) => ({
         ...ev,
@@ -228,7 +248,7 @@ export function LiveEventsClient({ volId }: { volId: string }) {
           .filter((heat) => heat.lanes.length > 0),
       }))
       .filter((ev) => ev.heats.length > 0);
-  }, [events, strokeFilter, genderFilter, ageFilter]);
+  }, [events, eventFilterId, strokeFilter, genderFilter, ageFilter]);
 
   return (
     <div className={cn("min-h-screen", outdoorMode ? "bg-black text-yellow-300" : "bg-background")}>
@@ -267,21 +287,43 @@ export function LiveEventsClient({ volId }: { volId: string }) {
           </p>
         </header>
 
-        <Tabs
-          value={String(sessionNumber)}
-          onValueChange={(v) => setSessionNumber(Number(v) as 1 | 2 | 3)}
-        >
-          <TabsList className="grid h-auto w-full grid-cols-3">
-            {[1, 2, 3].map((n) => (
-              <TabsTrigger key={n} value={String(n)} className="min-h-[48px] flex-col gap-0 text-xs">
-                <span className="font-semibold">Session {n}</span>
-                <span className="text-[10px] opacity-70">
-                  {n === 1 ? "9AM–12PM" : n === 2 ? "2PM–4PM" : "5PM–7PM · Skins"}
-                </span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        {eventFilterId ? (
+          <div
+            className={cn(
+              "flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm",
+              outdoorMode ? "border-yellow-300/40 bg-black" : "bg-muted/40",
+            )}
+          >
+            <span>
+              Showing <strong>{filteredEvents[0]?.name ?? "this event"}</strong> only.
+            </span>
+            <Link
+              href={`/events/${volId}/live?session=${sessionNumber}`}
+              className={cn(
+                "min-h-[40px] rounded-md px-2 text-xs font-medium underline underline-offset-4",
+                outdoorMode ? "text-yellow-300" : "text-primary",
+              )}
+            >
+              View full session
+            </Link>
+          </div>
+        ) : (
+          <Tabs
+            value={String(sessionNumber)}
+            onValueChange={(v) => setSessionNumber(Number(v) as 1 | 2 | 3)}
+          >
+            <TabsList className="grid h-auto w-full grid-cols-3">
+              {[1, 2, 3].map((n) => (
+                <TabsTrigger key={n} value={String(n)} className="min-h-[48px] flex-col gap-0 text-xs">
+                  <span className="font-semibold">Session {n}</span>
+                  <span className="text-[10px] opacity-70">
+                    {n === 1 ? "9AM–12PM" : n === 2 ? "2PM–4PM" : "5PM–7PM · Skins"}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        )}
 
         <div className="flex flex-wrap gap-4">
           <FilterPillGroup

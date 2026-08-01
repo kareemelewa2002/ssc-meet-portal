@@ -12,6 +12,7 @@ export type UserRole =
   | "admin"
   | "referee"
   | "usher"
+  | "entry_helper"
   | "coach"
   | "team_captain"
   | "athlete"
@@ -150,6 +151,7 @@ export type EventRow = {
   distance_m: number;
   event_order: number;
   is_skins: boolean;
+  is_relay: boolean;
   created_at: string;
 };
 

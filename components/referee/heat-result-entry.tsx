@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,14 +14,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import {
   DQ_REASON_LABELS,
   RESULT_OUTCOME_LABELS,
   scoreHeatResult,
 } from "@/lib/results";
 import { createClient } from "@/lib/supabase/client";
-import { CLOCK_TIME_ERROR } from "@/lib/format";
+import { CLOCK_TIME_ERROR, formatTimeMs } from "@/lib/format";
 import { ATTENDANCE_LABELS } from "@/lib/attendance";
 import { canEditLane, type LaneNumber, type RefereeDeckMode } from "@/lib/referee-lanes";
 import type { AttendanceStatus, DqReason, ResultOutcome } from "@/lib/supabase/types";
@@ -48,6 +47,9 @@ function attendanceBadgeVariant(status: AttendanceStatus): "default" | "destruct
 export interface LaneDraft {
   outcome: ResultOutcome | null;
   officialTimeMs: number | null;
+  /** Never entered manually — always server-computed by
+   * public.recompute_heat_finish_places() from official_time_ms rankings
+   * within the heat (DQ/NS excluded). Populated for display only. */
   finishPlace: number | null;
   dqCode: DqReason | null;
 }
@@ -120,6 +122,80 @@ export function HeatResultEntry({
     };
   }, [heatId, lanes]);
 
+  type ResultRow = {
+    heat_lane_id: string;
+    result_outcome: ResultOutcome | null;
+    official_time_ms: number | null;
+    finish_place: number | null;
+    dq_code: DqReason | null;
+  };
+
+  const applyResultRow = useCallback((row: ResultRow) => {
+    if (!row.result_outcome) return;
+    setDrafts((prev) => ({
+      ...prev,
+      [row.heat_lane_id]: {
+        outcome: row.result_outcome,
+        officialTimeMs: row.official_time_ms,
+        finishPlace: row.finish_place,
+        dqCode: row.dq_code,
+      },
+    }));
+    if (row.result_outcome === "valid" && row.official_time_ms != null) {
+      setTimeInputs((prev) => ({ ...prev, [row.heat_lane_id]: formatTimeMs(row.official_time_ms) }));
+    }
+  }, []);
+
+  // Chief Referee Hub: hydrate any results already saved by lane referees
+  // (e.g. on page reload), then keep receiving every lane's saves live —
+  // the whole point of the lane -> Chief -> Admin workflow is that the
+  // Chief sees all 6 lanes fill in without needing to refresh.
+  useEffect(() => {
+    const laneIds = lanes.map((l) => l.heatLaneId);
+    if (laneIds.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("results")
+        .select("heat_lane_id, result_outcome, official_time_ms, finish_place, dq_code")
+        .in("heat_lane_id", laneIds);
+      if (!cancelled && data) {
+        for (const row of data as ResultRow[]) applyResultRow(row);
+      }
+    })();
+
+    const laneIdSet = new Set(laneIds);
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`referee-heat-results-${heatId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "results" },
+        (payload) => {
+          const row = payload.new as ResultRow | null;
+          if (!row?.heat_lane_id || !laneIdSet.has(row.heat_lane_id)) return;
+          applyResultRow(row);
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "results" },
+        (payload) => {
+          const row = payload.new as ResultRow | null;
+          if (!row?.heat_lane_id || !laneIdSet.has(row.heat_lane_id)) return;
+          applyResultRow(row);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      void supabase.removeChannel(channel);
+    };
+  }, [heatId, lanes, applyResultRow]);
+
   const visibleLanes = useMemo(() => {
     if (mode === "lane" && focusedLane != null) {
       return lanes.filter((l) => l.laneNumber === focusedLane);
@@ -141,7 +217,7 @@ export function HeatResultEntry({
         const d = drafts[lane.heatLaneId];
         if (!d?.outcome) return false;
         if (d.outcome === "valid") {
-          return d.officialTimeMs != null || d.finishPlace != null;
+          return d.officialTimeMs != null;
         }
         if (d.outcome === "dq") return d.dqCode != null;
         return true;
@@ -155,7 +231,8 @@ export function HeatResultEntry({
       [heatLaneId]: {
         outcome,
         officialTimeMs: outcome === "valid" ? prev[heatLaneId]?.officialTimeMs ?? null : null,
-        finishPlace: outcome === "valid" ? prev[heatLaneId]?.finishPlace ?? null : null,
+        // finishPlace is never set by the client — see LaneDraft comment.
+        finishPlace: null,
         dqCode: outcome === "dq" ? prev[heatLaneId]?.dqCode ?? "false_start" : null,
       },
     }));
@@ -186,13 +263,16 @@ export function HeatResultEntry({
         const draft = drafts[lane.heatLaneId];
         if (!draft?.outcome) continue;
 
+        // finishPlace/placementPoints are intentionally omitted — the
+        // database's recompute_heat_finish_places trigger derives them from
+        // every valid result's official_time_ms within this heat the moment
+        // this row lands, so ranking is always authoritative regardless of
+        // which lane referee or the Chief last wrote a time.
         const scored = scoreHeatResult(
           {
             outcome: draft.outcome,
-            finishPlace: draft.finishPlace,
             officialTimeMs: draft.officialTimeMs,
             seedTimeMs: lane.seedTimeMs,
-            maxPlacementPoints: lanes.length,
           },
           draft.dqCode,
         );
@@ -202,9 +282,7 @@ export function HeatResultEntry({
             heat_lane_id: lane.heatLaneId,
             result_outcome: scored.resultOutcome,
             official_time_ms: scored.officialTimeMs,
-            finish_place: scored.finishPlace,
             dq_code: scored.dqCode,
-            placement_points: scored.placementPoints,
             improvement_points: scored.improvementPoints,
             status: publish && allowPublish ? "published" : "draft",
           },
@@ -216,7 +294,7 @@ export function HeatResultEntry({
       setSaved(true);
       onSaved?.();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save heat results.");
+      setError(getErrorMessage(err, "Failed to save heat results."));
     } finally {
       setSaving(false);
     }
@@ -343,28 +421,17 @@ export function HeatResultEntry({
                     }}
                   />
                   <div className="space-y-1.5">
-                    <Label htmlFor={`place-${lane.heatLaneId}`}>Finish place</Label>
-                    <Input
-                      id={`place-${lane.heatLaneId}`}
-                      type="number"
-                      min={1}
-                      max={lanes.length}
-                      disabled={!editable}
-                      className="min-h-[48px]"
-                      value={draft.finishPlace ?? ""}
-                      onChange={(e) => {
-                        const place = e.target.value ? Number(e.target.value) : null;
-                        setDrafts((prev) => ({
-                          ...prev,
-                          [lane.heatLaneId]: {
-                            ...prev[lane.heatLaneId],
-                            outcome: "valid",
-                            finishPlace: place,
-                          },
-                        }));
-                        setSaved(false);
-                      }}
-                    />
+                    <Label>Finish place</Label>
+                    <div
+                      className={cn(
+                        "flex min-h-[48px] items-center rounded-md border px-3 text-sm",
+                        outdoorMode ? "border-yellow-300/40 text-yellow-100/70" : "text-muted-foreground",
+                      )}
+                    >
+                      {draft.finishPlace != null
+                        ? `#${draft.finishPlace} — auto-ranked by time`
+                        : "Auto-ranked once all times are in"}
+                    </div>
                   </div>
                 </div>
               )}
@@ -435,7 +502,7 @@ export function HeatResultEntry({
               ) : (
                 <Save className="mr-2 size-4" />
               )}
-              {saved ? "Draft saved" : "Save heat results"}
+              {saved ? "Draft saved" : mode === "lane" ? "Save Lane Result" : "Save Draft"}
             </Button>
             {allowPublish && mode === "chief" && (
               <Button
@@ -445,7 +512,7 @@ export function HeatResultEntry({
                 disabled={!allReady || saving || writableLanes.length === 0}
                 onClick={() => void handleSave(true)}
               >
-                Publish final heat results
+                Submit Heat Results to Admin / Publish
               </Button>
             )}
           </div>
