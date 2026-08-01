@@ -12,6 +12,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AppHeader } from "@/components/layout/app-header";
 import { SeedCredentialsHelper } from "@/components/login/seed-credentials-helper";
 import { createClient } from "@/lib/supabase/client";
+import { formatSignInError } from "@/lib/utils";
 
 function isSafeRedirect(path: string | null): path is string {
   // Only ever redirect back within this app — never to an external host.
@@ -36,11 +37,16 @@ function LoginPageInner() {
       const supabase = createClient();
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) {
-        setError(signInError.message);
+        // Always coerce through formatSignInError — never render a raw AuthError
+        // / plain object (spreading an Error yields `{}`, which React will try
+        // to paint as a child and shows up as a red "{}" alert).
+        setError(formatSignInError(signInError));
         return;
       }
       router.push(isSafeRedirect(redirectTo) ? redirectTo : "/");
       router.refresh();
+    } catch (err) {
+      setError(formatSignInError(err));
     } finally {
       setSubmitting(false);
     }
@@ -69,7 +75,7 @@ function LoginPageInner() {
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit}>
-            {error && (
+            {typeof error === "string" && error.length > 0 && (
               <Alert variant="destructive">
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
