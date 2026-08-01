@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { formatTimeMs, parseTimeToMs, timeDropSeconds } from "@/lib/format";
+import {
+  CLOCK_TIME_ERROR,
+  formatTimeMs,
+  parseClockTime,
+  parseTimeToMs,
+  timeDropSeconds,
+} from "@/lib/format";
 
 describe("formatTimeMs", () => {
   it("formats sub-minute times without a minutes segment", () => {
@@ -16,23 +22,33 @@ describe("formatTimeMs", () => {
   });
 });
 
-describe("parseTimeToMs", () => {
+describe("parseClockTime / parseTimeToMs", () => {
   it("parses mm:ss.cc", () => {
     expect(parseTimeToMs("1:05.43")).toBe(65430);
+    expect(parseClockTime("1:05.43")).toEqual({ ok: true, ms: 65430 });
   });
 
   it("parses ss.cc", () => {
     expect(parseTimeToMs("29.43")).toBe(29430);
   });
 
-  it("parses a plain millisecond integer", () => {
-    expect(parseTimeToMs("29430")).toBe(29430);
+  it("rejects raw millisecond integer strings", () => {
+    expect(parseTimeToMs("29430")).toBeNull();
+    expect(parseClockTime("29430")).toEqual({ ok: false, error: CLOCK_TIME_ERROR });
   });
 
-  it("returns null for empty or invalid input", () => {
+  it("rejects invalid seconds (>= 60) and wrong decimal precision", () => {
+    expect(parseTimeToMs("1:65.00")).toBeNull();
+    expect(parseTimeToMs("29.4")).toBeNull();
+    expect(parseTimeToMs("29.432")).toBeNull();
+    const invalid = parseClockTime("not-a-time");
+    expect(invalid.ok).toBe(false);
+    expect(invalid.ok === false && invalid.error).toBe(CLOCK_TIME_ERROR);
+  });
+
+  it("returns null for empty input via parseTimeToMs", () => {
     expect(parseTimeToMs("")).toBeNull();
     expect(parseTimeToMs("   ")).toBeNull();
-    expect(parseTimeToMs("not-a-time")).toBeNull();
   });
 });
 

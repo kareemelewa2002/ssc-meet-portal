@@ -66,7 +66,11 @@ export interface AthleteProfileInsertPayload {
   specialty_events: string[];
   parent_link_status: ParentLinkStatus;
   pending_parent_email: string | null;
+  approved_by_admin: boolean;
 }
+
+export const SWIMMER_PENDING_APPROVAL_MESSAGE =
+  "Swimmer registration pending admin approval.";
 
 /**
  * Pure builder for the athletes-table insert payload — kept entirely
@@ -92,6 +96,7 @@ export function buildAthleteProfileInsert(
     specialty_events: bio.specialtyEvents,
     parent_link_status: needsParent ? "pending" : "none",
     pending_parent_email: needsParent ? (bio.parentEmail?.trim() || null) : null,
+    approved_by_admin: false,
   };
 }
 
@@ -104,12 +109,15 @@ export function buildParentInviteLink(pendingParentEmail: string, origin: string
   return url.toString();
 }
 
-/** Athletes may only submit meet entries once parent linkage is resolved —
- * i.e. not stuck in 'pending'. 15+ athletes (parent_link_status: 'none')
- * are always clear. */
+/** Athletes may only submit meet entries once parent linkage is resolved
+ * and an admin has approved their registration. */
 export function canSubmitEntries(athlete: {
   parentLinkStatus: ParentLinkStatus;
+  approvedByAdmin?: boolean;
 }): ValidationResult {
+  if (athlete.approvedByAdmin === false) {
+    return { ok: false, error: SWIMMER_PENDING_APPROVAL_MESSAGE };
+  }
   if (athlete.parentLinkStatus === "pending") {
     return {
       ok: false,

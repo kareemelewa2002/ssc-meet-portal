@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PARENT_EMAIL_REQUIRED_MESSAGE,
+  SWIMMER_PENDING_APPROVAL_MESSAGE,
   buildAthleteProfileInsert,
   buildParentInviteLink,
   canSubmitEntries,
@@ -57,6 +58,7 @@ describe("buildAthleteProfileInsert", () => {
     expect(payload.age_group).toBe("U13_14");
     expect(payload.parent_link_status).toBe("pending");
     expect(payload.pending_parent_email).toBe("parent@example.com");
+    expect(payload.approved_by_admin).toBe(false);
   });
 
   it("marks 15+ athletes as needing no parent link", () => {
@@ -66,6 +68,7 @@ describe("buildAthleteProfileInsert", () => {
     );
     expect(payload.parent_link_status).toBe("none");
     expect(payload.pending_parent_email).toBeNull();
+    expect(payload.approved_by_admin).toBe(false);
   });
 });
 
@@ -80,12 +83,20 @@ describe("buildParentInviteLink", () => {
 
 describe("canSubmitEntries", () => {
   it("blocks entry submission while parent linkage is pending", () => {
-    const result = canSubmitEntries({ parentLinkStatus: "pending" });
+    const result = canSubmitEntries({ parentLinkStatus: "pending", approvedByAdmin: true });
     expect(result.ok).toBe(false);
   });
 
-  it("allows entry submission once verified or not required", () => {
-    expect(canSubmitEntries({ parentLinkStatus: "verified" }).ok).toBe(true);
+  it("blocks entry submission while swimmer registration is unapproved", () => {
+    const result = canSubmitEntries({ parentLinkStatus: "none", approvedByAdmin: false });
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(SWIMMER_PENDING_APPROVAL_MESSAGE);
+  });
+
+  it("allows entry submission once verified/not required and approved", () => {
+    expect(canSubmitEntries({ parentLinkStatus: "verified", approvedByAdmin: true }).ok).toBe(true);
+    expect(canSubmitEntries({ parentLinkStatus: "none", approvedByAdmin: true }).ok).toBe(true);
+    // Undefined approval is treated as not explicitly blocked (legacy callers).
     expect(canSubmitEntries({ parentLinkStatus: "none" }).ok).toBe(true);
   });
 });

@@ -284,9 +284,16 @@ create table if not exists public.athletes (
   -- Under-15 parent/guardian linkage (see public.parent_link_status).
   parent_link_status public.parent_link_status not null default 'none',
   pending_parent_email text,
+  -- New swimmer profiles stay unapproved until an admin reviews them.
+  -- Unapproved athletes may edit their profile but cannot submit meet entries.
+  approved_by_admin boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Idempotent column add for databases that already had athletes without approval.
+alter table public.athletes
+  add column if not exists approved_by_admin boolean not null default false;
 
 comment on column public.athletes.parent_id is
   'Optional. Grants that parent RLS management rights over this athlete''s '
@@ -1105,6 +1112,66 @@ $$;
 create or replace trigger enforce_no_direct_skins_entry_trigger
   before insert on public.entries
   for each row execute function public.enforce_no_direct_skins_entry();
+
+-- Unapproved swimmers may set up profiles but cannot enter any meet volume
+-- until an admin sets approved_by_admin = true.
+create or replace function public.enforce_athlete_approved_for_entry()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if public.is_admin() then
+    return new;
+  end if;
+
+  if exists (
+    select 1 from public.athletes a
+    where a.id = new.athlete_id
+      and a.approved_by_admin = false
+  ) then
+    raise exception 'Swimmer registration pending admin approval.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_athlete_approved_for_entry_trigger on public.entries;
+create trigger enforce_athlete_approved_for_entry_trigger
+  before insert on public.entries
+  for each row execute function public.enforce_athlete_approved_for_entry();
+
+-- Only admins may flip approved_by_admin. Self-service inserts are forced
+-- to false so a client cannot self-approve on signup.
+create or replace function public.enforce_athlete_approval_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if TG_OP = 'INSERT' then
+    if not public.is_admin() then
+      new.approved_by_admin := false;
+    end if;
+    return new;
+  end if;
+
+  if new.approved_by_admin is distinct from old.approved_by_admin
+    and not public.is_admin() then
+    raise exception 'Only an admin may approve or reject a swimmer registration.';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_athlete_approval_change_trigger on public.athletes;
+create trigger enforce_athlete_approval_change_trigger
+  before insert or update on public.athletes
+  for each row execute function public.enforce_athlete_approval_change();
 
 -- Stamps age_group_at_entry from the athlete's date_of_birth as of THIS
 -- volume's meet_date — never the athlete's current (mutable) age_group —

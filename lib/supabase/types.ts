@@ -103,6 +103,7 @@ export type AthleteRow = {
   specialty_events: string[];
   parent_link_status: ParentLinkStatus;
   pending_parent_email: string | null;
+  approved_by_admin: boolean;
   created_at: string;
   updated_at: string;
 };

@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ClockTimeInput } from "@/components/ui/clock-time-input";
 import { cn } from "@/lib/utils";
 import {
   DQ_REASON_LABELS,
@@ -21,8 +22,9 @@ import {
   scoreHeatResult,
 } from "@/lib/results";
 import { createClient } from "@/lib/supabase/client";
-import { parseTimeToMs } from "@/lib/format";
+import { CLOCK_TIME_ERROR } from "@/lib/format";
 import { ATTENDANCE_LABELS } from "@/lib/attendance";
+import { canEditLane, type LaneNumber, type RefereeDeckMode } from "@/lib/referee-lanes";
 import type { AttendanceStatus, DqReason, ResultOutcome } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 
@@ -57,6 +59,13 @@ export interface HeatResultEntryProps {
   outdoorMode?: boolean;
   onSaved?: () => void;
   className?: string;
+  /** Deck role: lane / chief / observer. */
+  mode?: RefereeDeckMode;
+  focusedLane?: LaneNumber | null;
+  /** When true, overrides mode and disables all writes. */
+  readOnly?: boolean;
+  /** Chief can publish drafts as published. */
+  allowPublish?: boolean;
 }
 
 const DQ_CODES = Object.keys(DQ_REASON_LABELS) as DqReason[];
@@ -72,6 +81,10 @@ export function HeatResultEntry({
   outdoorMode = false,
   onSaved,
   className,
+  mode = "chief",
+  focusedLane = null,
+  readOnly = false,
+  allowPublish = false,
 }: HeatResultEntryProps) {
   const [drafts, setDrafts] = useState<Record<string, LaneDraft>>(() =>
     Object.fromEntries(lanes.map((l) => [l.heatLaneId, emptyDraft()])),
@@ -84,8 +97,8 @@ export function HeatResultEntry({
     Object.fromEntries(lanes.map((l) => [l.heatLaneId, l.attendanceStatus ?? "pending"])),
   );
 
-  // Ushers mark call-room attendance from a separate portal — reflect it here
-  // live so referees know who's checked in before starting the heat.
+  const isObserver = readOnly || mode === "observer";
+
   useEffect(() => {
     const laneIds = new Set(lanes.map((l) => l.heatLaneId));
     const supabase = createClient();
@@ -107,16 +120,33 @@ export function HeatResultEntry({
     };
   }, [heatId, lanes]);
 
+  const visibleLanes = useMemo(() => {
+    if (mode === "lane" && focusedLane != null) {
+      return lanes.filter((l) => l.laneNumber === focusedLane);
+    }
+    return lanes;
+  }, [lanes, mode, focusedLane]);
+
+  const writableLanes = useMemo(
+    () =>
+      visibleLanes.filter((lane) =>
+        !isObserver && canEditLane(mode, focusedLane, lane.laneNumber),
+      ),
+    [visibleLanes, isObserver, mode, focusedLane],
+  );
+
   const allReady = useMemo(
     () =>
-      lanes.every((lane) => {
+      writableLanes.every((lane) => {
         const d = drafts[lane.heatLaneId];
         if (!d?.outcome) return false;
-        if (d.outcome === "valid") return d.officialTimeMs != null || d.finishPlace != null;
+        if (d.outcome === "valid") {
+          return d.officialTimeMs != null || d.finishPlace != null;
+        }
         if (d.outcome === "dq") return d.dqCode != null;
-        return true; // no_show
+        return true;
       }),
-    [lanes, drafts],
+    [writableLanes, drafts],
   );
 
   const setOutcome = (heatLaneId: string, outcome: ResultOutcome) => {
@@ -132,13 +162,27 @@ export function HeatResultEntry({
     setSaved(false);
   };
 
-  const handleSave = async () => {
+  const handleSave = async (publish: boolean) => {
+    if (isObserver) {
+      setError("Observer mode is read-only.");
+      return;
+    }
+
+    // Validate clock strings for valid outcomes before write.
+    for (const lane of writableLanes) {
+      const draft = drafts[lane.heatLaneId];
+      if (draft?.outcome === "valid" && draft.officialTimeMs == null && (timeInputs[lane.heatLaneId] ?? "").trim()) {
+        setError(CLOCK_TIME_ERROR);
+        return;
+      }
+    }
+
     setSaving(true);
     setError(null);
     try {
       const supabase = createClient();
 
-      for (const lane of lanes) {
+      for (const lane of writableLanes) {
         const draft = drafts[lane.heatLaneId];
         if (!draft?.outcome) continue;
 
@@ -162,7 +206,7 @@ export function HeatResultEntry({
             dq_code: scored.dqCode,
             placement_points: scored.placementPoints,
             improvement_points: scored.improvementPoints,
-            status: "draft",
+            status: publish && allowPublish ? "published" : "draft",
           },
           { onConflict: "heat_lane_id" },
         );
@@ -190,19 +234,26 @@ export function HeatResultEntry({
           {heatLabel}
         </CardTitle>
         <CardDescription className={outdoorMode ? "text-yellow-100/70" : undefined}>
-          Heat {heatId} — record Valid Time, DQ (with FINA/SSC code), or NS (No-Show).
-          DQ and NS score 0 placement and 0 improvement points; NS is excluded from Skins.
+          Heat {heatId} —{" "}
+          {isObserver
+            ? "Read-only observer view of attendance and live result drafts."
+            : mode === "lane"
+              ? `Lane ${focusedLane} focus — edit only your assigned lane.`
+              : "Chief Referee — full write access across all lanes; publish when ready."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        {lanes.map((lane) => {
+        {visibleLanes.map((lane) => {
           const draft = drafts[lane.heatLaneId] ?? emptyDraft();
+          const editable =
+            !isObserver && canEditLane(mode, focusedLane, lane.laneNumber);
           return (
             <div
               key={lane.heatLaneId}
               className={cn(
                 "space-y-3 rounded-lg border p-3",
                 outdoorMode ? "border-yellow-300/30" : "border-border",
+                !editable && "opacity-80",
               )}
             >
               <div className="flex flex-wrap items-center gap-2">
@@ -242,6 +293,11 @@ export function HeatResultEntry({
                 >
                   {ATTENDANCE_LABELS[attendance[lane.heatLaneId] ?? "pending"]}
                 </Badge>
+                {!editable && (
+                  <Badge variant="outline" className="h-7">
+                    {isObserver ? "Read-only" : "Locked"}
+                  </Badge>
+                )}
               </div>
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
@@ -250,6 +306,7 @@ export function HeatResultEntry({
                     key={outcome}
                     type="button"
                     variant={draft.outcome === outcome ? "default" : "outline"}
+                    disabled={!editable}
                     className={cn(
                       "min-h-[48px]",
                       outcome === "dq" && draft.outcome === "dq" && "bg-destructive text-white",
@@ -266,28 +323,25 @@ export function HeatResultEntry({
 
               {draft.outcome === "valid" && (
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5">
-                    <Label htmlFor={`time-${lane.heatLaneId}`}>Official time</Label>
-                    <Input
-                      id={`time-${lane.heatLaneId}`}
-                      placeholder="mm:ss.hh or ss.hh"
-                      className="min-h-[48px] font-mono"
-                      value={timeInputs[lane.heatLaneId] ?? ""}
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        setTimeInputs((prev) => ({ ...prev, [lane.heatLaneId]: value }));
-                        setDrafts((prev) => ({
-                          ...prev,
-                          [lane.heatLaneId]: {
-                            ...prev[lane.heatLaneId],
-                            outcome: "valid",
-                            officialTimeMs: parseTimeToMs(value),
-                          },
-                        }));
-                        setSaved(false);
-                      }}
-                    />
-                  </div>
+                  <ClockTimeInput
+                    id={`time-${lane.heatLaneId}`}
+                    label="Official time"
+                    value={timeInputs[lane.heatLaneId] ?? ""}
+                    disabled={!editable}
+                    outdoorMode={outdoorMode}
+                    onChange={(raw, ms) => {
+                      setTimeInputs((prev) => ({ ...prev, [lane.heatLaneId]: raw }));
+                      setDrafts((prev) => ({
+                        ...prev,
+                        [lane.heatLaneId]: {
+                          ...prev[lane.heatLaneId],
+                          outcome: "valid",
+                          officialTimeMs: ms,
+                        },
+                      }));
+                      setSaved(false);
+                    }}
+                  />
                   <div className="space-y-1.5">
                     <Label htmlFor={`place-${lane.heatLaneId}`}>Finish place</Label>
                     <Input
@@ -295,6 +349,7 @@ export function HeatResultEntry({
                       type="number"
                       min={1}
                       max={lanes.length}
+                      disabled={!editable}
                       className="min-h-[48px]"
                       value={draft.finishPlace ?? ""}
                       onChange={(e) => {
@@ -319,6 +374,7 @@ export function HeatResultEntry({
                   <Label>DQ reason code</Label>
                   <Select
                     value={draft.dqCode ?? "false_start"}
+                    disabled={!editable}
                     onValueChange={(value) => {
                       if (value == null) return;
                       setDrafts((prev) => ({
@@ -366,19 +422,34 @@ export function HeatResultEntry({
           </p>
         )}
 
-        <Button
-          type="button"
-          className="min-h-[48px] w-full sm:w-auto"
-          disabled={!allReady || saving}
-          onClick={() => void handleSave()}
-        >
-          {saving ? (
-            <Loader2 className="mr-2 size-4 animate-spin" />
-          ) : (
-            <Save className="mr-2 size-4" />
-          )}
-          {saved ? "Draft saved" : "Save heat results"}
-        </Button>
+        {!isObserver && (
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button
+              type="button"
+              className="min-h-[48px] w-full sm:w-auto"
+              disabled={!allReady || saving || writableLanes.length === 0}
+              onClick={() => void handleSave(false)}
+            >
+              {saving ? (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 size-4" />
+              )}
+              {saved ? "Draft saved" : "Save heat results"}
+            </Button>
+            {allowPublish && mode === "chief" && (
+              <Button
+                type="button"
+                variant="secondary"
+                className="min-h-[48px] w-full sm:w-auto"
+                disabled={!allReady || saving || writableLanes.length === 0}
+                onClick={() => void handleSave(true)}
+              >
+                Publish final heat results
+              </Button>
+            )}
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -91,15 +91,23 @@ export interface SubmitEntriesResult {
 export async function submitEventRegistration(params: {
   athleteId: string;
   parentLinkStatus: ParentLinkStatus;
+  approvedByAdmin?: boolean;
   meetVolumeId: string;
   teamId: string | null;
   selections: EventSelection[];
 }): Promise<SubmitEntriesResult> {
-  const { athleteId, parentLinkStatus, meetVolumeId, teamId, selections } = params;
+  const {
+    athleteId,
+    parentLinkStatus,
+    approvedByAdmin,
+    meetVolumeId,
+    teamId,
+    selections,
+  } = params;
 
-  const parentCheck = canSubmitEntries({ parentLinkStatus });
-  if (!parentCheck.ok) {
-    return { success: false, error: parentCheck.error };
+  const gate = canSubmitEntries({ parentLinkStatus, approvedByAdmin });
+  if (!gate.ok) {
+    return { success: false, error: gate.error };
   }
   if (selections.length === 0) {
     return { success: false, error: "Select at least one event to enter." };

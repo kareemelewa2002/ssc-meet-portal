@@ -6,7 +6,6 @@ import { ArrowLeft, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { createClient } from "@/lib/supabase/client";
 import { fetchVolumeByNumber } from "@/lib/volumes";
@@ -18,7 +17,8 @@ import {
   type EventSelection,
   type RegisterableEvent,
 } from "@/lib/event-registration";
-import { parseTimeToMs } from "@/lib/format";
+import { CLOCK_TIME_ERROR, parseTimeToMs } from "@/lib/format";
+import { ClockTimeInput } from "@/components/ui/clock-time-input";
 import type { MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
 
 interface EventDraft {
@@ -30,6 +30,7 @@ interface EventDraft {
 interface CurrentAthlete {
   id: string;
   parentLinkStatus: ParentLinkStatus;
+  approvedByAdmin: boolean;
 }
 
 export function EventRegistrationClient({ volId }: { volId: string }) {
@@ -72,7 +73,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         }
         const { data: athleteRow } = await supabase
           .from("athletes")
-          .select("id, parent_link_status")
+          .select("id, parent_link_status, approved_by_admin")
           .eq("user_id", user.id)
           .maybeSingle();
         if (!athleteRow) {
@@ -80,7 +81,11 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           return;
         }
         if (!cancelled) {
-          setAthlete({ id: athleteRow.id, parentLinkStatus: athleteRow.parent_link_status });
+          setAthlete({
+            id: athleteRow.id,
+            parentLinkStatus: athleteRow.parent_link_status,
+            approvedByAdmin: athleteRow.approved_by_admin,
+          });
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -91,8 +96,14 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
     };
   }, [volId]);
 
-  const parentGate = useMemo(
-    () => (athlete ? canSubmitEntries({ parentLinkStatus: athlete.parentLinkStatus }) : { ok: true }),
+  const entryGate = useMemo(
+    () =>
+      athlete
+        ? canSubmitEntries({
+            parentLinkStatus: athlete.parentLinkStatus,
+            approvedByAdmin: athlete.approvedByAdmin,
+          })
+        : { ok: true as const },
     [athlete],
   );
 
@@ -148,7 +159,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
 
     const invalidTime = selections.find((s) => !s.isNt && s.seedTimeMs == null);
     if (invalidTime) {
-      setError("Enter a valid seed time (mm:ss.cc or ss.cc) or check NT for each selected event.");
+      setError(CLOCK_TIME_ERROR);
       return;
     }
 
@@ -157,6 +168,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
       const res = await submitEventRegistration({
         athleteId: athlete.id,
         parentLinkStatus: athlete.parentLinkStatus,
+        approvedByAdmin: athlete.approvedByAdmin,
         meetVolumeId: volume.id,
         teamId,
         selections,
@@ -210,9 +222,9 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         </Alert>
       ) : (
         <>
-          {!parentGate.ok && (
+          {!entryGate.ok && (
             <Alert variant="destructive">
-              <AlertDescription>{parentGate.error}</AlertDescription>
+              <AlertDescription>{entryGate.error}</AlertDescription>
             </Alert>
           )}
           {error && (
@@ -281,19 +293,20 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
                           </Button>
                         </div>
                         {draft?.selected && (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Input
-                              placeholder="mm:ss.cc or ss.cc"
-                              className="min-h-[48px] max-w-[180px] font-mono"
-                              disabled={draft.isNt}
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                            <ClockTimeInput
+                              id={`seed-${ev.id}`}
+                              label="Long Course seed time"
                               value={draft.timeInput}
-                              onChange={(e) => setTimeInput(ev.id, e.target.value)}
+                              disabled={draft.isNt}
+                              className="min-w-0 flex-1"
+                              onChange={(raw) => setTimeInput(ev.id, raw)}
                             />
                             <Button
                               type="button"
                               size="sm"
                               variant={draft.isNt ? "default" : "outline"}
-                              className="min-h-[48px] px-4"
+                              className="min-h-[48px] px-4 sm:mt-7"
                               onClick={() => toggleNt(ev.id)}
                             >
                               NT
@@ -311,7 +324,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           <Button
             type="button"
             className="min-h-[48px] w-full text-base font-semibold"
-            disabled={submitting || selectedCount === 0 || !parentGate.ok}
+            disabled={submitting || selectedCount === 0 || !entryGate.ok}
             onClick={() => void handleSubmit()}
           >
             {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
