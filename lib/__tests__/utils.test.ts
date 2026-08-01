@@ -41,11 +41,17 @@ describe("formatSignInError", () => {
     expect(formatSignInError(new Error("Failed to fetch"))).toMatch(/Supabase is not configured/);
   });
 
-  it("maps invalid credentials to a password hint for the real admin email", () => {
+  it("maps invalid credentials to a seed/password hint", () => {
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://crocqqhajpboltigzkxp.supabase.co");
     expect(formatSignInError(new Error("Invalid login credentials"))).toMatch(
       /Invalid email or password/,
     );
+  });
+
+  it("maps empty AuthError messages to the demo-identities hotfix hint", () => {
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://crocqqhajpboltigzkxp.supabase.co");
+    expect(formatSignInError(new Error("{}"))).toMatch(/fix-demo-auth-identities/);
+    expect(formatSignInError({})).toMatch(/fix-demo-auth-identities/);
   });
 
   it("maps network failures when the project URL is set", () => {

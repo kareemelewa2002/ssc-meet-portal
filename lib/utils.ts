@@ -58,9 +58,20 @@ export function formatSignInError(err: unknown): string {
   }
   if (/invalid login credentials|invalid_credentials/i.test(raw)) {
     return (
-      "Invalid email or password. If this is the real admin email that existed " +
-      "before seeding, use that account’s own password — not the demo Password123!."
+      "Invalid email or password. Demo @ssc-demo.test accounts need " +
+      "supabase/fix-demo-auth-identities.sql (or a fresh seed-demo.sql run). " +
+      "For elewakareem2002@gmail.com, use that account’s own password if it " +
+      "existed before seeding — not Password123!."
     )
   }
-  return raw || fallback
+  // Empty / "{}" AuthError.message usually means the Auth user row is incomplete
+  // (classic: seed inserted auth.users without auth.identities).
+  if (!raw) {
+    return (
+      "Sign-in failed. If you're using Seeded test credentials, run " +
+      "supabase/fix-demo-auth-identities.sql in the Supabase SQL Editor, " +
+      "then try again with Password123!."
+    )
+  }
+  return raw
 }

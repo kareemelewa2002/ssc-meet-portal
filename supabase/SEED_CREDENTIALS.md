@@ -6,6 +6,10 @@ the `/login` page under "Seeded test credentials".
 
 **Password for every seeded account:** `Password123!`
 
+If every demo login fails with a generic sign-in error, the project was likely
+seeded before `auth.identities` rows were created. Run
+`supabase/fix-demo-auth-identities.sql` in the Supabase SQL Editor, then retry.
+
 | Role | Email |
 |---|---|
 | Superadmin / Meet Director | `elewakareem2002@gmail.com` |
