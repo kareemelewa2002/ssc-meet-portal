@@ -37,9 +37,8 @@ function LoginPageInner() {
       const supabase = createClient();
       const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
       if (signInError) {
-        // Always coerce through formatSignInError — never render a raw AuthError
-        // / plain object (spreading an Error yields `{}`, which React will try
-        // to paint as a child and shows up as a red "{}" alert).
+        // Guard against unusable AuthError.message values (e.g. literal "{}")
+        // and map network/config failures to actionable copy.
         setError(formatSignInError(signInError));
         return;
       }

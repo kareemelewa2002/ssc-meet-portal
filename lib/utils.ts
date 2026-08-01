@@ -12,17 +12,15 @@ export function cn(...inputs: ClassValue[]) {
  * so checking only that case silently swallows the real reason and always
  * shows `fallback` instead. This checks both shapes before giving up.
  *
- * Also rejects unusable "messages" that sometimes appear when an Error is
- * spread/JSON.stringified (non-enumerable `message` → `"{}"`) or when a
- * bare object is coerced (`"[object Object]"`).
+ * Also rejects unusable message strings (`"{}"`, `"[object Object]"`, blank)
+ * that supabase-js has been observed to attach as AuthError.message after
+ * internal serialization of an empty/opaque failure payload.
  */
 export function getErrorMessage(err: unknown, fallback: string): string {
   let message: string | undefined
   if (err instanceof Error) message = err.message
   else if (err && typeof err === "object" && "message" in err && typeof err.message === "string") {
     message = err.message
-  } else if (typeof err === "string") {
-    message = err
   }
 
   if (!message) return fallback
@@ -33,8 +31,7 @@ export function getErrorMessage(err: unknown, fallback: string): string {
 
 /**
  * User-facing copy for sign-in failures. Maps opaque network / config
- * failures (and the infamous rendered "{}" empty-object message) to
- * actionable guidance instead of raw fetch/AuthError text.
+ * failures and unusable AuthError.message values to actionable guidance.
  */
 export function formatSignInError(err: unknown): string {
   const fallback = "Sign-in failed. Check your email and password."

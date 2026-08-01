@@ -18,20 +18,16 @@ describe("getErrorMessage", () => {
     );
   });
 
-  it("accepts a bare string message", () => {
-    expect(getErrorMessage("Invalid login credentials", "fallback")).toBe(
-      "Invalid login credentials",
-    );
-  });
-
   it("falls back when the error has no usable message", () => {
     expect(getErrorMessage(null, "fallback")).toBe("fallback");
     expect(getErrorMessage(undefined, "fallback")).toBe("fallback");
+    expect(getErrorMessage("a bare string", "fallback")).toBe("fallback");
     expect(getErrorMessage({ code: "42501" }, "fallback")).toBe("fallback");
-    // Spreading an Error yields {} — never show that literal to users.
-    expect(getErrorMessage("{}", "fallback")).toBe("fallback");
-    expect(getErrorMessage("[object Object]", "fallback")).toBe("fallback");
+    // supabase-js has been observed to attach these as AuthError.message
+    // after serializing an empty/opaque failure payload — never show them.
     expect(getErrorMessage({ message: "{}" }, "fallback")).toBe("fallback");
+    expect(getErrorMessage({ message: "[object Object]" }, "fallback")).toBe("fallback");
+    expect(getErrorMessage(new Error("{}"), "fallback")).toBe("fallback");
   });
 });
 
