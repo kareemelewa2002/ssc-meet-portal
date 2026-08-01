@@ -8,6 +8,9 @@ export interface RacePerformance {
   teamName?: string | null;
   gender: Gender;
   ageGroup: AgeGroup;
+  // Age AT THIS RACE (from public.age_at_date() / the all_time_* views) —
+  // never the athlete's current live age. See lib/age.ts's describeAgeAtSwim.
+  ageAtSwim: number;
   stroke: string;
   distanceM: number;
   officialTimeMs: number;
@@ -26,6 +29,8 @@ export interface RankedPerformer {
   teamName?: string | null;
   gender: Gender;
   ageGroup: AgeGroup;
+  // Age at the specific race that produced bestTimeMs.
+  ageAtSwim: number;
   stroke: string;
   distanceM: number;
   bestTimeMs: number;
@@ -123,6 +128,7 @@ export function rankBestPerformers(
         teamName: race.teamName,
         gender: race.gender,
         ageGroup: race.ageGroup,
+        ageAtSwim: race.ageAtSwim,
         stroke: race.stroke,
         distanceM: race.distanceM,
         bestTimeMs: race.officialTimeMs,
@@ -133,6 +139,8 @@ export function rankBestPerformers(
       existing.racesCounted += 1;
       if (race.officialTimeMs < existing.bestTimeMs) {
         existing.bestTimeMs = race.officialTimeMs;
+        // Keep age_at_swim correlated with whichever race is currently best.
+        existing.ageAtSwim = race.ageAtSwim;
       }
     }
   }
@@ -159,6 +167,7 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     teamName: "Tidal Wave",
     gender: "male",
     ageGroup: "Open",
+    ageAtSwim: 21,
     stroke: "Freestyle",
     distanceM: 50,
     officialTimeMs: 24100,
@@ -173,6 +182,7 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     teamName: "Riptide",
     gender: "male",
     ageGroup: "Open",
+    ageAtSwim: 19,
     stroke: "Freestyle",
     distanceM: 50,
     officialTimeMs: 24500,
@@ -187,6 +197,9 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     teamName: "Tidal Wave",
     gender: "male",
     ageGroup: "Open",
+    // Same swimmer, later volume — one year older, matching the historical
+    // (never "live current age") display rule.
+    ageAtSwim: 22,
     stroke: "Freestyle",
     distanceM: 50,
     officialTimeMs: 23800,
@@ -201,6 +214,7 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     teamName: "Tidal Wave",
     gender: "male",
     ageGroup: "Open",
+    ageAtSwim: 24,
     stroke: "Freestyle",
     distanceM: 50,
     officialTimeMs: 25000,
@@ -215,6 +229,7 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     teamName: "Blue Marlins",
     gender: "female",
     ageGroup: "U17",
+    ageAtSwim: 16,
     stroke: "Freestyle",
     distanceM: 50,
     officialTimeMs: 26800,
@@ -229,6 +244,7 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     teamName: "Blue Marlins",
     gender: "female",
     ageGroup: "U17",
+    ageAtSwim: 15,
     stroke: "Freestyle",
     distanceM: 50,
     officialTimeMs: 27100,
@@ -243,6 +259,7 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     teamName: "Riptide",
     gender: "female",
     ageGroup: "U13_14",
+    ageAtSwim: 13,
     stroke: "Butterfly",
     distanceM: 50,
     officialTimeMs: 31200,
@@ -268,6 +285,7 @@ export async function fetchAllTimePerformances(): Promise<RacePerformance[]> {
       teamName: row.team_name,
       gender: row.gender,
       ageGroup: row.age_group,
+      ageAtSwim: row.age_at_swim,
       stroke: row.stroke,
       distanceM: row.distance_m,
       officialTimeMs: row.official_time_ms,

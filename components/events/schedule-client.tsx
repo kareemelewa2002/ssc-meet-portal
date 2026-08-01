@@ -67,13 +67,23 @@ export function ScheduleClient({ volId }: { volId: string }) {
           </p>
         ) : (
           <>
-            <header>
-              <h1 className={cn("text-xl font-bold sm:text-2xl", outdoorMode && "text-yellow-300")}>
-                {volume.name} — Schedule
-              </h1>
-              <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
-                {formatMeetDate(volume.meet_date)}
-              </p>
+            <header className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h1 className={cn("text-xl font-bold sm:text-2xl", outdoorMode && "text-yellow-300")}>
+                  {volume.name} — Schedule
+                </h1>
+                <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
+                  {formatMeetDate(volume.meet_date)}
+                </p>
+              </div>
+              <Button
+                variant={outdoorMode ? "secondary" : "default"}
+                className="min-h-[48px]"
+                nativeButton={false}
+                render={<Link href={`/events/${volId}/register`} />}
+              >
+                Register for this Volume
+              </Button>
             </header>
 
             <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>

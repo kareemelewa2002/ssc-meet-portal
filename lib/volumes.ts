@@ -39,6 +39,22 @@ export async function fetchVolumeByNumber(volumeNumber: number): Promise<MeetVol
   }
 }
 
+/** The most recent non-"planned" volume — the one currently being run
+ * (spectator nav, admin seeding, etc. all target this by default). */
+export async function fetchActiveVolume(): Promise<MeetVolumeRow | null> {
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("meet_volumes")
+      .select("*")
+      .order("volume_number", { ascending: true });
+    const volumes = error || !data || data.length === 0 ? DEMO_VOLUMES : data;
+    return [...volumes].reverse().find((v) => v.status !== "planned") ?? null;
+  } catch {
+    return [...DEMO_VOLUMES].reverse().find((v) => v.status !== "planned") ?? null;
+  }
+}
+
 function demoSessionsFor(volumeId: string, meetDate: string): SessionRow[] {
   return [
     {

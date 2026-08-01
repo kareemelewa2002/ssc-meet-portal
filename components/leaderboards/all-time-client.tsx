@@ -16,6 +16,7 @@ import {
 } from "@/lib/all-time-rankings";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
 import { formatTimeMs } from "@/lib/format";
+import { describeAgeAtSwim } from "@/lib/age";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
 export function AllTimeClient() {
@@ -159,7 +160,7 @@ export function AllTimeClient() {
                   <div className="min-w-0 flex-1">
                     <AthleteLink athleteId={row.athleteId} name={row.athleteName} />
                     <p className="text-xs text-muted-foreground">
-                      {row.teamName ?? "Unaffiliated"} · {row.racesCounted} races
+                      {row.teamName ?? "Unaffiliated"} · {row.racesCounted} races · set at age {row.ageAtSwim}
                     </p>
                   </div>
                   <p className="font-mono text-lg font-semibold tabular-nums">
@@ -195,8 +196,9 @@ export function AllTimeClient() {
                   </div>
                   <div className="min-w-0 flex-1">
                     <AthleteLink athleteId={row.athleteId} name={row.athleteName} />
+                    <p className="text-xs text-muted-foreground">{row.teamName ?? "Unaffiliated"}</p>
                     <p className="text-xs text-muted-foreground">
-                      {row.volumeName ?? "SSC"} · {row.teamName ?? "Unaffiliated"}
+                      {describeAgeAtSwim(row.ageAtSwim, row.volumeName ?? "SSC")}
                     </p>
                   </div>
                   <p className="font-mono text-lg font-semibold tabular-nums">

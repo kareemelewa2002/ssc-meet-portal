@@ -178,6 +178,7 @@ export default function AthleteProfilePage() {
               <TableRow>
                 <TableHead>Event</TableHead>
                 <TableHead>PB</TableHead>
+                <TableHead>Age</TableHead>
                 <TableHead>Volume</TableHead>
               </TableRow>
             </TableHeader>
@@ -188,6 +189,7 @@ export default function AthleteProfilePage() {
                     {pb.distanceM} {pb.stroke}
                   </TableCell>
                   <TableCell className="font-mono">{formatTimeMs(pb.bestTimeMs)}</TableCell>
+                  <TableCell>{pb.ageAtSwim}</TableCell>
                   <TableCell>{pb.volumeName ?? "—"}</TableCell>
                 </TableRow>
               ))}
@@ -219,6 +221,7 @@ export default function AthleteProfilePage() {
                 <TableRow>
                   <TableHead>Volume</TableHead>
                   <TableHead>Event</TableHead>
+                  <TableHead>Age</TableHead>
                   <TableHead>Time</TableHead>
                   <TableHead>Place</TableHead>
                   <TableHead>Split</TableHead>
@@ -230,6 +233,7 @@ export default function AthleteProfilePage() {
                   <TableRow key={row.id}>
                     <TableCell>{row.volumeName}</TableCell>
                     <TableCell>{row.eventName}</TableCell>
+                    <TableCell>{row.ageAtSwim}</TableCell>
                     <TableCell className="font-mono">
                       {formatTimeMs(row.officialTimeMs)}
                     </TableCell>

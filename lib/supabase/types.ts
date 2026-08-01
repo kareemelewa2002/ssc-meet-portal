@@ -48,6 +48,10 @@ export type AttendanceStatus = "pending" | "present" | "absent";
 
 export type AwardType = "best_swimmer" | "most_improved";
 
+export type ParentLinkStatus = "none" | "pending" | "verified";
+
+export type EntryStatus = "pending_payment" | "confirmed";
+
 export type AppSettingsRow = {
   id: boolean;
   superadmin_email: string;
@@ -68,6 +72,8 @@ export type UserRow = {
 export type TeamRow = {
   id: string;
   name: string;
+  abbreviation: string | null;
+  club_logo_url: string | null;
   captain_id: string | null;
   approved_by_admin: boolean;
   created_at: string;
@@ -92,6 +98,24 @@ export type AthleteRow = {
   age: number;
   age_group: AgeGroup;
   gender: Gender;
+  height_cm: number | null;
+  weight_kg: number | null;
+  specialty_events: string[];
+  parent_link_status: ParentLinkStatus;
+  pending_parent_email: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+// public.volume_team_affiliations — historical team representation per
+// volume. Distinct from athletes.team_id (the swimmer's current team),
+// since past result ledgers must keep showing the team they actually swam
+// for at the time, even after they transfer.
+export type VolumeTeamAffiliationRow = {
+  id: string;
+  athlete_id: string;
+  meet_volume_id: string;
+  team_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -134,6 +158,8 @@ export type EntryRow = {
   athlete_id: string;
   seed_time_ms: number | null;
   is_nt: boolean;
+  status: EntryStatus;
+  age_group_at_entry: AgeGroup | null;
   created_at: string;
 };
 
@@ -214,6 +240,9 @@ export type AllTimeBestPerformanceRow = {
   team_name: string | null;
   gender: Gender;
   age_group: AgeGroup;
+  // Swimmer's age AT THIS RACE (derived from date_of_birth + the volume's
+  // meet_date) — never their current live age. See public.age_at_date().
+  age_at_swim: number;
   stroke: string;
   distance_m: number;
   event_name: string;
@@ -233,6 +262,9 @@ export type AllTimeBestPerformerRow = {
   team_name: string | null;
   gender: Gender;
   age_group: AgeGroup;
+  // Age at the specific race that produced best_time_ms, not the athlete's
+  // current age.
+  age_at_swim: number;
   stroke: string;
   distance_m: number;
   best_time_ms: number;
@@ -289,6 +321,7 @@ export type Database = {
       teams: Table<TeamRow>;
       team_memberships: Table<TeamMembershipRow>;
       athletes: Table<AthleteRow>;
+      volume_team_affiliations: Table<VolumeTeamAffiliationRow>;
       meet_volumes: Table<MeetVolumeRow>;
       sessions: Table<SessionRow>;
       events: Table<EventRow>;
@@ -314,6 +347,10 @@ export type Database = {
         Args: { event_id_param: string };
         Returns: number;
       };
+      claim_pending_parent_links: {
+        Args: Record<string, never>;
+        Returns: number;
+      };
     };
     Enums: {
       user_role: UserRole;
@@ -329,6 +366,8 @@ export type Database = {
       volume_status: VolumeStatus;
       attendance_status: AttendanceStatus;
       award_type: AwardType;
+      parent_link_status: ParentLinkStatus;
+      entry_status: EntryStatus;
     };
   };
 };

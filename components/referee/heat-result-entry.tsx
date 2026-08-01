@@ -21,6 +21,7 @@ import {
   scoreHeatResult,
 } from "@/lib/results";
 import { createClient } from "@/lib/supabase/client";
+import { parseTimeToMs } from "@/lib/format";
 import { ATTENDANCE_LABELS } from "@/lib/attendance";
 import type { AttendanceStatus, DqReason, ResultOutcome } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
@@ -62,19 +63,6 @@ const DQ_CODES = Object.keys(DQ_REASON_LABELS) as DqReason[];
 
 function emptyDraft(): LaneDraft {
   return { outcome: null, officialTimeMs: null, finishPlace: null, dqCode: null };
-}
-
-function parseTimeToMs(value: string): number | null {
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  // Supports "mm:ss.hh" or "ss.hh" / plain milliseconds integer.
-  if (/^\d+$/.test(trimmed)) return Number(trimmed);
-  const match = trimmed.match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
-  if (!match) return null;
-  const minutes = match[1] ? Number(match[1]) : 0;
-  const seconds = Number(match[2]);
-  if (Number.isNaN(minutes) || Number.isNaN(seconds)) return null;
-  return Math.round((minutes * 60 + seconds) * 1000);
 }
 
 export function HeatResultEntry({

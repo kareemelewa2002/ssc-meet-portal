@@ -170,6 +170,31 @@ begin
   end if;
 end $$;
 
+-- Under-15 athletes require a parent/guardian on file before they can enter
+-- any meet volume. 'none' = athlete is 15+, no linkage required.
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'parent_link_status') then
+    create type public.parent_link_status as enum (
+      'none',
+      'pending',
+      'verified'
+    );
+  end if;
+end $$;
+
+-- Meet event registration entries start unpaid; only an admin (payment
+-- webhook / manual confirmation) may move one to 'confirmed'.
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'entry_status') then
+    create type public.entry_status as enum (
+      'pending_payment',
+      'confirmed'
+    );
+  end if;
+end $$;
+
 -- =============================================================================
 -- 2. CORE TABLES
 -- =============================================================================
@@ -214,7 +239,11 @@ comment on column public.users.role is
 create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
+  abbreviation text,
+  club_logo_url text,
   captain_id uuid references public.users (id) on delete set null,
+  -- Teams exist permanently on the platform, independent of any meet volume.
+  -- Pending admin approval in /admin before they can be selected for entries.
   approved_by_admin boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -242,9 +271,19 @@ create table if not exists public.athletes (
   team_id uuid references public.teams (id) on delete set null,
   parent_id uuid references public.users (id) on delete set null,
   date_of_birth date not null,
-  age integer not null check (age >= 0 and age < 120),
+  -- Current age as of signup/last update — used to build entries.age_group_at_entry
+  -- and heat-seeding, but NEVER for historical performance display (see
+  -- public.age_at_date() and the All-Time views, which always derive age from
+  -- date_of_birth + the meet's actual date).
+  age integer not null check (age >= 13 and age < 120),
   age_group public.age_group not null,
   gender public.gender not null,
+  height_cm numeric(5, 1) check (height_cm is null or height_cm > 0),
+  weight_kg numeric(5, 1) check (weight_kg is null or weight_kg > 0),
+  specialty_events text[] not null default '{}',
+  -- Under-15 parent/guardian linkage (see public.parent_link_status).
+  parent_link_status public.parent_link_status not null default 'none',
+  pending_parent_email text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -252,6 +291,11 @@ create table if not exists public.athletes (
 comment on column public.athletes.parent_id is
   'Optional. Grants that parent RLS management rights over this athlete''s '
   'entries when age < 15 (see entries RLS policies).';
+
+comment on column public.athletes.pending_parent_email is
+  'Set when a swimmer under 15 names a parent/guardian email that has no '
+  'account yet. Cleared once that email signs up and parent_id is linked '
+  '(parent_link_status moves pending -> verified).';
 
 -- ---------------------------------------------------------------------------
 -- meet_volumes — the SSC series is a numbered sequence of meets ("SSC Vol.
@@ -268,6 +312,28 @@ create table if not exists public.meet_volumes (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- ---------------------------------------------------------------------------
+-- volume_team_affiliations — which team an athlete represented for a given
+-- SSC volume. An athlete's "current" team (athletes.team_id) can change
+-- between volumes, but historical result ledgers must keep showing the team
+-- they actually swam for at the time — this table is that permanent record,
+-- one row per athlete per volume (null team_id = competed unattached).
+-- ---------------------------------------------------------------------------
+create table if not exists public.volume_team_affiliations (
+  id uuid primary key default gen_random_uuid(),
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
+  team_id uuid references public.teams (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (athlete_id, meet_volume_id)
+);
+
+create index if not exists volume_team_affiliations_athlete_idx
+  on public.volume_team_affiliations (athlete_id);
+create index if not exists volume_team_affiliations_volume_idx
+  on public.volume_team_affiliations (meet_volume_id);
 
 -- ---------------------------------------------------------------------------
 -- sessions — the 3 sessions of a single meet volume.
@@ -311,6 +377,13 @@ create table if not exists public.entries (
   athlete_id uuid not null references public.athletes (id) on delete cascade,
   seed_time_ms integer,
   is_nt boolean not null default false,
+  status public.entry_status not null default 'pending_payment',
+  -- Snapshot of the athlete's age group AS OF this volume's meet_date,
+  -- computed by public.set_entry_age_group() below. This — not the athlete's
+  -- (mutable, current) age_group column — is what heat seeding and
+  -- leaderboard categorization use, so a swimmer aging into a new bracket
+  -- never rewrites which bracket their past entries competed in.
+  age_group_at_entry public.age_group,
   created_at timestamptz not null default now(),
   unique (event_id, athlete_id),
   constraint entries_seed_time_consistency check (
@@ -321,6 +394,7 @@ create table if not exists public.entries (
 
 create index if not exists entries_event_id_idx on public.entries (event_id);
 create index if not exists entries_athlete_id_idx on public.entries (athlete_id);
+create index if not exists entries_status_idx on public.entries (status);
 
 -- ---------------------------------------------------------------------------
 -- heats & heat_lanes — 6 lanes per heat.
@@ -467,6 +541,39 @@ create index if not exists awards_athlete_id_idx on public.awards (athlete_id);
 create index if not exists awards_volume_idx on public.awards (meet_volume_id);
 
 -- =============================================================================
+-- HISTORICAL AGE — performance displays (leaderboards, All-Time views, career
+-- ledgers, profile race cards) must show the swimmer's age AT THE TIME they
+-- swam, never their current live age. Both helpers derive strictly from the
+-- immutable date_of_birth, so results never silently drift as a swimmer ages.
+-- Defined here (ahead of the views below that use them, and ahead of
+-- section 3's other helper functions) purely so this file runs top-to-bottom
+-- without forward references.
+-- =============================================================================
+
+create or replace function public.age_at_date(p_dob date, p_on_date date)
+returns integer
+language sql
+immutable
+as $$
+  select floor(
+    (extract(year from age(p_on_date, p_dob)) * 12
+      + extract(month from age(p_on_date, p_dob))) / 12
+  )::integer;
+$$;
+
+create or replace function public.age_group_for_age(p_age integer)
+returns public.age_group
+language sql
+immutable
+as $$
+  select case
+    when p_age <= 14 then 'U13_14'::public.age_group
+    when p_age <= 17 then 'U17'::public.age_group
+    else 'Open'::public.age_group
+  end;
+$$;
+
+-- =============================================================================
 -- series_leaderboards — sums every volume's leaderboard rows per athlete, so
 -- the series standing accumulates automatically as new volumes publish
 -- results. Read-only: it's a derived view over public.leaderboards, and
@@ -495,9 +602,17 @@ select
   a.id as athlete_id,
   u.full_name as athlete_name,
   u.profile_image_url,
-  t.name as team_name,
+  -- Historical team representation for THIS volume, not the athlete's
+  -- current team — a swimmer who's since transferred still shows the club
+  -- they actually swam for when this race happened.
+  -- vta.id (row existence), not vta.team_id, distinguishes "no affiliation
+  -- recorded yet, fall back to current team" from "recorded as unattached
+  -- for this volume" — coalescing on team_id would wrongly resurrect the
+  -- athlete's current team for a swim they explicitly went unattached for.
+  case when vta.id is not null then hist_team.name else t.name end as team_name,
   a.gender,
-  a.age_group,
+  coalesce(en.age_group_at_entry, a.age_group) as age_group,
+  public.age_at_date(a.date_of_birth, mv.meet_date) as age_at_swim,
   e.stroke,
   e.distance_m,
   e.name as event_name,
@@ -508,7 +623,7 @@ select
   r.finish_place,
   r.created_at as swam_at,
   dense_rank() over (
-    partition by e.stroke, e.distance_m, a.age_group, a.gender
+    partition by e.stroke, e.distance_m, coalesce(en.age_group_at_entry, a.age_group), a.gender
     order by r.official_time_ms asc, r.created_at asc
   ) as rank
 from public.results r
@@ -520,6 +635,9 @@ join public.events e on e.id = en.event_id
 join public.sessions s on s.id = e.session_id
 join public.meet_volumes mv on mv.id = s.meet_volume_id
 left join public.teams t on t.id = a.team_id
+left join public.volume_team_affiliations vta
+  on vta.athlete_id = a.id and vta.meet_volume_id = mv.id
+left join public.teams hist_team on hist_team.id = vta.team_id
 where r.status = 'published'
   and r.result_outcome = 'valid'
   and r.official_time_ms is not null
@@ -527,41 +645,66 @@ where r.status = 'published'
 
 -- Best Performers: each athlete's single fastest time per event key, then
 -- ranked — one row per athlete per stroke/distance/age/gender.
+-- Personal bests are locked to the age bracket the swimmer actually competed
+-- in when they set them (age_group_at_entry): an athlete who PB'd in
+-- U13_14 and later, older, PB'd again in U17 gets one row per bracket,
+-- matching how real age-group records work. team_name/age_at_swim are
+-- correlated to the specific race that produced the best time (via
+-- `distinct on ... order by official_time_ms`), not just any race.
 create or replace view public.all_time_best_performers as
-with personal_bests as (
+with race_rows as (
   select
     a.id as athlete_id,
     u.full_name as athlete_name,
     u.profile_image_url,
-    t.name as team_name,
+    case when vta.id is not null then hist_team.name else t.name end as team_name,
     a.gender,
-    a.age_group,
+    coalesce(en.age_group_at_entry, a.age_group) as age_group,
+    public.age_at_date(a.date_of_birth, mv.meet_date) as age_at_swim,
     e.stroke,
     e.distance_m,
-    min(r.official_time_ms) as best_time_ms,
-    count(*)::integer as races_counted
+    r.official_time_ms,
+    r.created_at
   from public.results r
   join public.heat_lanes hl on hl.id = r.heat_lane_id
   join public.entries en on en.id = hl.entry_id
   join public.athletes a on a.id = en.athlete_id
   join public.users u on u.id = a.user_id
   join public.events e on e.id = en.event_id
+  join public.sessions s on s.id = e.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
   left join public.teams t on t.id = a.team_id
+  left join public.volume_team_affiliations vta
+    on vta.athlete_id = a.id and vta.meet_volume_id = mv.id
+  left join public.teams hist_team on hist_team.id = vta.team_id
   where r.status = 'published'
     and r.result_outcome = 'valid'
     and r.official_time_ms is not null
     and e.is_skins = false
-  group by
-    a.id, u.full_name, u.profile_image_url, t.name,
-    a.gender, a.age_group, e.stroke, e.distance_m
+),
+personal_bests as (
+  select distinct on (athlete_id, stroke, distance_m, age_group, gender)
+    athlete_id, athlete_name, profile_image_url, team_name, gender, age_group,
+    age_at_swim, stroke, distance_m, official_time_ms as best_time_ms
+  from race_rows
+  order by athlete_id, stroke, distance_m, age_group, gender, official_time_ms asc, created_at asc
+),
+counts as (
+  select athlete_id, stroke, distance_m, age_group, gender, count(*)::integer as races_counted
+  from race_rows
+  group by athlete_id, stroke, distance_m, age_group, gender
 )
 select
-  personal_bests.*,
+  pb.*,
+  c.races_counted,
   dense_rank() over (
-    partition by stroke, distance_m, age_group, gender
-    order by best_time_ms asc
+    partition by pb.stroke, pb.distance_m, pb.age_group, pb.gender
+    order by pb.best_time_ms asc
   ) as rank
-from personal_bests;
+from personal_bests pb
+join counts c
+  on c.athlete_id = pb.athlete_id and c.stroke = pb.stroke and c.distance_m = pb.distance_m
+  and c.age_group = pb.age_group and c.gender = pb.gender;
 
 -- =============================================================================
 -- 3. HELPER FUNCTIONS (SECURITY DEFINER — bypass RLS for role lookups so
@@ -819,7 +962,10 @@ begin
     return new;
   end if;
 
-  select a.id, a.age_group, s.meet_volume_id
+  -- coalesce is a defensive fallback for rows written before
+  -- age_group_at_entry existed; new entries always have it stamped by
+  -- set_entry_age_group_trigger.
+  select a.id, coalesce(e.age_group_at_entry, a.age_group), s.meet_volume_id
     into v_athlete_id, v_age_group, v_meet_volume_id
   from public.heat_lanes hl
   join public.entries e on e.id = hl.entry_id
@@ -959,6 +1105,59 @@ $$;
 create or replace trigger enforce_no_direct_skins_entry_trigger
   before insert on public.entries
   for each row execute function public.enforce_no_direct_skins_entry();
+
+-- Stamps age_group_at_entry from the athlete's date_of_birth as of THIS
+-- volume's meet_date — never the athlete's current (mutable) age_group —
+-- so heat seeding and leaderboard categorization stay historically correct
+-- even after the swimmer ages into a new bracket for a later volume.
+create or replace function public.set_entry_age_group()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_dob date;
+  v_meet_date date;
+begin
+  select a.date_of_birth, mv.meet_date
+    into v_dob, v_meet_date
+  from public.athletes a
+  join public.events ev on ev.id = new.event_id
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  where a.id = new.athlete_id;
+
+  if v_dob is not null and v_meet_date is not null then
+    new.age_group_at_entry := public.age_group_for_age(public.age_at_date(v_dob, v_meet_date));
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace trigger set_entry_age_group_trigger
+  before insert or update of event_id, athlete_id on public.entries
+  for each row execute function public.set_entry_age_group();
+
+-- Only an admin may confirm payment (mirrors enforce_result_publish below).
+create or replace function public.enforce_entry_status_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.status = 'confirmed' and not public.is_admin() then
+    raise exception 'Only an admin may confirm entry payment.';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace trigger enforce_entry_status_change_trigger
+  before insert or update on public.entries
+  for each row execute function public.enforce_entry_status_change();
 
 create or replace trigger skins_qualifications_set_updated_at
   before update on public.skins_qualifications
@@ -1173,6 +1372,44 @@ end;
 $$;
 
 -- =============================================================================
+-- 5c. PARENT LINKAGE — under-15 swimmers name a parent/guardian email at
+-- signup. If that email doesn't have an account yet, the athlete row is
+-- stamped pending_parent_email + parent_link_status='pending'. Call this
+-- once the named parent signs up: it can't be a plain RLS-gated table
+-- update, since parent_id isn't set yet (the very thing being claimed) — a
+-- normal RLS policy has nothing to key off. Instead this security-definer
+-- RPC matches purely on the CALLER'S OWN authenticated email, so a parent
+-- can only ever claim athletes that named them, not arbitrary others.
+-- =============================================================================
+
+create or replace function public.claim_pending_parent_links()
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_email text;
+  v_count integer;
+begin
+  select email into v_email from public.users where id = auth.uid();
+  if v_email is null then
+    return 0;
+  end if;
+
+  update public.athletes
+  set parent_id = auth.uid(),
+      parent_link_status = 'verified',
+      pending_parent_email = null
+  where pending_parent_email is not null
+    and lower(pending_parent_email) = lower(v_email);
+
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+-- =============================================================================
 -- 6. ROW LEVEL SECURITY
 -- =============================================================================
 
@@ -1181,6 +1418,7 @@ alter table public.users enable row level security;
 alter table public.teams enable row level security;
 alter table public.team_memberships enable row level security;
 alter table public.athletes enable row level security;
+alter table public.volume_team_affiliations enable row level security;
 alter table public.meet_volumes enable row level security;
 alter table public.sessions enable row level security;
 alter table public.events enable row level security;
@@ -1300,6 +1538,23 @@ create policy "athlete_update_own_row" on public.athletes
 drop policy if exists "user_create_own_athlete_row" on public.athletes;
 create policy "user_create_own_athlete_row" on public.athletes
   for insert with check (user_id = auth.uid());
+
+-- ---------------------------------------------------------------------------
+-- volume_team_affiliations — historical per-volume team representation.
+-- ---------------------------------------------------------------------------
+drop policy if exists "admins_full_access_volume_team_affiliations" on public.volume_team_affiliations;
+create policy "admins_full_access_volume_team_affiliations" on public.volume_team_affiliations
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "public_view_volume_team_affiliations" on public.volume_team_affiliations;
+create policy "public_view_volume_team_affiliations" on public.volume_team_affiliations
+  for select using (true);
+
+-- Athletes choose their own team representation when registering for a volume.
+drop policy if exists "athlete_manage_own_volume_team_affiliation" on public.volume_team_affiliations;
+create policy "athlete_manage_own_volume_team_affiliation" on public.volume_team_affiliations
+  for all using (public.owns_athlete(athlete_id))
+  with check (public.owns_athlete(athlete_id));
 
 -- ---------------------------------------------------------------------------
 -- meet_volumes, sessions & events — public schedule information.

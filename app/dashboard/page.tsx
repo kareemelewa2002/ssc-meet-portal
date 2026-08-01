@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
+import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -38,11 +40,22 @@ export default function DashboardPage() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">Athlete / Coach Dashboard</h1>
-        <p className="text-sm text-muted-foreground">
-          Skins slots are assigned from official meet results — not via event registration.
-        </p>
+      <header className="flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight">Athlete / Coach Dashboard</h1>
+          <p className="text-sm text-muted-foreground">
+            Skins slots are assigned from official meet results — not via event registration.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          nativeButton={false}
+          className="min-h-[48px] gap-2"
+          render={<Link href="/dashboard/teams" />}
+        >
+          <Users className="size-4" />
+          My Teams
+        </Button>
       </header>
 
       <Card>

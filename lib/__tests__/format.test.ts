@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatTimeMs, timeDropSeconds } from "@/lib/format";
+import { formatTimeMs, parseTimeToMs, timeDropSeconds } from "@/lib/format";
 
 describe("formatTimeMs", () => {
   it("formats sub-minute times without a minutes segment", () => {
@@ -13,6 +13,26 @@ describe("formatTimeMs", () => {
   it("returns an em dash for null/undefined", () => {
     expect(formatTimeMs(null)).toBe("—");
     expect(formatTimeMs(undefined)).toBe("—");
+  });
+});
+
+describe("parseTimeToMs", () => {
+  it("parses mm:ss.cc", () => {
+    expect(parseTimeToMs("1:05.43")).toBe(65430);
+  });
+
+  it("parses ss.cc", () => {
+    expect(parseTimeToMs("29.43")).toBe(29430);
+  });
+
+  it("parses a plain millisecond integer", () => {
+    expect(parseTimeToMs("29430")).toBe(29430);
+  });
+
+  it("returns null for empty or invalid input", () => {
+    expect(parseTimeToMs("")).toBeNull();
+    expect(parseTimeToMs("   ")).toBeNull();
+    expect(parseTimeToMs("not-a-time")).toBeNull();
   });
 });
 

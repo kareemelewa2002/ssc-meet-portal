@@ -7,6 +7,7 @@ import type {
   DqReason,
 } from "@/lib/supabase/types";
 import { firstOf } from "@/lib/live-heats";
+import { calculateAge } from "@/lib/age";
 
 export const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
   U13_14: "U13-14",
@@ -33,6 +34,8 @@ export interface PersonalBestView {
   distanceM: number;
   bestTimeMs: number;
   volumeName?: string;
+  // Age when this PB was set — never the athlete's current age.
+  ageAtSwim: number;
 }
 
 export interface CareerResultView {
@@ -48,6 +51,9 @@ export interface CareerResultView {
   outcome: ResultOutcome | null;
   dqCode: DqReason | null;
   swamAt: string;
+  // Age at this specific race (derived from date_of_birth + the volume's
+  // meet_date) — never the athlete's current live age.
+  ageAtSwim: number;
 }
 
 export interface SeriesStandingView {
@@ -115,8 +121,8 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 23800, volumeName: "SSC Vol. 2" },
-      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 26500, volumeName: "SSC Vol. 1" },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 23800, volumeName: "SSC Vol. 2" , ageAtSwim: 22 },
+      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 26500, volumeName: "SSC Vol. 1" , ageAtSwim: 21 },
     ],
     careerResults: [
       {
@@ -132,6 +138,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "valid",
         dqCode: null,
         swamAt: "2026-10-02T09:30:00Z",
+        ageAtSwim: 21,
       },
       {
         id: "cr-2",
@@ -146,6 +153,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "valid",
         dqCode: null,
         swamAt: "2026-10-02T14:10:00Z",
+        ageAtSwim: 21,
       },
     ],
   },
@@ -178,7 +186,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 26800, volumeName: "SSC Vol. 1" },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 26800, volumeName: "SSC Vol. 1" , ageAtSwim: 16 },
     ],
     careerResults: [
       {
@@ -194,6 +202,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "valid",
         dqCode: null,
         swamAt: "2026-10-02T11:00:00Z",
+        ageAtSwim: 16,
       },
     ],
   },
@@ -217,7 +226,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 27100, volumeName: "SSC Vol. 1" },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 27100, volumeName: "SSC Vol. 1" , ageAtSwim: 15 },
     ],
     careerResults: [
       {
@@ -233,6 +242,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "dq",
         dqCode: "false_start",
         swamAt: "2026-10-02T11:05:00Z",
+        ageAtSwim: 15,
       },
       {
         id: "cr-5",
@@ -247,6 +257,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "valid",
         dqCode: null,
         swamAt: "2026-10-02T11:20:00Z",
+        ageAtSwim: 15,
       },
     ],
   },
@@ -270,7 +281,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 24500, volumeName: "SSC Vol. 1" },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 24500, volumeName: "SSC Vol. 1" , ageAtSwim: 19 },
     ],
     careerResults: [
       {
@@ -286,6 +297,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "valid",
         dqCode: null,
         swamAt: "2026-10-02T09:31:00Z",
+        ageAtSwim: 19,
       },
     ],
   },
@@ -318,7 +330,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 31200, volumeName: "SSC Vol. 1" },
+      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 31200, volumeName: "SSC Vol. 1" , ageAtSwim: 13 },
     ],
     careerResults: [
       {
@@ -334,6 +346,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "valid",
         dqCode: null,
         swamAt: "2026-10-02T14:00:00Z",
+        ageAtSwim: 13,
       },
       {
         id: "cr-8",
@@ -348,6 +361,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "no_show",
         dqCode: null,
         swamAt: "2026-10-02T09:40:00Z",
+        ageAtSwim: 13,
       },
     ],
   },
@@ -371,7 +385,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 25000, volumeName: "SSC Vol. 1" },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 25000, volumeName: "SSC Vol. 1" , ageAtSwim: 24 },
     ],
     careerResults: [
       {
@@ -387,6 +401,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         outcome: "valid",
         dqCode: null,
         swamAt: "2026-10-02T09:32:00Z",
+        ageAtSwim: 24,
       },
     ],
   },
@@ -505,7 +520,7 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
     const supabase = createClient();
     const { data: athlete, error } = await supabase
       .from("athletes")
-      .select("id, age, age_group, gender, users ( full_name, profile_image_url ), teams ( name )")
+      .select("id, age, age_group, gender, date_of_birth, users ( full_name, profile_image_url ), teams ( name )")
       .eq("id", athleteId)
       .maybeSingle();
     if (error || !athlete) return demo ?? null;
@@ -515,6 +530,7 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
       age: number;
       age_group: AgeGroup;
       gender: Gender;
+      date_of_birth: string;
       users: { full_name: string; profile_image_url: string | null } | { full_name: string; profile_image_url: string | null }[] | null;
       teams: { name: string } | { name: string }[] | null;
     };
@@ -538,17 +554,18 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
     const { data: entryData } = await supabase
       .from("entries")
       .select(
-        "id, events ( name, stroke, distance_m, sessions ( meet_volumes ( volume_number, name ) ) ), heat_lanes ( results ( id, result_outcome, official_time_ms, finish_place, dq_code, status, created_at ) )",
+        "id, events ( name, stroke, distance_m, sessions ( meet_volumes ( volume_number, name, meet_date ) ) ), heat_lanes ( results ( id, result_outcome, official_time_ms, finish_place, dq_code, status, created_at ) )",
       )
       .eq("athlete_id", athleteId);
 
+    type CareerVolumeEmbed = { volume_number: number; name: string; meet_date: string | null };
     type CareerEventEmbed = {
       name: string;
       stroke: string;
       distance_m: number;
       sessions:
-        | { meet_volumes: { volume_number: number; name: string } | { volume_number: number; name: string }[] | null }
-        | { meet_volumes: { volume_number: number; name: string } | { volume_number: number; name: string }[] | null }[]
+        | { meet_volumes: CareerVolumeEmbed | CareerVolumeEmbed[] | null }
+        | { meet_volumes: CareerVolumeEmbed | CareerVolumeEmbed[] | null }[]
         | null;
     };
     type CareerResultEmbed = {
@@ -575,6 +592,12 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
       const session = firstOf(event.sessions);
       const volume = session ? firstOf(session.meet_volumes) : null;
 
+      // Age AT THIS VOLUME's meet_date — never the athlete's current age.
+      // Falls back to their present age if the volume has no date yet.
+      const ageAtSwim = volume?.meet_date
+        ? calculateAge(athleteRow.date_of_birth, volume.meet_date)
+        : athleteRow.age;
+
       for (const lane of row.heat_lanes ?? []) {
         const result = firstOf(lane.results);
         if (!result || result.status !== "published") continue;
@@ -592,6 +615,7 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
           outcome: result.result_outcome,
           dqCode: result.dq_code,
           swamAt: result.created_at,
+          ageAtSwim,
         });
 
         if (result.result_outcome === "valid" && result.official_time_ms != null) {
@@ -603,6 +627,7 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
               distanceM: event.distance_m,
               bestTimeMs: result.official_time_ms,
               volumeName: volume?.name,
+              ageAtSwim,
             });
           }
         }
