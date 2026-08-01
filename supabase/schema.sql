@@ -1989,6 +1989,48 @@ begin
 end $$;
 
 -- =============================================================================
+-- 6d. PRIVILEGES — PostgREST roles need table/function GRANTs *before* RLS.
+-- =============================================================================
+-- Symptom this section fixes: REST calls fail with
+--   "permission denied for table <name>"
+-- even when a permissive RLS policy exists. That error is a missing GRANT —
+-- Postgres rejects the role at the privilege check, so RLS never runs.
+--
+-- Supabase projects normally inherit default privileges for anon /
+-- authenticated / service_role, but those can be absent when tables were
+-- created outside the dashboard defaults, revoked, or applied from a plain
+-- Postgres dump. Re-granting here is idempotent and safe: RLS remains the
+-- real authorization gate (no policy ⇒ deny).
+-- =============================================================================
+
+grant usage on schema public to anon, authenticated, service_role;
+
+-- Tables + views (Postgres treats views as tables for GRANT purposes).
+grant select, insert, update, delete on all tables in schema public
+  to anon, authenticated, service_role;
+
+grant usage, select on all sequences in schema public
+  to anon, authenticated, service_role;
+
+-- RPCs used by the app (get_skins_qualifiers, sync_skins_invitations,
+-- claim_pending_parent_links, helper predicates, etc.).
+grant execute on all functions in schema public
+  to anon, authenticated, service_role;
+
+-- Objects created later by the current role in this schema.
+alter default privileges in schema public
+  grant select, insert, update, delete on tables
+  to anon, authenticated, service_role;
+
+alter default privileges in schema public
+  grant usage, select on sequences
+  to anon, authenticated, service_role;
+
+alter default privileges in schema public
+  grant execute on functions
+  to anon, authenticated, service_role;
+
+-- =============================================================================
 -- 7. SEED DATA — SSC Vol. 1 (Oct 2, 2026) + a placeholder Vol. 2
 -- =============================================================================
 
