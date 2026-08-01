@@ -25,6 +25,7 @@ import {
 } from "@/lib/athletes";
 import { formatTimeMs } from "@/lib/format";
 import { DQ_REASON_LABELS } from "@/lib/results";
+import { AppHeader } from "@/components/layout/app-header";
 
 export default function AthleteProfilePage() {
   const params = useParams<{ id: string }>();
@@ -60,12 +61,15 @@ export default function AthleteProfilePage() {
 
   if (!profile) {
     return (
-      <main className="mx-auto max-w-4xl space-y-4 p-6">
-        <Link href="/athletes" className="inline-flex min-h-[48px] items-center text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="mr-1 size-4" /> All athletes
-        </Link>
-        <p className="font-medium">Athlete not found.</p>
-      </main>
+      <div className="min-h-screen">
+        <AppHeader title="Athlete Profile" />
+        <main className="mx-auto max-w-4xl space-y-4 p-6">
+          <Link href="/athletes" className="inline-flex min-h-[48px] items-center text-sm text-muted-foreground hover:text-foreground">
+            <ArrowLeft className="mr-1 size-4" /> All athletes
+          </Link>
+          <p className="font-medium">Athlete not found.</p>
+        </main>
+      </div>
     );
   }
 
@@ -77,7 +81,9 @@ export default function AthleteProfilePage() {
     .toUpperCase();
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
+    <div className="min-h-screen">
+      <AppHeader title={profile.fullName} />
+      <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
       <Link
         href="/athletes"
         className="inline-flex min-h-[48px] items-center text-sm text-muted-foreground hover:text-foreground"
@@ -255,6 +261,7 @@ export default function AthleteProfilePage() {
           </div>
         </CardContent>
       </Card>
-    </main>
+      </main>
+    </div>
   );
 }

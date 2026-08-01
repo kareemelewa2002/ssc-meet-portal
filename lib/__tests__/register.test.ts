@@ -55,7 +55,7 @@ describe("buildAthleteProfileInsert", () => {
       new Date("2026-10-02"),
     );
     expect(payload.age).toBe(14);
-    expect(payload.age_group).toBe("U13_14");
+    expect(payload.age_group).toBe("U14");
     expect(payload.parent_link_status).toBe("pending");
     expect(payload.pending_parent_email).toBe("parent@example.com");
     expect(payload.approved_by_admin).toBe(false);

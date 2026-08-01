@@ -7,12 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkinsQualificationModal } from "@/components/dashboard/skins-qualification-modal";
+import { AppHeader } from "@/components/layout/app-header";
 import { useSkinsQualifiers } from "@/hooks/use-skins-qualifiers";
 import type { SkinsCandidate } from "@/lib/skins-qualification";
 import type { AgeGroup } from "@/lib/supabase/types";
 
 const CATEGORY_LABELS: Record<AgeGroup, string> = {
-  U13_14: "U13-14",
+  U14: "U14",
   U17: "U17",
   Open: "Open",
 };
@@ -39,7 +40,9 @@ export default function DashboardPage() {
   }, [candidates]);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
+    <div className="min-h-screen">
+      <AppHeader title="Dashboard" />
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
       <header className="flex items-start justify-between gap-3">
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Athlete / Coach Dashboard</h1>
@@ -137,6 +140,7 @@ export default function DashboardPage() {
           ))}
         </CardContent>
       </Card>
-    </main>
+      </main>
+    </div>
   );
 }

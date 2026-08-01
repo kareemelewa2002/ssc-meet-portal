@@ -58,10 +58,23 @@ do $$
 begin
   if not exists (select 1 from pg_type where typname = 'age_group') then
     create type public.age_group as enum (
-      'U13_14',
+      'U14',
       'U17',
       'Open'
     );
+  end if;
+end $$;
+
+-- Idempotent rename for databases created before this bracket was renamed
+-- from 'U13_14' to 'U14' (same ages, 13-14 — cosmetic rename only).
+do $$
+begin
+  if exists (
+    select 1 from pg_enum
+    where enumlabel = 'U13_14'
+      and enumtypid = (select oid from pg_type where typname = 'age_group')
+  ) then
+    alter type public.age_group rename value 'U13_14' to 'U14';
   end if;
 end $$;
 
@@ -533,7 +546,7 @@ create index if not exists skins_qualifications_event_idx
 -- ---------------------------------------------------------------------------
 -- leaderboards — dual tracking of Placement Points & Improvement Points.
 --
--- category = 'U13_14' | 'U17'  -> only athletes native to that age group.
+-- category = 'U14' | 'U17'     -> only athletes native to that age group.
 -- category = 'Open'           -> ALL athletes across every age group,
 --                                 ranked together (per Results Filter rule).
 -- Every athlete accumulates points into their native-age-group category AND
@@ -598,7 +611,7 @@ language sql
 immutable
 as $$
   select case
-    when p_age <= 14 then 'U13_14'::public.age_group
+    when p_age <= 14 then 'U14'::public.age_group
     when p_age <= 17 then 'U17'::public.age_group
     else 'Open'::public.age_group
   end;
@@ -678,7 +691,7 @@ where r.status = 'published'
 -- ranked — one row per athlete per stroke/distance/age/gender.
 -- Personal bests are locked to the age bracket the swimmer actually competed
 -- in when they set them (age_group_at_entry): an athlete who PB'd in
--- U13_14 and later, older, PB'd again in U17 gets one row per bracket,
+-- U14 and later, older, PB'd again in U17 gets one row per bracket,
 -- matching how real age-group records work. team_name/age_at_swim are
 -- correlated to the specific race that produced the best time (via
 -- `distinct on ... order by official_time_ms`), not just any race.
@@ -1935,6 +1948,43 @@ begin
     ) then
       alter publication supabase_realtime add table public.heat_lanes;
     end if;
+  end if;
+end $$;
+
+-- =============================================================================
+-- 6c. STORAGE — public "avatars" bucket for profile photos (Part 2).
+-- Guarded on the storage schema existing at all (a plain local Postgres used
+-- for schema testing, not a real Supabase project, has no storage schema).
+-- =============================================================================
+
+do $$
+begin
+  if exists (select 1 from information_schema.schemata where schema_name = 'storage') then
+    insert into storage.buckets (id, name, public)
+    values ('avatars', 'avatars', true)
+    on conflict (id) do update set public = true;
+
+    -- Public bucket: anyone may view an avatar (profile photos are already
+    -- shown publicly across the athlete directory, teams, and deck rosters).
+    drop policy if exists "avatars_public_read" on storage.objects;
+    create policy "avatars_public_read" on storage.objects
+      for select using (bucket_id = 'avatars');
+
+    -- A brand new account doesn't exist yet at the moment someone picks a
+    -- profile photo during registration (see app/register/page.tsx — the
+    -- photo uploads to a random `pending/` key before public.users/athletes
+    -- rows exist), and this project has no backend/service role to broker a
+    -- two-step "create account, then upload" flow. Profile photos are
+    -- public, low-sensitivity assets, so uploads are scoped to the bucket
+    -- itself rather than gated on auth.uid() ownership.
+    drop policy if exists "avatars_anyone_upload" on storage.objects;
+    create policy "avatars_anyone_upload" on storage.objects
+      for insert with check (bucket_id = 'avatars');
+
+    drop policy if exists "avatars_owner_update" on storage.objects;
+    create policy "avatars_owner_update" on storage.objects
+      for update using (bucket_id = 'avatars' and owner = auth.uid())
+      with check (bucket_id = 'avatars' and owner = auth.uid());
   end if;
 end $$;
 

@@ -55,8 +55,8 @@ describe("seedEvent", () => {
 
   it("schedules U13-14 heats entirely before U17/Open heats", () => {
     const entries: SeedableEntry[] = [
-      makeEntry({ entryId: "u1314-a", ageGroup: "U13_14", age: 13, seedTimeMs: 40000 }),
-      makeEntry({ entryId: "u1314-b", ageGroup: "U13_14", age: 14, seedTimeMs: 41000 }),
+      makeEntry({ entryId: "u1314-a", ageGroup: "U14", age: 13, seedTimeMs: 40000 }),
+      makeEntry({ entryId: "u1314-b", ageGroup: "U14", age: 14, seedTimeMs: 41000 }),
       makeEntry({ entryId: "u17-a", ageGroup: "U17", age: 17, seedTimeMs: 30000 }),
       makeEntry({ entryId: "open-a", ageGroup: "Open", age: 22, seedTimeMs: 28000 }),
     ];
@@ -158,7 +158,7 @@ describe("seedEvent", () => {
 
   it("marks every produced heat as draft status", () => {
     const entries: SeedableEntry[] = [
-      makeEntry({ entryId: "a", ageGroup: "U13_14", age: 13, isNt: true }),
+      makeEntry({ entryId: "a", ageGroup: "U14", age: 13, isNt: true }),
     ];
     const heats = seedEvent(entries);
     expect(heats.every((h) => h.status === "draft")).toBe(true);

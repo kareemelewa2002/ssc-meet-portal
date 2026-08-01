@@ -133,9 +133,9 @@ describe("populateSkinsHeatSheets", () => {
 
   it("ignores pending/declined athletes when building heat sheets", () => {
     const mixed: SkinsCandidate[] = [
-      candidate({ athleteId: "a1", sourceRank: 1, response: "accepted", category: "U13_14" }),
-      candidate({ athleteId: "a2", sourceRank: 2, response: "pending", category: "U13_14" }),
-      candidate({ athleteId: "a3", sourceRank: 3, response: "declined", category: "U13_14" }),
+      candidate({ athleteId: "a1", sourceRank: 1, response: "accepted", category: "U14" }),
+      candidate({ athleteId: "a2", sourceRank: 2, response: "pending", category: "U14" }),
+      candidate({ athleteId: "a3", sourceRank: 3, response: "declined", category: "U14" }),
     ];
 
     const heats = populateSkinsHeatSheets(mixed);

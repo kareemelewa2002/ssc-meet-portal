@@ -9,6 +9,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AppHeader } from "@/components/layout/app-header";
+import { SeedCredentialsHelper } from "@/components/login/seed-credentials-helper";
 import { createClient } from "@/lib/supabase/client";
 
 function isSafeRedirect(path: string | null): path is string {
@@ -45,7 +47,9 @@ function LoginPageInner() {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-sm flex-col justify-center gap-6 p-4">
+    <div className="min-h-screen">
+      <AppHeader title="Sign In" />
+      <main className="mx-auto flex w-full max-w-sm flex-col justify-center gap-6 p-4 py-10">
       <div className="flex flex-col items-center gap-2 text-center">
         <div className="flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
           <Waves className="size-6" />
@@ -108,10 +112,13 @@ function LoginPageInner() {
           Create an account
         </Link>
       </p>
-      <Link href="/" className="text-center text-sm text-muted-foreground hover:text-foreground">
-        ← Return to Home
-      </Link>
-    </main>
+
+      <SeedCredentialsHelper onUseCredentials={(loginEmail, loginPassword) => {
+        setEmail(loginEmail);
+        setPassword(loginPassword);
+      }} />
+      </main>
+    </div>
   );
 }
 

@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
+import { AppHeader } from "@/components/layout/app-header";
 import { DEMO_VOLUMES, formatMeetDate } from "@/lib/volumes";
 import type { MeetVolumeRow } from "@/lib/supabase/types";
 
@@ -97,6 +98,7 @@ export default function HomePage() {
         outdoorMode ? "bg-black text-yellow-300" : "bg-background text-foreground",
       )}
     >
+      <AppHeader title="Sprint Swimming Challenge" />
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-16 sm:p-8">
         <header className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">

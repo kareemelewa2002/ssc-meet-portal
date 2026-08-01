@@ -42,7 +42,7 @@ const DEMO_PENDING: PendingSwimmer[] = [
     email: "jordan.blake@ssc.dev",
     age: 14,
     dateOfBirth: "2012-03-18",
-    ageGroup: "U13_14",
+    ageGroup: "U14",
     gender: "male",
     heightCm: 168,
     weightKg: 54,

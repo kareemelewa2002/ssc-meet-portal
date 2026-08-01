@@ -10,7 +10,7 @@ import { firstOf } from "@/lib/live-heats";
 import { calculateAge } from "@/lib/age";
 
 export const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
-  U13_14: "U13-14",
+  U14: "U14",
   U17: "U17",
   Open: "Open",
 };
@@ -305,7 +305,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
     id: "ath-ava",
     fullName: "Ava Thompson",
     age: 13,
-    ageGroup: "U13_14",
+    ageGroup: "U14",
     gender: "female",
     teamName: "Riptide",
     profileImageUrl: null,
@@ -313,7 +313,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       {
         id: "aw-3",
         awardType: "best_swimmer",
-        category: "U13_14",
+        category: "U14",
         gender: "female",
         volumeNumber: 1,
         volumeName: "SSC Vol. 1",
@@ -321,7 +321,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
     ],
     seriesStandings: [
       {
-        category: "U13_14",
+        category: "U14",
         placementRank: 1,
         improvementRank: null,
         placementPoints: 36,

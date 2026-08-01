@@ -1,16 +1,19 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { CheckCircle2, Loader2, Waves } from "lucide-react";
+import { CheckCircle2, Loader2, Upload, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { AppHeader } from "@/components/layout/app-header";
 import { cn } from "@/lib/utils";
 import { calculateAge, requiresParentLink } from "@/lib/age";
+import { uploadAvatar } from "@/lib/storage";
 import {
   buildParentInviteLink,
   registerAccount,
@@ -48,6 +51,9 @@ function RegisterPageInner() {
   const [heightCm, setHeightCm] = useState("");
   const [weightKg, setWeightKg] = useState("");
   const [profileImageUrl, setProfileImageUrl] = useState("");
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [specialtyEvents, setSpecialtyEvents] = useState<string[]>([]);
   const [parentEmail, setParentEmail] = useState("");
 
@@ -64,6 +70,23 @@ function RegisterPageInner() {
     [dateOfBirth],
   );
   const needsParentEmail = age != null && requiresParentLink(age);
+
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPhotoError(null);
+    setUploadingPhoto(true);
+    try {
+      const res = await uploadAvatar(file);
+      if (!res.url) {
+        setPhotoError(res.error ?? "Upload failed. Please try another image.");
+        return;
+      }
+      setProfileImageUrl(res.url);
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const toggleStroke = (stroke: string) => {
     setSpecialtyEvents((prev) =>
@@ -120,7 +143,9 @@ function RegisterPageInner() {
 
   if (result) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-lg flex-col items-center justify-center gap-4 p-4 text-center">
+      <div className="min-h-screen">
+        <AppHeader title="Account Created" />
+        <main className="mx-auto flex w-full max-w-lg flex-col items-center justify-center gap-4 p-4 py-16 text-center">
         <CheckCircle2 className="size-12 text-emerald-500" />
         <h1 className="text-2xl font-bold">Account created!</h1>
         {result.pendingParent ? (
@@ -139,12 +164,15 @@ function RegisterPageInner() {
         <Button nativeButton={false} render={<Link href="/" />} className="min-h-[48px] w-full">
           Go to home
         </Button>
-      </main>
+        </main>
+      </div>
     );
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-lg flex-col gap-4 p-4 pb-16 sm:p-6">
+    <div className="min-h-screen">
+      <AppHeader title="Create Account" />
+      <main className="mx-auto flex w-full max-w-lg flex-col gap-4 p-4 pb-16 sm:p-6">
       <header className="flex items-center gap-3">
         <div className="flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
           <Waves className="size-6" />
@@ -253,15 +281,36 @@ function RegisterPageInner() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="photo">Profile photo URL</Label>
-              <Input
-                id="photo"
-                type="url"
-                placeholder="https://…"
-                className="min-h-[48px]"
-                value={profileImageUrl}
-                onChange={(e) => setProfileImageUrl(e.target.value)}
-              />
+              <Label htmlFor="photo">Profile photo</Label>
+              <div className="flex items-center gap-3">
+                <Avatar className="size-14 shrink-0">
+                  {profileImageUrl ? <AvatarImage src={profileImageUrl} alt="Profile preview" /> : null}
+                  <AvatarFallback>?</AvatarFallback>
+                </Avatar>
+                <input
+                  ref={fileInputRef}
+                  id="photo"
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => void handlePhotoSelect(e)}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-[48px] flex-1 gap-2"
+                  disabled={uploadingPhoto}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  {uploadingPhoto ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Upload className="size-4" />
+                  )}
+                  {profileImageUrl ? "Change photo" : "Upload photo"}
+                </Button>
+              </div>
+              {photoError && <p className="text-sm text-destructive">{photoError}</p>}
             </div>
 
             <div className="space-y-1.5">
@@ -304,7 +353,7 @@ function RegisterPageInner() {
       <Button
         type="button"
         className="min-h-[48px] w-full text-base font-semibold"
-        disabled={submitting || (role === "athlete" && age != null && !ageRejection.ok)}
+        disabled={submitting || uploadingPhoto || (role === "athlete" && age != null && !ageRejection.ok)}
         onClick={() => void handleSubmit()}
       >
         {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
@@ -314,7 +363,8 @@ function RegisterPageInner() {
       <p className={cn("text-center text-xs text-muted-foreground")}>
         Meet event registration happens separately after sign-in.
       </p>
-    </main>
+      </main>
+    </div>
   );
 }
 

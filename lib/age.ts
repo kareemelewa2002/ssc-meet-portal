@@ -31,9 +31,9 @@ export function calculateAge(dateOfBirth: string | Date, onDate: string | Date =
   return years;
 }
 
-/** U13-14 (13-14), U17 (15-17), Open (18+). */
+/** U14 (13-14), U17 (15-17), Open (18+). */
 export function ageGroupForAge(age: number): AgeGroup {
-  if (age <= 14) return "U13_14";
+  if (age <= 14) return "U14";
   if (age <= 17) return "U17";
   return "Open";
 }

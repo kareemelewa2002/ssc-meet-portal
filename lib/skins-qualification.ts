@@ -63,13 +63,13 @@ export function applySkinsRollover(
 
 /**
  * Groups candidates by age category and applies rollover independently
- * for U13-14, U17, and Open — each fills up to 6 active slots.
+ * for U14, U17, and Open — each fills up to 6 active slots.
  */
 export function buildSkinsQualifierBoards(
   candidates: SkinsCandidate[],
   slots: number = SKINS_SLOTS_PER_CATEGORY,
 ): CategoryQualifierBoard[] {
-  const categories: AgeGroup[] = ["U13_14", "U17", "Open"];
+  const categories: AgeGroup[] = ["U14", "U17", "Open"];
 
   return categories.map((category) => {
     const qualified = applySkinsRollover(
@@ -87,7 +87,7 @@ export function buildSkinsQualifierBoards(
 }
 
 function categoryToHeatGroup(category: AgeGroup): HeatGroup {
-  return category === "U13_14" ? "U13_14" : "U17_OPEN";
+  return category === "U14" ? "U13_14" : "U17_OPEN";
 }
 
 /**
@@ -97,7 +97,7 @@ function categoryToHeatGroup(category: AgeGroup): HeatGroup {
 export function populateSkinsHeatSheets(
   confirmed: SkinsCandidate[],
 ): DraftHeat[] {
-  const categories: AgeGroup[] = ["U13_14", "U17", "Open"];
+  const categories: AgeGroup[] = ["U14", "U17", "Open"];
   const heats: DraftHeat[] = [];
   let heatNumber = 0;
 

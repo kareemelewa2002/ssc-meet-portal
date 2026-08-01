@@ -23,7 +23,7 @@ import { createTeam, fetchTeamDetail, fetchTeams, type TeamDetail } from "@/lib/
 import { createClient } from "@/lib/supabase/client";
 import type { TeamRow } from "@/lib/supabase/types";
 
-const AGE_GROUP_LABELS: Record<string, string> = { U13_14: "U13-14", U17: "U17", Open: "Open" };
+const AGE_GROUP_LABELS: Record<string, string> = { U14: "U14", U17: "U17", Open: "Open" };
 
 export default function TeamsPage() {
   const [teams, setTeams] = useState<TeamRow[]>([]);

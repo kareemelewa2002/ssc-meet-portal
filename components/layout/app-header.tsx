@@ -1,46 +1,88 @@
 "use client";
 
 import Link from "next/link";
-import { ArrowLeft, LogIn } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, Home, LogIn, LogOut } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
 
 export interface AppHeaderProps {
-  /** Page title shown next to the return-home control. */
+  /** Page title shown centered in the bar. */
   title?: string;
-  /** Hide the role badge (e.g. on fully public pages with no relevant role). */
-  showRoleBadge?: boolean;
   className?: string;
 }
 
+function initialsFor(fullName: string): string {
+  return fullName
+    .split(" ")
+    .filter(Boolean)
+    .map((p) => p[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+}
+
 /**
- * Sticky top navigation used on every sub-page: a "← Return to Home" link
- * back to "/", the page title, and the signed-in user's active Role badge
- * (or a Sign in prompt when unauthenticated). Deck portals (/usher,
- * /referee, /admin) rely on this for the "Role: X" requirement; middleware
- * already redirects unauthenticated visitors away from those specific
- * routes, but the badge/sign-in prompt here covers public pages too.
+ * Standardized sticky top navigation rendered on every page: a "← Back"
+ * button (browser history), a "Home" button (always to "/"), the current
+ * page title, and a User Profile Menu (name, active Role badge, Sign Out).
+ * Guests can't actually reach any page this renders on except transiently —
+ * middleware.ts redirects unauthenticated visitors to /login for every
+ * route except /login and /register — but the "Sign in" fallback below
+ * still covers that brief/edge-case window gracefully.
  */
-export function AppHeader({ title, showRoleBadge = true, className }: AppHeaderProps) {
+export function AppHeader({ title, className }: AppHeaderProps) {
+  const router = useRouter();
   const { user, loading } = useCurrentUser();
+
+  const handleSignOut = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  };
 
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 flex min-h-[56px] items-center justify-between gap-3 border-b bg-background/95 px-3 py-2 backdrop-blur-sm sm:px-6",
+        "sticky top-0 z-30 flex min-h-[56px] items-center justify-between gap-2 border-b bg-background/95 px-2 py-2 backdrop-blur-sm sm:px-6",
         className,
       )}
     >
-      <Link
-        href="/"
-        className="flex min-h-[48px] items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="size-4 shrink-0" />
-        <span className="hidden sm:inline">Return to Home</span>
-        <span className="sm:hidden">Home</span>
-      </Link>
+      <div className="flex shrink-0 items-center gap-1">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="size-10 min-h-[44px] min-w-[44px]"
+          aria-label="Back"
+          onClick={() => router.back()}
+        >
+          <ArrowLeft className="size-5" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-10 min-h-[44px] min-w-[44px]"
+          aria-label="Home"
+          nativeButton={false}
+          render={<Link href="/" />}
+        >
+          <Home className="size-5" />
+        </Button>
+      </div>
 
       {title && (
         <h1 className="min-w-0 flex-1 truncate text-center text-sm font-semibold sm:text-base">
@@ -48,13 +90,42 @@ export function AppHeader({ title, showRoleBadge = true, className }: AppHeaderP
         </h1>
       )}
 
-      {showRoleBadge &&
-        (loading ? (
-          <div className="h-6 w-16 shrink-0" />
+      <div className="shrink-0">
+        {loading ? (
+          <div className="size-9 animate-pulse rounded-full bg-muted" />
         ) : user ? (
-          <Badge variant="secondary" className="shrink-0 gap-1 text-xs" title={user.fullName}>
-            Role: {ROLE_LABELS[user.role]}
-          </Badge>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={<Button variant="ghost" className="h-10 min-h-[44px] gap-2 px-2" />}
+            >
+              <Avatar className="size-8">
+                {user.profileImageUrl ? (
+                  <AvatarImage src={user.profileImageUrl} alt={user.fullName} />
+                ) : null}
+                <AvatarFallback className="text-xs">{initialsFor(user.fullName)}</AvatarFallback>
+              </Avatar>
+              <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">
+                {user.fullName}
+              </span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel className="truncate">{user.fullName}</DropdownMenuLabel>
+              <div className="px-1.5 pb-1.5">
+                <Badge variant="secondary" className="text-xs">
+                  {ROLE_LABELS[user.role]}
+                </Badge>
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                className="min-h-[40px]"
+                onClick={() => void handleSignOut()}
+              >
+                <LogOut className="size-4" />
+                Sign Out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         ) : (
           <Button
             size="sm"
@@ -66,7 +137,8 @@ export function AppHeader({ title, showRoleBadge = true, className }: AppHeaderP
             <LogIn className="size-3.5" />
             Sign in
           </Button>
-        ))}
+        )}
+      </div>
     </header>
   );
 }

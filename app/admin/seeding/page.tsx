@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { AppHeader } from "@/components/layout/app-header";
 import { formatTimeMs } from "@/lib/format";
 import { fetchActiveVolume, fetchSessionsForVolume } from "@/lib/volumes";
 import {
@@ -150,7 +151,9 @@ export default function AdminSeedingPage() {
   };
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
+    <div className="min-h-screen">
+      <AppHeader title="Seeding Dashboard" />
+      <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Seeding Dashboard</h1>
         <p className="text-sm text-muted-foreground">
@@ -275,7 +278,7 @@ export default function AdminSeedingPage() {
                     <div key={heat.heatId} className="space-y-2 rounded-lg border p-3">
                       <div className="flex items-center gap-2">
                         <Badge className="h-7 px-2.5">Heat {heat.heatNumber}</Badge>
-                        <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U13-14" : "U17 & Open"}</Badge>
+                        <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U14" : "U17 & Open"}</Badge>
                       </div>
                       {heat.lanes.map((lane) => (
                         <button
@@ -307,6 +310,7 @@ export default function AdminSeedingPage() {
           ))}
         </div>
       )}
-    </main>
+      </main>
+    </div>
   );
 }

@@ -36,9 +36,9 @@ describe("calculateAge", () => {
 });
 
 describe("ageGroupForAge", () => {
-  it("buckets 13-14 as U13_14", () => {
-    expect(ageGroupForAge(13)).toBe("U13_14");
-    expect(ageGroupForAge(14)).toBe("U13_14");
+  it("buckets 13-14 as U14", () => {
+    expect(ageGroupForAge(13)).toBe("U14");
+    expect(ageGroupForAge(14)).toBe("U14");
   });
 
   it("buckets 15-17 as U17", () => {

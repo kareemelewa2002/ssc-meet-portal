@@ -20,7 +20,7 @@ export type UserRole =
 
 export type PublicSignupRole = "athlete" | "parent" | "coach" | "referee";
 
-export type AgeGroup = "U13_14" | "U17" | "Open";
+export type AgeGroup = "U14" | "U17" | "Open";
 
 export type PublishStatus = "draft" | "published";
 

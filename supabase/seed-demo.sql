@@ -70,7 +70,7 @@ begin
     'authenticated',
     'authenticated',
     lower(p_email),
-    crypt('SscDemo!2026', gen_salt('bf')),
+    crypt('Password123!', gen_salt('bf')),
     now(),
     '{"provider":"email","providers":["email"]}'::jsonb,
     jsonb_strip_nulls(jsonb_build_object(
@@ -278,7 +278,7 @@ begin
 
   for rec in
     select * from (values
-      -- ---- U13_14 (12): parent-linked & verified, teams round-robin ----
+      -- ---- U14 (12): parent-linked & verified, teams round-robin ----
       ('athlete01@ssc-demo.test', 'Ethan Ng',        date '2012-03-02', 'male',   v_riptide, v_parent1),
       ('athlete02@ssc-demo.test', 'Marcus Webb',     date '2012-06-08', 'male',   v_marlins, v_parent2),
       ('athlete03@ssc-demo.test', 'Owen Park',       date '2013-01-15', 'male',   v_tidal,   v_parent3),
@@ -415,7 +415,7 @@ select
   case when (abs(hashtext(a.id::text || ev.id::text)) % 12) = 0 then null
     else
       (case ev.distance_m when 50 then 26000 when 100 then 58000 else 90000 end)
-      + (case a.age_group when 'U13_14' then 9000 when 'U17' then 4000 else 0 end)
+      + (case a.age_group when 'U14' then 9000 when 'U17' then 4000 else 0 end)
       + (abs(hashtext(a.id::text)) % 4000)
       + (abs(hashtext(a.id::text || ev.id::text)) % 2000)
   end,
@@ -437,7 +437,7 @@ on conflict (event_id, athlete_id) do update
       status = excluded.status;
 
 -- ---------------------------------------------------------------------------
--- 8. Heats & lanes — official 6-lane sequence [4, 3, 5, 2, 1, 6], U13_14
+-- 8. Heats & lanes — official 6-lane sequence [4, 3, 5, 2, 1, 6], U14
 -- seeded separately from the combined U17/Open field and always scheduled
 -- first (see lib/seeding.ts). Buckets larger than 6 chunk into multiple
 -- heats, with the fastest chunk scheduled last within its bucket — the
@@ -461,10 +461,10 @@ with ranked as (
     e.athlete_id,
     e.seed_time_ms,
     e.is_nt,
-    case when coalesce(e.age_group_at_entry, a.age_group) = 'U13_14' then 'U13_14' else 'U17_OPEN' end as heat_group,
+    case when coalesce(e.age_group_at_entry, a.age_group) = 'U14' then 'U13_14' else 'U17_OPEN' end as heat_group,
     row_number() over (
       partition by e.event_id,
-        case when coalesce(e.age_group_at_entry, a.age_group) = 'U13_14' then 'U13_14' else 'U17_OPEN' end
+        case when coalesce(e.age_group_at_entry, a.age_group) = 'U14' then 'U13_14' else 'U17_OPEN' end
       order by
         e.is_nt desc,
         case when e.is_nt then null else e.seed_time_ms end asc nulls last,
@@ -472,7 +472,7 @@ with ranked as (
     ) as rank_in_bucket,
     count(*) over (
       partition by e.event_id,
-        case when coalesce(e.age_group_at_entry, a.age_group) = 'U13_14' then 'U13_14' else 'U17_OPEN' end
+        case when coalesce(e.age_group_at_entry, a.age_group) = 'U14' then 'U13_14' else 'U17_OPEN' end
     ) as bucket_size
   from public.entries e
   join public.athletes a on a.id = e.athlete_id

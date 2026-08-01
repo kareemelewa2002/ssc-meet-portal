@@ -89,7 +89,7 @@ function seedBucket(
  *  4. The fastest heat of each sub-group is scheduled last.
  */
 export function seedEvent(entries: SeedableEntry[]): DraftHeat[] {
-  const u1314Entries = entries.filter((e) => e.ageGroup === "U13_14");
+  const u1314Entries = entries.filter((e) => e.ageGroup === "U14");
   const combinedEntries = entries.filter(
     (e) => e.ageGroup === "U17" || e.ageGroup === "Open",
   );

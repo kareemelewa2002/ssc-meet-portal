@@ -92,7 +92,7 @@ export default function AthletesDirectoryPage() {
         onChange={setAgeGroup}
         outdoorMode={false}
         options={[
-          { value: "U13_14", label: "U13-14" },
+          { value: "U14", label: "U14" },
           { value: "U17", label: "U17" },
           { value: "Open", label: "Open" },
         ]}

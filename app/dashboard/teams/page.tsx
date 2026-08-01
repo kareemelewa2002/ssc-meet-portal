@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, ArrowRightLeft, Users } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { AppHeader } from "@/components/layout/app-header";
 import { createClient } from "@/lib/supabase/client";
 import { didTransferTeams, fetchTeamHistoryForAthlete, type TeamHistoryEntry } from "@/lib/teams";
 
@@ -49,7 +50,9 @@ export default function DashboardTeamsPage() {
   const transferred = didTransferTeams(history);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
+    <div className="min-h-screen">
+      <AppHeader title="My Team History" />
+      <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
       <Link href="/dashboard" className="flex min-h-[48px] items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="size-4" />
         Dashboard
@@ -94,6 +97,7 @@ export default function DashboardTeamsPage() {
           </CardContent>
         </Card>
       )}
-    </main>
+      </main>
+    </div>
   );
 }

@@ -25,12 +25,12 @@ describe("mapEntryRowsToSeedableEntries", () => {
     const rows = [
       rawEntry({
         id: "e1",
-        age_group_at_entry: "U13_14",
+        age_group_at_entry: "U14",
         athletes: { age: 15, age_group: "U17" }, // athlete has since aged up
       }),
     ];
     const [seedable] = mapEntryRowsToSeedableEntries(rows);
-    expect(seedable.ageGroup).toBe("U13_14");
+    expect(seedable.ageGroup).toBe("U14");
   });
 
   it("falls back to the athlete's age_group for legacy rows with no snapshot", () => {
@@ -46,11 +46,11 @@ describe("mapEntryRowsToSeedableEntries", () => {
 
   it("normalizes array-shaped athlete embeds", () => {
     const rows = [
-      rawEntry({ id: "e1", age_group_at_entry: null, athletes: [{ age: 14, age_group: "U13_14" }] }),
+      rawEntry({ id: "e1", age_group_at_entry: null, athletes: [{ age: 14, age_group: "U14" }] }),
     ];
     const [seedable] = mapEntryRowsToSeedableEntries(rows);
     expect(seedable.age).toBe(14);
-    expect(seedable.ageGroup).toBe("U13_14");
+    expect(seedable.ageGroup).toBe("U14");
   });
 });
 
@@ -59,7 +59,7 @@ describe("prepareEventSeeding — fetch -> transform -> seedEvent -> write paylo
     const rows: RawSeedableEntryRow[] = [
       rawEntry({ id: "e1", age_group_at_entry: "Open", seed_time_ms: 24000 }),
       rawEntry({ id: "e2", age_group_at_entry: "Open", seed_time_ms: 25000 }),
-      rawEntry({ id: "e3", age_group_at_entry: "U13_14", is_nt: true, seed_time_ms: null, athletes: { age: 14, age_group: "U13_14" } }),
+      rawEntry({ id: "e3", age_group_at_entry: "U14", is_nt: true, seed_time_ms: null, athletes: { age: 14, age_group: "U14" } }),
     ];
 
     const prepared = prepareEventSeeding("event-123", rows);

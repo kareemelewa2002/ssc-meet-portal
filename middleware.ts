@@ -1,9 +1,11 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
-// Role-protected portals — unauthenticated visitors are bounced to
-// /login?redirectTo=<original path> rather than being served the page.
-const PROTECTED_PREFIXES = ["/usher", "/referee", "/admin", "/dashboard"];
+// Every route requires an authenticated session EXCEPT these — a brand new
+// visitor must be able to reach /login and /register with no session at
+// all, and nothing else. Guests are never served any other page, including
+// the homepage.
+const PUBLIC_PATHS = ["/login", "/register"];
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
@@ -32,13 +34,17 @@ export async function middleware(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname, search } = request.nextUrl;
-  const isProtected = PROTECTED_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  const isPublic = PUBLIC_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(`${path}/`),
   );
 
-  if (isProtected && !user) {
+  if (!isPublic && !user) {
     const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("redirectTo", `${pathname}${search}`);
+    // The homepage redirects to a bare /login (no redirectTo) — anything
+    // deeper still carries redirectTo so sign-in lands back where intended.
+    if (pathname !== "/") {
+      loginUrl.searchParams.set("redirectTo", `${pathname}${search}`);
+    }
     return NextResponse.redirect(loginUrl);
   }
 

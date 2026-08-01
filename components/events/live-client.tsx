@@ -26,7 +26,7 @@ import type { AgeGroup, Gender, MeetVolumeRow, SessionRow } from "@/lib/supabase
 import { AthleteLink } from "@/components/athletes/athlete-link";
 
 const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
-  U13_14: "U13-14",
+  U14: "U14",
   U17: "U17",
   Open: "Open",
 };
@@ -128,7 +128,7 @@ function HeatCard({ heat, outdoorMode }: { heat: LiveHeatView; outdoorMode: bool
     <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
       <CardHeader className="flex-row items-center gap-2 space-y-0 pb-2">
         <Badge className="h-7 px-2.5">Heat {heat.heatNumber}</Badge>
-        <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U13-14" : "U17 & Open"}</Badge>
+        <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U14" : "U17 & Open"}</Badge>
       </CardHeader>
       <CardContent className="space-y-2">
         {heat.lanes.map((lane) => (
@@ -342,7 +342,7 @@ export function LiveEventsClient({ volId }: { volId: string }) {
             onChange={setAgeFilter}
             outdoorMode={outdoorMode}
             options={[
-              { value: "U13_14", label: "U13-14" },
+              { value: "U14", label: "U14" },
               { value: "U17", label: "U17" },
               { value: "Open", label: "Open" },
             ]}

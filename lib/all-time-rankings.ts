@@ -258,7 +258,7 @@ export const DEMO_ALL_TIME_RACES: RacePerformance[] = [
     athleteName: "Ava Thompson",
     teamName: "Riptide",
     gender: "female",
-    ageGroup: "U13_14",
+    ageGroup: "U14",
     ageAtSwim: 13,
     stroke: "Butterfly",
     distanceM: 50,

@@ -82,7 +82,7 @@ describe("transformLiveEvents", () => {
                   athletes: {
                     id: "a3",
                     gender: "male",
-                    age_group: "U13_14",
+                    age_group: "U14",
                     users: { full_name: "Younger Swimmer" },
                     teams: null,
                   },
@@ -182,7 +182,7 @@ describe("transformLiveEvents", () => {
                   athletes: {
                     id: "a1",
                     gender: "male",
-                    age_group: "U13_14",
+                    age_group: "U14",
                     users: { full_name: "Only Swimmer" },
                     teams: null,
                   },
