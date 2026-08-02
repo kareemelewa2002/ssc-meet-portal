@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -109,12 +110,14 @@ export function AppHeader({ title, className }: AppHeaderProps) {
               </span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="truncate">{user.fullName}</DropdownMenuLabel>
-              <div className="px-1.5 pb-1.5">
-                <Badge variant="secondary" className="text-xs">
-                  {ROLE_LABELS[user.role]}
-                </Badge>
-              </div>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="truncate">{user.fullName}</DropdownMenuLabel>
+                <div className="px-1.5 pb-1.5">
+                  <Badge variant="secondary" className="text-xs">
+                    {ROLE_LABELS[user.role]}
+                  </Badge>
+                </div>
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"

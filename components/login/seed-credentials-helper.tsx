@@ -28,18 +28,19 @@ const CREDENTIAL_GROUPS: CredentialGroup[] = [
   {
     group: "Officials",
     entries: [
-      { label: "Chief Referee", email: "chief.referee@ssc-demo.test" },
-      { label: "Lane Referee 1", email: "referee1@ssc-demo.test", note: "…through referee8@ssc-demo.test" },
-      { label: "Usher (Call Room) 1", email: "usher1@ssc-demo.test", note: "…through usher3@ssc-demo.test" },
-      { label: "Entry Desk Helper 1", email: "entryhelper1@ssc-demo.test", note: "…through entryhelper4@ssc-demo.test" },
+      {
+        label: "Referee (attendance + time entry)",
+        email: "referee1@ssc-demo.test",
+        note: "…through referee8@ssc-demo.test",
+      },
     ],
   },
   {
     group: "Coaches & Family",
     entries: [
-      { label: "Coach / Captain — Riptide", email: "coach.riptide@ssc-demo.test" },
-      { label: "Coach / Captain — Blue Marlins", email: "coach.marlins@ssc-demo.test" },
-      { label: "Coach / Captain — Tidal Wave", email: "coach.tidalwave@ssc-demo.test" },
+      { label: "Coach — Riptide", email: "coach.riptide@ssc-demo.test" },
+      { label: "Coach — Blue Marlins", email: "coach.marlins@ssc-demo.test" },
+      { label: "Coach — Tidal Wave", email: "coach.tidalwave@ssc-demo.test" },
       { label: "Parent", email: "parent1@ssc-demo.test", note: "…through parent3@ssc-demo.test" },
     ],
   },

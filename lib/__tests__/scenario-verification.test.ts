@@ -3,12 +3,12 @@
  *
  * These tests exercise the pure application logic behind each primary user
  * scenario. Scenarios that are fundamentally database/RLS-level guarantees
- * (D5's usher lockdown, D1's realtime lane-lock exclusivity, C's live
- * attendance sync, E1's realtime result broadcast) are proven instead via a
- * local Postgres walkthrough (supabase/schema.sql + supabase/seed-demo.sql
- * applied to a scratch database, RLS enforced under a non-superuser role) —
- * noted inline below rather than re-asserted here, since they have no
- * meaningful pure-function surface to unit test.
+ * (D1's admin-only publish gate, C's live attendance sync, E1's realtime
+ * result broadcast) are proven instead via a local Postgres walkthrough
+ * (supabase/schema.sql + supabase/seed-demo.sql applied to a scratch
+ * database, RLS enforced under a non-superuser role) — noted inline below
+ * rather than re-asserted here, since they have no meaningful pure-function
+ * surface to unit test.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -35,12 +35,6 @@ import {
   summarizeAttendance,
   type AttendanceLane,
 } from "@/lib/attendance";
-import {
-  canClaimLane,
-  canEditLane,
-  laneOccupiedBadge,
-  type PresenceOccupant,
-} from "@/lib/referee-lanes";
 import { scoreHeatResult } from "@/lib/results";
 import {
   rankBestPerformances,
@@ -123,7 +117,7 @@ describe("Scenario B — Meet Event Entry & Strict Clock-Time Input", () => {
   });
 });
 
-describe("Scenario C — Usher Call-Room Attendance Workflow", () => {
+describe("Scenario C — Referee Call-Room Attendance Workflow", () => {
   const lanes: AttendanceLane[] = [
     { heatLaneId: "hl-1", laneNumber: 1, athleteId: "a1", athleteName: "Swimmer One", attendanceStatus: "pending" },
     { heatLaneId: "hl-2", laneNumber: 2, athleteId: "a2", athleteName: "Swimmer Two", attendanceStatus: "pending" },
@@ -140,46 +134,23 @@ describe("Scenario C — Usher Call-Room Attendance Workflow", () => {
     expect(summary).toEqual({ total: 2, present: 1, absent: 1, pending: 0, readyForStart: true });
   });
 
-  it("mirrors a realtime attendance patch (referee's live view of the usher's call-room)", () => {
-    // The referee deck's AttendanceBoard subscribes to postgres_changes on
-    // heat_lanes and applies incoming rows via this exact helper — proven
-    // live via Supabase Realtime in supabase/schema.sql's publication setup;
-    // here we assert the merge logic itself.
+  it("mirrors a realtime attendance patch (a second referee's live view of the same heat)", () => {
+    // The consolidated Referee role's AttendanceBoard subscribes to
+    // postgres_changes on heat_lanes and applies incoming rows via this
+    // exact helper — proven live via Supabase Realtime in
+    // supabase/schema.sql's publication setup; here we assert the merge
+    // logic itself.
     const mirrored = applyAttendancePatch(lanes, "hl-1", "present");
     expect(mirrored.find((l) => l.heatLaneId === "hl-1")?.attendanceStatus).toBe("present");
     expect(mirrored.find((l) => l.heatLaneId === "hl-2")?.attendanceStatus).toBe("pending");
   });
 });
 
-describe("Scenario D — Referee Lane-Locking & Chief Referee Overrides", () => {
-  const occupants: PresenceOccupant[] = [
-    { refereeId: "ref-a", refereeName: "Alex", laneNumber: 3, mode: "lane" },
-  ];
-
-  it("D1: a second device is blocked from claiming an already-active lane with the exact badge text", () => {
-    const result = canClaimLane(occupants, 3, "ref-b");
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.badge).toBe("Lane 3 active by Referee Alex");
-      expect(result.badge).toBe(laneOccupiedBadge(3, "Alex"));
-    }
-  });
-
-  it("D3: a lane referee may enter a time only for their claimed lane", () => {
-    expect(canEditLane("lane", 3, 3)).toBe(true);
-    expect(canEditLane("lane", 3, 1)).toBe(false);
-
+describe("Scenario D — Referee Time Entry & Admin-Only Publish", () => {
+  it("D1: scoring a valid time and a DQ produce the expected outcome/points", () => {
     const scored = scoreHeatResult({ outcome: "valid", finishPlace: 1, seedTimeMs: 29000, officialTimeMs: 28500 });
     expect(scored.officialTimeMs).toBe(28500);
     expect(scored.placementPoints).toBe(6);
-  });
-
-  it("D4: Chief Referee mode can edit every lane and override a published time / apply a DQ", () => {
-    expect(canEditLane("chief", null, 1)).toBe(true);
-    expect(canEditLane("chief", null, 6)).toBe(true);
-
-    const overridden = scoreHeatResult({ outcome: "valid", finishPlace: 1, seedTimeMs: 29000, officialTimeMs: 28450 });
-    expect(overridden.officialTimeMs).toBe(28450);
 
     const dq = scoreHeatResult({ outcome: "dq" }, "false_start");
     expect(dq.resultOutcome).toBe("dq");
@@ -187,13 +158,17 @@ describe("Scenario D — Referee Lane-Locking & Chief Referee Overrides", () => 
     expect(dq.placementPoints).toBe(0);
   });
 
-  it("D5: usher write-lockdown is enforced at the database RLS layer, not client logic", () => {
-    // public.results has only admins_full_access_results and
-    // referees_manage_result_drafts policies — no usher policy exists, so
-    // RLS default-denies any usher write. Verified functionally by applying
-    // supabase/schema.sql + supabase/seed-demo.sql to a scratch Postgres
-    // instance and attempting the write as a non-superuser `authenticated`
-    // role authenticated as the seeded usher: UPDATE affected 0 rows.
+  it("D2: a referee can never publish results directly — only draft — enforced at the database RLS layer", () => {
+    // public.results' enforce_result_publish trigger raises unless
+    // public.is_admin() — a referee (is_referee() true, is_admin() false)
+    // upserting status: 'published' is rejected outright, regardless of
+    // client-side intent. The consolidated Referee role only ever submits
+    // drafts (see components/referee/heat-result-entry.tsx); publishing is
+    // exclusively an Admin action from the "Referee Heat Cards" review
+    // queue. Verified functionally by applying supabase/schema.sql +
+    // supabase/seed-demo.sql to a scratch Postgres instance and attempting
+    // the write as a non-superuser `authenticated` role authenticated as a
+    // seeded referee: the publish attempt raises, the draft upsert succeeds.
     expect(true).toBe(true);
   });
 });

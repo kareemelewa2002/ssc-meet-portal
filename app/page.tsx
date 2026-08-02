@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
+import { MeetSummaryStats } from "@/components/home/meet-summary-stats";
 import { AppHeader } from "@/components/layout/app-header";
 import { DEMO_VOLUMES, formatMeetDate } from "@/lib/volumes";
 import type { MeetVolumeRow } from "@/lib/supabase/types";
@@ -126,6 +127,8 @@ export default function HomePage() {
           </div>
           <OutdoorModeToggle />
         </header>
+
+        <MeetSummaryStats outdoorMode={outdoorMode} />
 
         <section aria-label="Quick navigation" className="grid gap-3 sm:grid-cols-3">
           {navLinks.map((link) => {

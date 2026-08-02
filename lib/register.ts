@@ -148,53 +148,48 @@ export async function registerAccount(
     if (!parentCheck.ok) return { success: false, error: parentCheck.error };
   }
 
+  // This project requires email confirmation (mailer_autoconfirm = false),
+  // so signUp() never returns an active session for a brand-new user —
+  // auth.uid() is null for anything the client sends right after this
+  // resolves, until the confirmation email is clicked. A client-side
+  // `.from("athletes").insert(...)` here would ALWAYS fail RLS, not just
+  // occasionally. So the full athlete bio (and the profile photo URL) rides
+  // in signUp()'s options.data instead, and public.handle_new_auth_user()
+  // — a SECURITY DEFINER trigger that already creates the public.users row
+  // this same way — creates public.athletes from that metadata too. See the
+  // trigger's comment in supabase/schema.sql for the full explanation.
   const supabase = createClient();
   const { data, error } = await supabase.auth.signUp({
     email: account.email,
     password: account.password,
     options: {
-      data: { full_name: account.fullName, role: account.role, phone: account.phone },
+      data: {
+        full_name: account.fullName,
+        role: account.role,
+        phone: account.phone,
+        ...(account.role === "athlete" && athleteBio
+          ? {
+              date_of_birth: athleteBio.dateOfBirth,
+              gender: athleteBio.gender,
+              height_cm: athleteBio.heightCm ?? null,
+              weight_kg: athleteBio.weightKg ?? null,
+              specialty_events: athleteBio.specialtyEvents,
+              parent_email: athleteBio.parentEmail?.trim() || null,
+              profile_image_url: athleteBio.profileImageUrl || null,
+            }
+          : {}),
+      },
     },
   });
   if (error || !data.user) {
     return { success: false, error: error?.message ?? "Sign up failed." };
   }
 
-  if (account.role === "athlete" && athleteBio) {
-    const payload = buildAthleteProfileInsert(athleteBio);
-    let parentId: string | null = null;
-    let parentLinkStatus = payload.parent_link_status;
-
-    if (payload.pending_parent_email) {
-      const { data: parentUser } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", payload.pending_parent_email)
-        .maybeSingle();
-      if (parentUser) {
-        parentId = parentUser.id;
-        parentLinkStatus = "verified";
-      }
-    }
-
-    const { error: athleteError } = await supabase.from("athletes").insert({
-      user_id: data.user.id,
-      parent_id: parentId,
-      ...payload,
-      parent_link_status: parentLinkStatus,
-    });
-    if (athleteError) return { success: false, error: athleteError.message };
-
-    if (athleteBio.profileImageUrl) {
-      await supabase
-        .from("users")
-        .update({ profile_image_url: athleteBio.profileImageUrl })
-        .eq("id", data.user.id);
-    }
-  }
-
   if (account.role === "parent") {
     // Link to any athlete who named this email while it had no account yet.
+    // Best-effort: this also requires an active session (same confirmation
+    // gate as above) — claim_pending_parent_links() runs again on next
+    // sign-in for any parent whose confirmation was still pending here.
     await supabase.rpc("claim_pending_parent_links");
   }
 

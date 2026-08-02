@@ -16,6 +16,8 @@ import {
 } from "@/components/ui/table";
 import { createClient } from "@/lib/supabase/client";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
+import { getErrorMessage } from "@/lib/utils";
+import { useToast } from "@/hooks/use-toast";
 import type { AgeGroup, Gender, ParentLinkStatus } from "@/lib/supabase/types";
 import { firstOf } from "@/lib/live-heats";
 
@@ -79,6 +81,7 @@ function parentLinkLabel(swimmer: PendingSwimmer): string {
 }
 
 export function PendingSwimmerApprovals({ className }: { className?: string }) {
+  const toast = useToast();
   const [swimmers, setSwimmers] = useState<PendingSwimmer[]>(DEMO_PENDING);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +95,12 @@ export function PendingSwimmerApprovals({ className }: { className?: string }) {
       const { data, error: fetchError } = await supabase
         .from("athletes")
         .select(
-          "id, age, date_of_birth, age_group, gender, height_cm, weight_kg, parent_link_status, pending_parent_email, parent_id, users ( full_name, email ), teams ( name )",
+          // athletes has TWO foreign keys into users (user_id AND parent_id)
+          // — PostgREST can't guess which one a bare "users(...)" embed
+          // means and errors with PGRST201, which this component was
+          // silently swallowing into a demo-data fallback. Qualify with the
+          // FK name to get the athlete's own user row, not the parent's.
+          "id, age, date_of_birth, age_group, gender, height_cm, weight_kg, parent_link_status, pending_parent_email, parent_id, users!athletes_user_id_fkey ( full_name, email ), teams ( name )",
         )
         .eq("approved_by_admin", false)
         .order("created_at", { ascending: true });
@@ -155,6 +163,7 @@ export function PendingSwimmerApprovals({ className }: { className?: string }) {
   }, [loadPending]);
 
   const approve = async (athleteId: string) => {
+    const swimmer = swimmers.find((s) => s.id === athleteId);
     setBusyId(athleteId);
     setError(null);
     try {
@@ -163,14 +172,18 @@ export function PendingSwimmerApprovals({ className }: { className?: string }) {
         .from("athletes")
         .update({ approved_by_admin: true })
         .eq("id", athleteId);
+      // Only remove the row from view once the write genuinely succeeded —
+      // this used to unconditionally remove it in the catch block too "so
+      // admins can walk the UI offline," which meant a real RLS/network
+      // failure looked identical to success and silently left the swimmer
+      // unapproved with no visible error.
       if (updateError) throw updateError;
       setSwimmers((prev) => prev.filter((s) => s.id !== athleteId));
+      toast.success("Swimmer approved", swimmer ? `${swimmer.fullName} can now register for events.` : undefined);
     } catch (err) {
-      // Demo path: still remove locally so admins can walk the UI offline.
-      setSwimmers((prev) => prev.filter((s) => s.id !== athleteId));
-      if (err instanceof Error && !err.message.toLowerCase().includes("jwt")) {
-        setError(err.message);
-      }
+      const message = getErrorMessage(err, "Failed to approve swimmer.");
+      setError(message);
+      toast.error("Failed to approve swimmer", message);
     } finally {
       setBusyId(null);
     }
@@ -184,11 +197,11 @@ export function PendingSwimmerApprovals({ className }: { className?: string }) {
       const { error: deleteError } = await supabase.from("athletes").delete().eq("id", athleteId);
       if (deleteError) throw deleteError;
       setSwimmers((prev) => prev.filter((s) => s.id !== athleteId));
+      toast.success("Swimmer registration rejected");
     } catch (err) {
-      setSwimmers((prev) => prev.filter((s) => s.id !== athleteId));
-      if (err instanceof Error && !err.message.toLowerCase().includes("jwt")) {
-        setError(err.message);
-      }
+      const message = getErrorMessage(err, "Failed to reject swimmer.");
+      setError(message);
+      toast.error("Failed to reject swimmer", message);
     } finally {
       setBusyId(null);
     }

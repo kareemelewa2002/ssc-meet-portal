@@ -8,15 +8,13 @@
 // uses internally — that mismatch silently collapses every table's inferred
 // type to `never`.
 
-export type UserRole =
-  | "admin"
-  | "referee"
-  | "usher"
-  | "entry_helper"
-  | "coach"
-  | "team_captain"
-  | "athlete"
-  | "parent";
+// Scope-locked to exactly 5 roles. 'usher'/'entry_helper' folded into
+// 'referee' (a single consolidated deck-official role now handles both
+// call-room attendance and time entry); 'team_captain' folded into 'coach'
+// (teams.captain_id already tracks "who manages this club" independently
+// of the role column — a coach can be a team's captain without a distinct
+// role value for it).
+export type UserRole = "admin" | "referee" | "coach" | "athlete" | "parent";
 
 export type PublicSignupRole = "athlete" | "parent" | "coach" | "referee";
 

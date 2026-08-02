@@ -52,15 +52,78 @@ export function didTransferTeams(history: TeamHistoryEntry[]): boolean {
   return distinctTeams.size > 1;
 }
 
+/** The public club directory grid — always approved-only, regardless of
+ * viewer role. Pending clubs surface separately via fetchPendingTeams(),
+ * in the admin approval queue, never mixed into the public listing. */
 export async function fetchTeams(): Promise<TeamRow[]> {
   try {
     const supabase = createClient();
-    const { data, error } = await supabase.from("teams").select("*").order("name", { ascending: true });
+    const { data, error } = await supabase
+      .from("teams")
+      .select("*")
+      .eq("approved_by_admin", true)
+      .order("name", { ascending: true });
     if (error || !data) return [];
     return data;
   } catch {
     return [];
   }
+}
+
+/** Admin-only queue — RLS (admins_full_access_teams) already restricts this
+ * to admins; non-admin callers simply get an empty list back. */
+export async function fetchPendingTeams(): Promise<TeamRow[]> {
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("teams")
+      .select("*")
+      .eq("approved_by_admin", false)
+      .order("created_at", { ascending: true });
+    if (error || !data) return [];
+    return data;
+  } catch {
+    return [];
+  }
+}
+
+/** The club a signed-in Coach manages, via teams.captain_id = auth.uid() —
+ * independent of the role column (see supabase/schema.sql's user_role
+ * comment: a coach stays 'coach' even while also serving as a team's
+ * captain). Null if this coach doesn't captain any club yet. */
+export async function fetchMyManagedTeam(): Promise<TeamRow | null> {
+  try {
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data, error } = await supabase
+      .from("teams")
+      .select("*")
+      .eq("captain_id", user.id)
+      .maybeSingle();
+    if (error || !data) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function approveTeam(teamId: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+  const { error } = await supabase.from("teams").update({ approved_by_admin: true }).eq("id", teamId);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+/** "Reject" deletes the pending club outright — teams only exist once
+ * approved; there's no separate "rejected" state to persist. */
+export async function rejectTeam(teamId: string): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+  const { error } = await supabase.from("teams").delete().eq("id", teamId);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
 }
 
 export async function createTeam(input: TeamCreateInput): Promise<{ success: boolean; error?: string }> {
@@ -98,7 +161,9 @@ export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
       supabase.from("teams").select("captain_id, users ( full_name, email, phone )").eq("id", teamId).maybeSingle(),
       supabase
         .from("athletes")
-        .select("id, age_group, gender, users ( full_name )")
+        // Qualify the FK — athletes has two (user_id and parent_id), so a
+        // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
+        .select("id, age_group, gender, users!athletes_user_id_fkey ( full_name )")
         .eq("team_id", teamId),
     ]);
 

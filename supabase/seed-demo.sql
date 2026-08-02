@@ -92,6 +92,22 @@ begin
         email_confirmed_at = coalesce(email_confirmed_at, now()),
         updated_at = now()
     where id = v_id;
+
+    -- This roster's names have been rewritten more than once across
+    -- earlier iterations of this script (the same person landing on a
+    -- different demo email, or the exact wording of a role's display name
+    -- changing) — this INSERT branch never re-runs for an
+    -- already-existing user, so without this, public.users.full_name
+    -- would keep showing whichever name that email had the FIRST time it
+    -- was ever seeded, while every athletes-table column (age, gender,
+    -- age_group, ...) correctly refreshes via ON CONFLICT DO UPDATE below.
+    -- That split produced real, confusing bugs live: e.g. athlete01
+    -- displaying as "Chloe Bennett" (an old rev's name for that email)
+    -- with athlete01's CURRENT age/gender — a name from one person
+    -- grafted onto another's data. Keep this in sync every run too.
+    update public.users
+    set full_name = p_full_name, updated_at = now()
+    where id = v_id and full_name is distinct from p_full_name;
   end if;
 
   -- Email/password sign-in REQUIRES a matching auth.identities row.
@@ -169,11 +185,15 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- 2. Club teams
 -- ---------------------------------------------------------------------------
+-- The 4th club is intentionally left unapproved — a live fixture for the
+-- Admin "Pending Club Approvals" workflow (approve/reject), the same role
+-- the unapproved/pending-parent athletes play for swimmer approvals.
 insert into public.teams (name, abbreviation, club_logo_url, approved_by_admin)
 values
   ('Riptide Swim Club', 'RIPT', 'https://placehold.co/128x128?text=RIPT', true),
   ('Blue Marlins', 'BLUM', 'https://placehold.co/128x128?text=BLUM', true),
-  ('Tidal Wave', 'TIDE', 'https://placehold.co/128x128?text=TIDE', true)
+  ('Tidal Wave', 'TIDE', 'https://placehold.co/128x128?text=TIDE', true),
+  ('Sunburst Aquatics', 'SUNB', 'https://placehold.co/128x128?text=SUNB', false)
 on conflict (name) do update
   set abbreviation = excluded.abbreviation,
       club_logo_url = excluded.club_logo_url,
@@ -206,47 +226,94 @@ on conflict (meet_volume_id, session_number) do update
 -- (schedule-only — see the file header note); is_skins marks the single
 -- Session 3 elimination event (auto-assigned from results, never entered
 -- directly here or by athletes).
+--
+-- This program has been rewritten more than once across earlier iterations
+-- of this file (a prior generation had a plain 4-events-per-session
+-- pattern). Earlier `insert ... where not exists` guards only ever ADD
+-- missing-by-name rows — they never remove rows whose name dropped out of
+-- a later rewrite, so a project seeded across multiple script generations
+-- accumulates stale/orphaned events (e.g. an old session-1 "100m
+-- Backstroke" left behind after the schedule moved it to session 2).
+-- Sourcing both the insert AND a pruning delete from one canonical temp
+-- table makes this section fully authoritative: exactly these 19 rows,
+-- every run, regardless of what any earlier version of this script left
+-- behind. Existing rows keep their id (never dropped and reinserted) so
+-- anything that references a specific event's UUID externally (e.g. the
+-- Skins event id some deployments pin via NEXT_PUBLIC_SKINS_EVENT_ID)
+-- stays valid across re-runs.
+create temporary table _seed_canonical_events on commit drop as
+select * from (values
+  -- Session 1
+  (1, '100m Freestyle', 'Freestyle', 100, 1, false, false),
+  (1, '50m Back-to-Breast Switch (25m Back + 25m Breast)', 'Back-to-Breast Switch', 50, 2, false, false),
+  (1, '50m Butterfly', 'Butterfly', 50, 3, false, false),
+  (1, '4x50m Medley Relay (Mixed: 2 Boys + 2 Girls)', 'Medley Relay', 200, 4, true, false),
+  (1, '4x50m Freestyle Relay (Male)', 'Freestyle Relay', 200, 5, true, false),
+  (1, '4x50m Freestyle Relay (Female)', 'Freestyle Relay', 200, 6, true, false),
+  (1, '4x50m Freestyle Relay (Mixed)', 'Freestyle Relay', 200, 7, true, false),
+  -- Session 2
+  (2, '100m Individual Medley (IM)', 'Individual Medley', 100, 1, false, false),
+  (2, '50m Backstroke', 'Backstroke', 50, 2, false, false),
+  (2, '50m Fly-to-Back Switch (25m Fly + 25m Back)', 'Fly-to-Back Switch', 50, 3, false, false),
+  (2, '50m Breaststroke', 'Breaststroke', 50, 4, false, false),
+  (2, '4x50m Freestyle Relay (Mixed: 2 Boys + 2 Girls)', 'Freestyle Relay', 200, 5, true, false),
+  (2, '4x50m Medley Relay (Male)', 'Medley Relay', 200, 6, true, false),
+  (2, '4x50m Medley Relay (Female)', 'Medley Relay', 200, 7, true, false),
+  -- Session 3
+  (3, '50m Breast-to-Free Switch (25m Breast + 25m Free)', 'Breast-to-Free Switch', 50, 1, false, false),
+  (3, '4x100m Individual Medley Relay (Male)', 'Individual Medley Relay', 400, 2, true, false),
+  (3, '4x100m Individual Medley Relay (Female)', 'Individual Medley Relay', 400, 3, true, false),
+  (3, '50m Freestyle', 'Freestyle', 50, 4, false, false),
+  (3, '50m Freestyle Skins', 'Freestyle', 50, 5, false, true)
+) as v(session_number, name, stroke, distance_m, event_order, is_relay, is_skins);
+
+-- Sync columns for events that already exist (a name can persist across
+-- rewrites while its stroke/distance/order/flags changed).
+update public.events e
+set stroke = c.stroke,
+    distance_m = c.distance_m,
+    event_order = c.event_order,
+    is_relay = c.is_relay,
+    is_skins = c.is_skins
+from public.sessions s, _seed_canonical_events c
+where e.session_id = s.id
+  and s.session_number = c.session_number
+  and e.name = c.name
+  and s.meet_volume_id = (select id from public.meet_volumes where volume_number = 1)
+  and (e.stroke, e.distance_m, e.event_order, e.is_relay, e.is_skins)
+      is distinct from (c.stroke, c.distance_m, c.event_order, c.is_relay, c.is_skins);
+
 insert into public.events (session_id, name, stroke, distance_m, event_order, is_relay, is_skins)
-select s.id, v.name, v.stroke, v.distance_m, v.event_order, v.is_relay, v.is_skins
+select s.id, c.name, c.stroke, c.distance_m, c.event_order, c.is_relay, c.is_skins
 from public.sessions s
 join public.meet_volumes mv on mv.id = s.meet_volume_id and mv.volume_number = 1
-cross join lateral (
-  values
-    -- Session 1
-    (1, '100m Freestyle', 'Freestyle', 100, 1, false, false),
-    (1, '50m Back-to-Breast Switch (25m Back + 25m Breast)', 'Back-to-Breast Switch', 50, 2, false, false),
-    (1, '50m Butterfly', 'Butterfly', 50, 3, false, false),
-    (1, '4x50m Medley Relay (Mixed: 2 Boys + 2 Girls)', 'Medley Relay', 200, 4, true, false),
-    (1, '4x50m Freestyle Relay (Male)', 'Freestyle Relay', 200, 5, true, false),
-    (1, '4x50m Freestyle Relay (Female)', 'Freestyle Relay', 200, 6, true, false),
-    (1, '4x50m Freestyle Relay (Mixed)', 'Freestyle Relay', 200, 7, true, false),
-    -- Session 2
-    (2, '100m Individual Medley (IM)', 'Individual Medley', 100, 1, false, false),
-    (2, '50m Backstroke', 'Backstroke', 50, 2, false, false),
-    (2, '50m Fly-to-Back Switch (25m Fly + 25m Back)', 'Fly-to-Back Switch', 50, 3, false, false),
-    (2, '50m Breaststroke', 'Breaststroke', 50, 4, false, false),
-    (2, '4x50m Freestyle Relay (Mixed: 2 Boys + 2 Girls)', 'Freestyle Relay', 200, 5, true, false),
-    (2, '4x50m Medley Relay (Male)', 'Medley Relay', 200, 6, true, false),
-    (2, '4x50m Medley Relay (Female)', 'Medley Relay', 200, 7, true, false),
-    -- Session 3
-    (3, '50m Breast-to-Free Switch (25m Breast + 25m Free)', 'Breast-to-Free Switch', 50, 1, false, false),
-    (3, '4x100m Individual Medley Relay (Male)', 'Individual Medley Relay', 400, 2, true, false),
-    (3, '4x100m Individual Medley Relay (Female)', 'Individual Medley Relay', 400, 3, true, false),
-    (3, '50m Freestyle', 'Freestyle', 50, 4, false, false),
-    (3, '50m Freestyle Skins', 'Freestyle', 50, 5, false, true)
-) as v(session_number, name, stroke, distance_m, event_order, is_relay, is_skins)
-where s.session_number = v.session_number
+join _seed_canonical_events c on c.session_number = s.session_number
+where not exists (
+  select 1 from public.events e where e.session_id = s.id and e.name = c.name
+);
+
+-- Prune anything left behind by an earlier generation of this script that
+-- no longer matches the canonical program for its session.
+delete from public.events e
+using public.sessions s
+where e.session_id = s.id
+  and s.meet_volume_id = (select id from public.meet_volumes where volume_number = 1)
   and not exists (
-    select 1 from public.events e where e.session_id = s.id and e.name = v.name
+    select 1 from _seed_canonical_events c
+    where c.session_number = s.session_number and c.name = e.name
   );
 
 -- ---------------------------------------------------------------------------
 -- 4. Officials & support staff.
 -- ---------------------------------------------------------------------------
+-- SCOPE LOCK: exactly 5 approved roles (admin/referee/coach/athlete/parent).
+-- The consolidated Referee role covers what used to be split across Chief
+-- Referee, Lane Referee, Usher (call-room), and Entry Desk Helper — so
+-- those old seed identities are gone, folded into a flat pool of referees.
 do $$
 begin
-  -- 1 Chief Referee + 8 Lane Referees.
-  perform public._seed_get_or_create_user('chief.referee@ssc-demo.test', 'Priya Chandra', 'referee', '+1-555-0101');
+  -- 8 consolidated Referees — each handles call-room attendance AND heat
+  -- time entry for whichever heat they open; no lane-claim or chief tier.
   perform public._seed_get_or_create_user('referee1@ssc-demo.test', 'Marcus Lee', 'referee', '+1-555-0102');
   perform public._seed_get_or_create_user('referee2@ssc-demo.test', 'Sara Kildow', 'referee', '+1-555-0103');
   perform public._seed_get_or_create_user('referee3@ssc-demo.test', 'David Okoro', 'referee', '+1-555-0110');
@@ -256,21 +323,9 @@ begin
   perform public._seed_get_or_create_user('referee7@ssc-demo.test', 'Connor Hayes', 'referee', '+1-555-0114');
   perform public._seed_get_or_create_user('referee8@ssc-demo.test', 'Yuki Tanaka', 'referee', '+1-555-0115');
 
-  -- 3 Ushers / Heat Organizers (Call Room). 'usher' is not a self-service
-  -- public_signup_role, so it lands as 'athlete' first; fixed up below.
-  perform public._seed_get_or_create_user('usher1@ssc-demo.test', 'Devon Okafor', 'usher', '+1-555-0104');
-  perform public._seed_get_or_create_user('usher2@ssc-demo.test', 'Lena Ford', 'usher', '+1-555-0105');
-  perform public._seed_get_or_create_user('usher3@ssc-demo.test', 'Mateo Rossi', 'usher', '+1-555-0116');
-
-  -- 4 Entry Desk Helpers. 'entry_helper' is likewise not a self-service role.
-  perform public._seed_get_or_create_user('entryhelper1@ssc-demo.test', 'Nora Whitfield', 'entry_helper', '+1-555-0120');
-  perform public._seed_get_or_create_user('entryhelper2@ssc-demo.test', 'Jamal Carter', 'entry_helper', '+1-555-0121');
-  perform public._seed_get_or_create_user('entryhelper3@ssc-demo.test', 'Beatriz Souza', 'entry_helper', '+1-555-0122');
-  perform public._seed_get_or_create_user('entryhelper4@ssc-demo.test', 'Simon Blake', 'entry_helper', '+1-555-0123');
-
-  -- Coaches / Team Captains — one per club. 'coach' is a valid
-  -- public_signup_role; promoted to 'team_captain' once assigned as a
-  -- team's captain_id below.
+  -- Coaches — one per club. Also each club's captain_id (assigned below),
+  -- but that never changes their role away from 'coach' — teams.captain_id
+  -- already tracks "who manages this club" independently of role.
   perform public._seed_get_or_create_user('coach.riptide@ssc-demo.test', 'Coach Riley Adams', 'coach', '+1-555-0106');
   perform public._seed_get_or_create_user('coach.marlins@ssc-demo.test', 'Coach Jordan Kim', 'coach', '+1-555-0130');
   perform public._seed_get_or_create_user('coach.tidalwave@ssc-demo.test', 'Coach Alicia Moreno', 'coach', '+1-555-0131');
@@ -280,19 +335,6 @@ begin
   perform public._seed_get_or_create_user('parent2@ssc-demo.test', 'Marcus Webb Sr.', 'parent', '+1-555-0132');
   perform public._seed_get_or_create_user('parent3@ssc-demo.test', 'Sophia Ahmed', 'parent', '+1-555-0133');
 end $$;
-
-update public.users set role = 'usher'
-where email in ('usher1@ssc-demo.test', 'usher2@ssc-demo.test', 'usher3@ssc-demo.test') and role <> 'usher';
-
-update public.users set role = 'entry_helper'
-where email in (
-  'entryhelper1@ssc-demo.test', 'entryhelper2@ssc-demo.test',
-  'entryhelper3@ssc-demo.test', 'entryhelper4@ssc-demo.test'
-) and role <> 'entry_helper';
-
-update public.users set role = 'team_captain'
-where email in ('coach.riptide@ssc-demo.test', 'coach.marlins@ssc-demo.test', 'coach.tidalwave@ssc-demo.test')
-  and role <> 'team_captain';
 
 update public.teams set captain_id = (select id from auth.users where email = 'coach.riptide@ssc-demo.test')
 where name = 'Riptide Swim Club';
@@ -451,6 +493,11 @@ on conflict (athlete_id, meet_volume_id) do update set team_id = excluded.team_i
 -- same values. Roughly 1 in 12 entries is NT. The 2 gate-test fixtures
 -- (unapproved / pending-parent) are excluded — they exist to prove the
 -- gates block entry, not to hold entries themselves.
+--
+-- athlete02's entries stay 'pending_payment' (everyone else's are
+-- pre-'confirmed') — a live fixture for the Admin "Cash Payments on Deck"
+-- verification tab, the same role the unapproved/pending-parent swimmers
+-- and the unapproved club play for their respective approval workflows.
 -- ---------------------------------------------------------------------------
 insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
 select
@@ -464,7 +511,7 @@ select
       + (abs(hashtext(a.id::text || ev.id::text)) % 2000)
   end,
   (abs(hashtext(a.id::text || ev.id::text)) % 12) = 0,
-  'confirmed'
+  case when u.email = 'athlete02@ssc-demo.test' then 'pending_payment' else 'confirmed' end::public.entry_status
 from public.events ev
 join public.sessions s on s.id = ev.session_id
 join public.meet_volumes mv on mv.id = s.meet_volume_id and mv.volume_number = 1

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, Loader2 } from "lucide-react";
+import { ArrowLeft, Banknote, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,9 @@ import { fetchVolumeByNumber } from "@/lib/volumes";
 import { fetchTeams } from "@/lib/teams";
 import { canSubmitEntries } from "@/lib/register";
 import {
+  RACE_PRICE_EGP,
+  computeRegistrationTotalEgp,
+  fetchAthleteEnteredEventIds,
   fetchRegisterableEvents,
   submitEventRegistration,
   type EventSelection,
@@ -40,6 +43,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   const [athlete, setAthlete] = useState<CurrentAthlete | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [enteredEventIds, setEnteredEventIds] = useState<Set<string>>(new Set());
 
   const [drafts, setDrafts] = useState<Record<string, EventDraft>>({});
   const [teamId, setTeamId] = useState<string | null>(null);
@@ -54,8 +58,10 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
       if (cancelled) return;
       setVolume(vol);
 
+      let loadedEvents: RegisterableEvent[] = [];
       if (vol) {
         const [ev, tm] = await Promise.all([fetchRegisterableEvents(vol.id), fetchTeams()]);
+        loadedEvents = ev;
         if (!cancelled) {
           setEvents(ev);
           setTeams(tm.filter((t) => t.approved_by_admin));
@@ -87,6 +93,14 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
             approvedByAdmin: athleteRow.approved_by_admin,
           });
         }
+        // Lock out events already entered — otherwise re-selecting one and
+        // submitting hits entries' unique(event_id, athlete_id) constraint
+        // as a raw, unfriendly 409.
+        const entered = await fetchAthleteEnteredEventIds(
+          athleteRow.id,
+          loadedEvents.map((e) => e.id),
+        );
+        if (!cancelled) setEnteredEventIds(entered);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -118,6 +132,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   }, [events]);
 
   const toggleEvent = (eventId: string) => {
+    if (enteredEventIds.has(eventId)) return;
     setDrafts((prev) => {
       const existing = prev[eventId];
       return {
@@ -188,10 +203,14 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
       <main className="mx-auto flex min-h-screen w-full max-w-lg flex-col items-center justify-center gap-4 p-4 text-center">
         <CheckCircle2 className="size-12 text-emerald-500" />
         <h1 className="text-2xl font-bold">Entries submitted!</h1>
-        <Badge variant="outline" className="text-sm">Status: Pending Payment</Badge>
+        <Badge variant="outline" className="gap-1.5 text-sm">
+          <Banknote className="size-3.5" />
+          Cash Payment Pending on Deck
+        </Badge>
         <p className="text-sm text-muted-foreground">
-          Your {selectedCount} {selectedCount === 1 ? "entry" : "entries"} for {volume?.name} will be
-          confirmed once payment processing completes.
+          Your {selectedCount} {selectedCount === 1 ? "entry" : "entries"} for {volume?.name} are booked.
+          Bring <strong>{computeRegistrationTotalEgp(selectedCount)} EGP in cash</strong> to the meet desk on
+          deck — an admin will confirm payment there.
         </p>
         <Button className="min-h-[48px] w-full" nativeButton={false} render={<Link href="/" />}>
           Back to home
@@ -276,23 +295,30 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
                 <CardContent className="space-y-2">
                   {sessionEvents.map((ev) => {
                     const draft = drafts[ev.id];
+                    const alreadyEntered = enteredEventIds.has(ev.id);
                     return (
                       <div key={ev.id} className="space-y-2 rounded-lg border p-3">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-medium">
                             {ev.distanceM}m {ev.stroke}
                           </span>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={draft?.selected ? "default" : "outline"}
-                            className="min-h-[48px] px-4"
-                            onClick={() => toggleEvent(ev.id)}
-                          >
-                            {draft?.selected ? "Selected" : "Select"}
-                          </Button>
+                          {alreadyEntered ? (
+                            <Badge variant="outline" className="h-9 px-4">
+                              Already Entered
+                            </Badge>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={draft?.selected ? "default" : "outline"}
+                              className="min-h-[48px] px-4"
+                              onClick={() => toggleEvent(ev.id)}
+                            >
+                              {draft?.selected ? "Selected" : "Select"}
+                            </Button>
+                          )}
                         </div>
-                        {draft?.selected && (
+                        {!alreadyEntered && draft?.selected && (
                           <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
                             <ClockTimeInput
                               id={`seed-${ev.id}`}
@@ -321,6 +347,25 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
             ))
           )}
 
+          {selectedCount > 0 && (
+            <Card className="border-dashed">
+              <CardContent className="space-y-2 py-4">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">
+                    {selectedCount} {selectedCount === 1 ? "race" : "races"} × {RACE_PRICE_EGP} EGP
+                  </span>
+                  <span className="text-lg font-bold tabular-nums">
+                    {computeRegistrationTotalEgp(selectedCount)} EGP
+                  </span>
+                </div>
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Banknote className="size-3.5 shrink-0" />
+                  Pay cash on deck at the meet desk — no online payment required.
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           <Button
             type="button"
             className="min-h-[48px] w-full text-base font-semibold"
@@ -330,6 +375,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
             {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
             Submit {selectedCount > 0 ? `${selectedCount} ` : ""}
             {selectedCount === 1 ? "Entry" : "Entries"}
+            {selectedCount > 0 ? ` — ${computeRegistrationTotalEgp(selectedCount)} EGP Cash on Deck` : ""}
           </Button>
         </>
       )}

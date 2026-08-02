@@ -1,37 +1,40 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Check, Loader2, UserRoundX, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { cn, getErrorMessage } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import {
   applyAttendancePatch,
-  ATTENDANCE_LABELS,
+  setLaneAttendance,
   summarizeAttendance,
   type AttendanceLane,
 } from "@/lib/attendance";
 import type { AttendanceStatus } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 
-const DEMO_LANES: AttendanceLane[] = [
-  { heatLaneId: "hl-1", laneNumber: 1, athleteId: "ath-mia", athleteName: "Mia Reyes", teamName: "Blue Marlins", attendanceStatus: "pending" },
-  { heatLaneId: "hl-2", laneNumber: 2, athleteId: "ath-noah", athleteName: "Noah Alvi", teamName: "Riptide", attendanceStatus: "present" },
-  { heatLaneId: "hl-3", laneNumber: 3, athleteId: "ath-zara", athleteName: "Zara Khan", teamName: "Blue Marlins", attendanceStatus: "pending" },
-  { heatLaneId: "hl-4", laneNumber: 4, athleteId: "ath-leo", athleteName: "Leo Fontaine", teamName: "Tidal Wave", attendanceStatus: "present" },
-  { heatLaneId: "hl-5", laneNumber: 5, athleteId: "ath-ava", athleteName: "Ava Thompson", teamName: "Riptide", attendanceStatus: "absent" },
-  { heatLaneId: "hl-6", laneNumber: 6, athleteId: "ath-kian", athleteName: "Kian Osei", teamName: "Tidal Wave", attendanceStatus: "pending" },
-];
-
 export function AttendanceBoard({
+  lanes: initialLanes,
   outdoorMode = false,
   className,
 }: {
+  lanes: AttendanceLane[];
   outdoorMode?: boolean;
   className?: string;
 }) {
-  const [lanes, setLanes] = useState<AttendanceLane[]>(DEMO_LANES);
+  const [lanes, setLanes] = useState<AttendanceLane[]>(initialLanes);
+  const [savingLaneId, setSavingLaneId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const summary = summarizeAttendance(lanes);
+
+  // The parent owns which heat is selected and re-fetches lanes on switch —
+  // resync local state whenever it hands us a new lane list.
+  useEffect(() => {
+    setLanes(initialLanes);
+  }, [initialLanes]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -53,6 +56,30 @@ export function AttendanceBoard({
     };
   }, []);
 
+  const markAttendance = async (heatLaneId: string, status: Exclude<AttendanceStatus, "pending">) => {
+    setError(null);
+
+    // A second tap on the active status clears it back to pending — the
+    // same toggle-off behavior the retired usher call-room offered.
+    const current = lanes.find((l) => l.heatLaneId === heatLaneId)?.attendanceStatus;
+    const nextStatus: AttendanceStatus = current === status ? "pending" : status;
+
+    setLanes((prev) => setLaneAttendance(prev, heatLaneId, status));
+    setSavingLaneId(heatLaneId);
+    try {
+      const supabase = createClient();
+      const { error: updateError } = await supabase
+        .from("heat_lanes")
+        .update({ attendance_status: nextStatus })
+        .eq("id", heatLaneId);
+      if (updateError) throw updateError;
+    } catch (err) {
+      setError(getErrorMessage(err, "Could not save attendance."));
+    } finally {
+      setSavingLaneId(null);
+    }
+  };
+
   return (
     <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black text-yellow-300", className)}>
       <CardHeader>
@@ -60,52 +87,88 @@ export function AttendanceBoard({
           Call-room attendance
         </CardTitle>
         <CardDescription className={outdoorMode ? "text-yellow-100/70" : undefined}>
-          Live from Ushers — know who to expect behind the blocks before you start the heat.
+          Check in swimmers behind the blocks before you start the heat.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <Badge variant={summary.readyForStart ? "default" : "outline"}>
+          <Users className="mr-1 size-3.5" />
           {summary.present}/{summary.total} present · {summary.pending} pending
           {summary.readyForStart ? " · Ready to start" : ""}
         </Badge>
+
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+
         <div className="space-y-2">
           {lanes.map((lane) => (
             <div
               key={lane.heatLaneId}
               className={cn(
-                "flex items-center gap-3 rounded-lg border p-3",
+                "space-y-2 rounded-lg border p-3",
                 outdoorMode ? "border-yellow-300/30" : "border-border",
               )}
             >
-              <div className="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-md bg-muted text-sm font-bold">
-                L{lane.laneNumber}
+              <div className="flex items-center gap-3">
+                <div className="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-md bg-muted text-sm font-bold">
+                  L{lane.laneNumber}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <AthleteLink
+                    athleteId={lane.athleteId}
+                    name={lane.athleteName}
+                    className={cn("truncate font-semibold", outdoorMode && "text-yellow-300")}
+                  />
+                  {lane.teamName && (
+                    <p className={cn("truncate text-xs", outdoorMode ? "text-yellow-100/60" : "text-muted-foreground")}>
+                      {lane.teamName}
+                    </p>
+                  )}
+                </div>
               </div>
-              <div className="min-w-0 flex-1">
-                <AthleteLink
-                  athleteId={lane.athleteId}
-                  name={lane.athleteName}
-                  className={cn("truncate", outdoorMode && "text-yellow-300")}
-                />
-                {lane.teamName && (
-                  <p className={cn("text-xs", outdoorMode ? "text-yellow-100/60" : "text-muted-foreground")}>
-                    {lane.teamName}
-                  </p>
-                )}
+              <div className="grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  className={cn(
+                    "min-h-[48px] text-base font-semibold",
+                    lane.attendanceStatus === "present" && "bg-emerald-600 hover:bg-emerald-600",
+                  )}
+                  variant={lane.attendanceStatus === "present" ? "default" : "outline"}
+                  disabled={savingLaneId === lane.heatLaneId}
+                  onClick={() => void markAttendance(lane.heatLaneId, "present")}
+                >
+                  {savingLaneId === lane.heatLaneId ? (
+                    <Loader2 className="mr-2 size-4 animate-spin" />
+                  ) : (
+                    <Check className="mr-2 size-4" />
+                  )}
+                  Present
+                </Button>
+                <Button
+                  type="button"
+                  variant={lane.attendanceStatus === "absent" ? "destructive" : "outline"}
+                  className="min-h-[48px] text-base font-semibold"
+                  disabled={savingLaneId === lane.heatLaneId}
+                  onClick={() => void markAttendance(lane.heatLaneId, "absent")}
+                >
+                  {savingLaneId === lane.heatLaneId ? (
+                    <Loader2 className="mr-2 size-4 animate-spin" />
+                  ) : (
+                    <UserRoundX className="mr-2 size-4" />
+                  )}
+                  Absent
+                </Button>
               </div>
-              <Badge
-                variant={
-                  lane.attendanceStatus === "present"
-                    ? "default"
-                    : lane.attendanceStatus === "absent"
-                      ? "destructive"
-                      : "outline"
-                }
-                className="min-h-[32px] capitalize"
-              >
-                {ATTENDANCE_LABELS[lane.attendanceStatus]}
-              </Badge>
             </div>
           ))}
+          {lanes.length === 0 && (
+            <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
+              No lanes seeded for this heat yet.
+            </p>
+          )}
         </div>
       </CardContent>
     </Card>

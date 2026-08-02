@@ -128,3 +128,22 @@
     @apply font-sans;
   }
 }
+
+/* Print-friendly heat cards (deck referees / coaches printing a physical
+   copy) — hide app chrome and interactive controls, keep only the data. */
+@media print {
+  header,
+  [data-print-hide] {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  [data-print-card] {
+    break-inside: avoid;
+    border: 1px solid #000 !important;
+    background: white !important;
+    color: black !important;
+  }
+}

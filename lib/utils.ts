@@ -34,7 +34,6 @@ export function getErrorMessage(err: unknown, fallback: string): string {
  * failures and unusable AuthError.message values to actionable guidance.
  */
 export function formatSignInError(err: unknown): string {
-  const fallback = "Sign-in failed. Check your email and password."
   const raw = getErrorMessage(err, "")
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""
 

@@ -458,7 +458,11 @@ export async function fetchAthleteDirectory(): Promise<AthleteDirectoryCard[]> {
     const { data, error } = await supabase
       .from("athletes")
       .select(
-        "id, age, age_group, gender, users ( full_name, profile_image_url ), teams ( name ), awards ( id, award_type, category, gender, meet_volumes ( volume_number, name ) ), entries ( id )",
+        // athletes has TWO foreign keys into users (user_id AND parent_id) —
+        // an unqualified "users(...)" embed is ambiguous to PostgREST
+        // (PGRST201) and was silently falling back to demo data on every
+        // load. Qualify with the FK name for the athlete's own user row.
+        "id, age, age_group, gender, users!athletes_user_id_fkey ( full_name, profile_image_url ), teams ( name ), awards ( id, award_type, category, gender, meet_volumes ( volume_number, name ) ), entries ( id )",
       )
       .order("age", { ascending: true });
     if (error || !data?.length) {
@@ -520,7 +524,9 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
     const supabase = createClient();
     const { data: athlete, error } = await supabase
       .from("athletes")
-      .select("id, age, age_group, gender, date_of_birth, users ( full_name, profile_image_url ), teams ( name )")
+      // Qualify the FK — athletes has two (user_id and parent_id) — see the
+      // matching comment in fetchAthleteDirectory() above.
+      .select("id, age, age_group, gender, date_of_birth, users!athletes_user_id_fkey ( full_name, profile_image_url ), teams ( name )")
       .eq("id", athleteId)
       .maybeSingle();
     if (error || !athlete) return demo ?? null;

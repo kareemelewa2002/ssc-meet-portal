@@ -6,10 +6,16 @@ import { cn } from "@/lib/utils";
 import { SkinsKnockout } from "@/components/admin/skins-knockout";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
 import { PendingSwimmerApprovals } from "@/components/admin/pending-swimmer-approvals";
+import { PendingClubApprovals } from "@/components/admin/pending-club-approvals";
+import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
+import { CashPayments } from "@/components/admin/cash-payments";
 import { AppHeader } from "@/components/layout/app-header";
 
 const TABS = [
-  { id: "pending", label: "Pending Swimmer Registrations", shortLabel: "Pending" },
+  { id: "pending", label: "Pending Swimmer Registrations", shortLabel: "Swimmers" },
+  { id: "clubs", label: "Pending Club Approvals", shortLabel: "Clubs" },
+  { id: "heatcards", label: "Referee Heat Cards", shortLabel: "Heat Cards" },
+  { id: "cash", label: "Cash Payments", shortLabel: "Cash" },
   { id: "skins", label: "Skins Knockout", shortLabel: "Skins" },
   { id: "users", label: "User & Role Management", shortLabel: "Users" },
 ] as const;
@@ -21,7 +27,7 @@ export default function AdminPage() {
     <div className="min-h-screen">
       <AppHeader title="Admin Dashboard" />
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-3 pb-24 sm:p-6">
-      <div className="grid grid-cols-3 gap-2 rounded-lg border bg-muted/30 p-1 sm:flex">
+      <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-1 sm:flex sm:flex-wrap sm:grid-cols-none">
         {TABS.map((t) => (
           <Button
             key={t.id}
@@ -37,6 +43,9 @@ export default function AdminPage() {
       </div>
 
       {tab === "pending" && <PendingSwimmerApprovals />}
+      {tab === "clubs" && <PendingClubApprovals />}
+      {tab === "heatcards" && <RefereeHeatCards />}
+      {tab === "cash" && <CashPayments />}
       {tab === "skins" && <SkinsKnockout eventId="50m-freestyle-skins" />}
       {tab === "users" && <UserRoleManagement />}
       </main>

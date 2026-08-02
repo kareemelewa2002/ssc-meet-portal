@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { OutdoorModeProvider } from "@/components/providers/outdoor-mode-provider";
+import { ToastProvider, Toaster } from "@/components/ui/toast";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,7 +32,12 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         <OutdoorModeProvider>
-          <TooltipProvider>{children}</TooltipProvider>
+          <TooltipProvider>
+            <ToastProvider>
+              {children}
+              <Toaster />
+            </ToastProvider>
+          </TooltipProvider>
         </OutdoorModeProvider>
       </body>
     </html>

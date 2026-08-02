@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Loader2, LogIn, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +20,6 @@ function isSafeRedirect(path: string | null): path is string {
 }
 
 function LoginPageInner() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirectTo");
 
@@ -42,8 +41,23 @@ function LoginPageInner() {
         setError(formatSignInError(signInError));
         return;
       }
-      router.push(isSafeRedirect(redirectTo) ? redirectTo : "/");
-      router.refresh();
+      // A parent who registered while their linked swimmer's account was
+      // still pending confirmation never got a session at signUp time to
+      // run this RPC then (see lib/register.ts) — first real login is a
+      // guaranteed-session moment, so retry it here. Harmless no-op for
+      // every other account (it only matches rows by the caller's own email).
+      await supabase.rpc("claim_pending_parent_links");
+      // A full navigation, not router.push(). @supabase/ssr's browser
+      // client persists the just-created session to cookies via an
+      // onAuthStateChange listener that fires asynchronously after
+      // signInWithPassword() resolves — router.push() can win that race
+      // and issue its RSC fetch before the cookie is written, so
+      // middleware.ts sees no session yet and bounces straight back to
+      // /login (confirmed live: a 307 to /login fired immediately after
+      // the push, even though the client was already authenticated).
+      // window.location assign forces a fresh top-level request, which
+      // only ever fires after the cookie write has landed.
+      window.location.assign(isSafeRedirect(redirectTo) ? redirectTo : "/");
     } catch (err) {
       setError(formatSignInError(err));
     } finally {

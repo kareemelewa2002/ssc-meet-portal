@@ -2,6 +2,13 @@ import { createClient } from "@/lib/supabase/client";
 import { canSubmitEntries } from "@/lib/register";
 import type { EntryStatus, ParentLinkStatus } from "@/lib/supabase/types";
 
+/** SSC Vol. 1 pricing — cash paid on deck, never online. */
+export const RACE_PRICE_EGP = 300;
+
+export function computeRegistrationTotalEgp(raceCount: number): number {
+  return raceCount * RACE_PRICE_EGP;
+}
+
 export interface EventSelection {
   eventId: string;
   seedTimeMs: number | null;
@@ -81,6 +88,29 @@ export async function fetchRegisterableEvents(meetVolumeId: string): Promise<Reg
   }
 }
 
+/** Which of this volume's registerable events the athlete has already
+ * entered — the register page uses this to lock those out instead of
+ * letting a resubmission hit entries' unique(event_id, athlete_id)
+ * constraint as a raw 409. */
+export async function fetchAthleteEnteredEventIds(
+  athleteId: string,
+  eventIds: string[],
+): Promise<Set<string>> {
+  if (eventIds.length === 0) return new Set();
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("entries")
+      .select("event_id")
+      .eq("athlete_id", athleteId)
+      .in("event_id", eventIds);
+    if (error || !data) return new Set();
+    return new Set(data.map((row) => row.event_id));
+  } catch {
+    return new Set();
+  }
+}
+
 export interface SubmitEntriesResult {
   success: boolean;
   error?: string;
@@ -132,6 +162,15 @@ export async function submitEventRegistration(params: {
   const payload = buildEntryInserts(athleteId, selections);
   const { data, error } = await supabase.from("entries").insert(payload).select("id");
   if (error) {
+    // 23505 = unique_violation on entries(event_id, athlete_id) — normally
+    // pre-empted by fetchAthleteEnteredEventIds locking the UI, but a
+    // concurrent tab/session can still race past that check.
+    if (error.code === "23505") {
+      return {
+        success: false,
+        error: "You've already entered one or more of these events. Refresh the page to see your current entries.",
+      };
+    }
     return { success: false, error: error.message };
   }
 

@@ -11,37 +11,60 @@ create extension if not exists pgcrypto;
 -- 1. ENUM TYPES
 -- =============================================================================
 
+-- SCOPE LOCK: exactly 5 approved roles. Older databases may still carry
+-- 'usher', 'entry_helper', or 'team_captain' from a prior schema generation
+-- (Postgres enums can only ever grow via ALTER TYPE ... ADD VALUE, never
+-- shrink) — the migration block below downgrades any user still on one of
+-- those to its replacement (usher/entry_helper -> referee, team_captain ->
+-- coach, since teams.captain_id already carries "who manages this club"
+-- independently of the role column) before the type is rebuilt clean.
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'user_role') then
     create type public.user_role as enum (
       'admin',
       'referee',
-      'usher',
       'coach',
-      'team_captain',
       'athlete',
       'parent'
     );
-  end if;
-end $$;
-
--- Entry Desk Helpers (ground / system registration guidance) — like 'usher',
--- an admin-assigned staff role, never a public_signup_role.
-do $$
-begin
-  if not exists (
-    select 1 from pg_enum
-    where enumlabel = 'entry_helper'
-      and enumtypid = (select oid from pg_type where typname = 'user_role')
-  ) then
-    alter type public.user_role add value 'entry_helper';
+  else
+    if exists (
+      select 1 from pg_enum
+      where enumtypid = (select oid from pg_type where typname = 'user_role')
+        and enumlabel in ('usher', 'entry_helper', 'team_captain')
+    ) then
+      -- Every RLS policy on public.users is recreated later in this script
+      -- (idempotent drop-if-exists/create pattern) — safe to drop them all
+      -- here rather than track down exactly which ones reference role
+      -- directly (ALTER COLUMN TYPE refuses to run while any do).
+      declare pol record;
+      begin
+        for pol in select policyname from pg_policies where schemaname = 'public' and tablename = 'users' loop
+          execute format('drop policy if exists %I on public.users', pol.policyname);
+        end loop;
+      end;
+      alter type public.user_role rename to user_role_old;
+      create type public.user_role as enum ('admin', 'referee', 'coach', 'athlete', 'parent');
+      alter table public.users alter column role drop default;
+      alter table public.users alter column role type public.user_role using (
+        case role::text
+          when 'usher' then 'referee'
+          when 'entry_helper' then 'referee'
+          when 'team_captain' then 'coach'
+          else role::text
+        end
+      )::public.user_role;
+      alter table public.users alter column role set default 'athlete';
+      -- cascade: current_role()/is_admin()/etc. still return the old type
+      -- at this point — all of them are recreated later in this script.
+      drop type public.user_role_old cascade;
+    end if;
   end if;
 end $$;
 
 -- Roles a member of the public may select for themselves at sign-up.
--- 'admin' and 'team_captain' are intentionally excluded — team_captain is
--- granted by promoting a team's captain_id, admin only by an existing admin.
+-- 'admin' is intentionally excluded — grantable only by an existing admin.
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'public_signup_role') then
@@ -802,32 +825,6 @@ as $$
   );
 $$;
 
-create or replace function public.is_usher()
-returns boolean
-language sql
-security definer
-stable
-set search_path = public
-as $$
-  select exists (
-    select 1 from public.users where id = auth.uid() and role = 'usher'
-  );
-$$;
-
--- Deck staff who may view call-room / heat-lane attendance boards.
-create or replace function public.is_deck_official()
-returns boolean
-language sql
-security definer
-stable
-set search_path = public
-as $$
-  select exists (
-    select 1 from public.users
-    where id = auth.uid() and role in ('admin', 'referee', 'usher')
-  );
-$$;
-
 create or replace function public.is_team_captain_of(p_team_id uuid)
 returns boolean
 language sql
@@ -871,11 +868,28 @@ $$;
 
 -- Creates the public.users profile row whenever a new auth.users row lands.
 -- The requested role always comes from raw_user_meta_data ->> 'role' and is
--- clamped to public_signup_role — a client can NEVER request 'admin' or
--- 'team_captain' through normal sign-up. The single exception is the
+-- clamped to public_signup_role — a client can NEVER request 'admin'
+-- through normal sign-up. The single exception is the
 -- pre-configured superadmin_email, which self-bootstraps as 'admin' exactly
 -- once (the very first admin account, since no admin yet exists to promote
 -- anyone).
+--
+-- For role = 'athlete', this ALSO creates the public.athletes row (and sets
+-- profile_image_url on public.users) directly from raw_user_meta_data,
+-- rather than leaving that to a follow-up client-side insert/update. Why:
+-- this project requires email confirmation (mailer_autoconfirm = false), so
+-- supabase.auth.signUp() does not return an active session for a brand-new
+-- user — auth.uid() is null for any request the client makes right after
+-- signUp() resolves, until that email is confirmed. A client-side
+-- `.from("athletes").insert(...)` immediately after signUp() therefore
+-- ALWAYS fails RLS ("new row violates row-level security policy for table
+-- athletes"), 100% of the time, for every real self-registration — this
+-- was caught live via an E2E test hitting exactly that error. Since this
+-- trigger runs SECURITY DEFINER on the server as part of the auth.users
+-- INSERT itself, it is completely independent of whether the browser has
+-- an active session, and mirrors the same pattern already used for
+-- public.users. See lib/register.ts — it now packs the full athlete bio
+-- into signUp()'s options.data instead of inserting separately afterward.
 create or replace function public.handle_new_auth_user()
 returns trigger
 language plpgsql
@@ -886,6 +900,12 @@ declare
   requested_role text := new.raw_user_meta_data ->> 'role';
   resolved_role public.user_role := 'athlete';
   superadmin text;
+  v_dob date;
+  v_age integer;
+  v_parent_email text;
+  v_parent_id uuid;
+  v_needs_parent boolean;
+  v_specialty text[];
 begin
   select superadmin_email into superadmin from public.app_settings limit 1;
 
@@ -898,13 +918,53 @@ begin
     resolved_role := 'athlete';
   end if;
 
-  insert into public.users (id, email, full_name, role)
+  insert into public.users (id, email, full_name, role, profile_image_url)
   values (
     new.id,
     new.email,
     coalesce(new.raw_user_meta_data ->> 'full_name', new.email),
-    resolved_role
+    resolved_role,
+    new.raw_user_meta_data ->> 'profile_image_url'
   );
+
+  if resolved_role = 'athlete' and (new.raw_user_meta_data ? 'date_of_birth') then
+    v_dob := (new.raw_user_meta_data ->> 'date_of_birth')::date;
+    v_age := greatest(public.age_at_date(v_dob, current_date), 13);
+    v_parent_email := nullif(trim(new.raw_user_meta_data ->> 'parent_email'), '');
+    v_needs_parent := public.age_group_for_age(v_age) = 'U14';
+
+    v_parent_id := null;
+    if v_needs_parent and v_parent_email is not null then
+      select id into v_parent_id from public.users where lower(email) = lower(v_parent_email);
+    end if;
+
+    select array(select jsonb_array_elements_text(coalesce(new.raw_user_meta_data -> 'specialty_events', '[]'::jsonb)))
+      into v_specialty;
+
+    insert into public.athletes (
+      user_id, date_of_birth, age, age_group, gender, height_cm, weight_kg,
+      specialty_events, parent_id, parent_link_status, pending_parent_email,
+      approved_by_admin
+    ) values (
+      new.id,
+      v_dob,
+      v_age,
+      public.age_group_for_age(v_age),
+      coalesce((new.raw_user_meta_data ->> 'gender')::public.gender, 'male'),
+      nullif(new.raw_user_meta_data ->> 'height_cm', '')::numeric,
+      nullif(new.raw_user_meta_data ->> 'weight_kg', '')::numeric,
+      coalesce(v_specialty, '{}'),
+      v_parent_id,
+      case
+        when not v_needs_parent then 'none'
+        when v_parent_id is not null then 'verified'
+        when v_parent_email is not null then 'pending'
+        else 'none'
+      end::public.parent_link_status,
+      case when v_needs_parent and v_parent_id is null then v_parent_email else null end,
+      false
+    );
+  end if;
 
   return new;
 exception
@@ -1564,7 +1624,7 @@ drop policy if exists "public_view_athlete_and_deck_users" on public.users;
 create policy "public_view_athlete_and_deck_users" on public.users
   for select using (
     exists (select 1 from public.athletes a where a.user_id = id)
-    or role in ('usher', 'referee', 'admin')
+    or role in ('referee', 'admin')
   );
 
 drop policy if exists "users_update_own_profile" on public.users;
@@ -1631,7 +1691,7 @@ create policy "athlete_view_own_row" on public.athletes
     user_id = auth.uid()
     or parent_id = auth.uid()
     or public.is_team_captain_of(team_id)
-    or public.is_deck_official()
+    or public.is_admin_or_referee()
   );
 
 drop policy if exists "athlete_update_own_row" on public.athletes;
@@ -1696,7 +1756,7 @@ create policy "admins_full_access_entries" on public.entries
 
 drop policy if exists "deck_officials_view_entries" on public.entries;
 create policy "deck_officials_view_entries" on public.entries
-  for select using (public.is_deck_official());
+  for select using (public.is_admin_or_referee());
 
 -- Entries carry no PII of their own (event_id, athlete_id, seed_time_ms,
 -- is_nt) — athlete names/events are already public. Without this, spectators
@@ -1720,28 +1780,16 @@ drop policy if exists "admins_referees_full_access_heats" on public.heats;
 create policy "admins_referees_full_access_heats" on public.heats
   for all using (public.is_admin_or_referee()) with check (public.is_admin_or_referee());
 
-drop policy if exists "ushers_view_heats" on public.heats;
-create policy "ushers_view_heats" on public.heats
-  for select using (public.is_usher());
-
 drop policy if exists "public_view_published_heats" on public.heats;
 create policy "public_view_published_heats" on public.heats
   for select using (status = 'published');
 
+-- The single consolidated Referee role owns heat_lanes end to end (both
+-- call-room attendance check-in and lane assignment) — no separate usher
+-- tier or attendance-only lockdown trigger needed anymore.
 drop policy if exists "admins_referees_full_access_heat_lanes" on public.heat_lanes;
 create policy "admins_referees_full_access_heat_lanes" on public.heat_lanes
   for all using (public.is_admin_or_referee()) with check (public.is_admin_or_referee());
-
-drop policy if exists "ushers_view_heat_lanes" on public.heat_lanes;
-create policy "ushers_view_heat_lanes" on public.heat_lanes
-  for select using (public.is_usher());
-
--- Ushers (and referees via the full-access policy above) update call-room
--- attendance. A trigger below locks ushers to attendance columns only.
-drop policy if exists "ushers_update_heat_lane_attendance" on public.heat_lanes;
-create policy "ushers_update_heat_lane_attendance" on public.heat_lanes
-  for update using (public.is_usher())
-  with check (public.is_usher());
 
 drop policy if exists "public_view_published_heat_lanes" on public.heat_lanes;
 create policy "public_view_published_heat_lanes" on public.heat_lanes
@@ -1749,33 +1797,25 @@ create policy "public_view_published_heat_lanes" on public.heat_lanes
     exists (select 1 from public.heats h where h.id = heat_id and h.status = 'published')
   );
 
--- Ushers may only flip attendance fields — never reassign lanes / entries.
-create or replace function public.enforce_usher_attendance_only()
+-- Audit trail: stamp who/when marked attendance, on every attendance change.
+create or replace function public.stamp_attendance_marked()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
 begin
-  if public.is_usher() and not public.is_admin_or_referee() then
-    if new.heat_id is distinct from old.heat_id
-      or new.lane_number is distinct from old.lane_number
-      or new.entry_id is distinct from old.entry_id then
-      raise exception 'Ushers may only update attendance_status on heat lanes.';
-    end if;
+  if new.attendance_status is distinct from old.attendance_status then
     new.attendance_marked_at := now();
     new.attendance_marked_by := auth.uid();
-  elsif new.attendance_status is distinct from old.attendance_status then
-    new.attendance_marked_at := coalesce(new.attendance_marked_at, now());
-    new.attendance_marked_by := coalesce(new.attendance_marked_by, auth.uid());
   end if;
   return new;
 end;
 $$;
 
-create or replace trigger enforce_usher_attendance_only_trigger
+create or replace trigger stamp_attendance_marked_trigger
   before update on public.heat_lanes
-  for each row execute function public.enforce_usher_attendance_only();
+  for each row execute function public.stamp_attendance_marked();
 
 -- ---------------------------------------------------------------------------
 -- results
@@ -1784,10 +1824,9 @@ drop policy if exists "admins_full_access_results" on public.results;
 create policy "admins_full_access_results" on public.results
   for all using (public.is_admin()) with check (public.is_admin());
 
--- Referees insert/update result drafts AND may publish (a Chief Referee is
--- simply a referee who has claimed "Chief Referee Mode" via the deck lane-
--- presence system — see hooks/use-lane-presence.ts — not a distinct DB
--- role), enforced by enforce_result_publish below.
+-- Referees insert/update result drafts and submit the completed heat card
+-- to the Admin queue — but never publish directly. enforce_result_publish
+-- below is the actual gate; this policy just governs draft-level writes.
 drop policy if exists "referees_manage_result_drafts" on public.results;
 create policy "referees_manage_result_drafts" on public.results
   for all using (public.is_referee()) with check (public.is_referee());
@@ -1796,11 +1835,11 @@ drop policy if exists "public_view_published_results" on public.results;
 create policy "public_view_published_results" on public.results
   for select using (status = 'published');
 
--- Referee -> Chief Referee -> Admin workflow: lane referees save drafts,
--- the Chief Referee (a referee in "Chief Referee Mode") reviews the full
--- heat card and publishes. Admins may also publish directly. Ushers,
--- athletes, coaches, and parents can never reach this — they hold no
--- results RLS policy at all (default-deny).
+-- Referee -> Admin workflow: the referee enters times/DQ/NS for a heat and
+-- submits the card (status stays 'draft'); only an Admin reviewing the
+-- queue may flip status to 'published', making it visible on spectator
+-- heat sheets and leaderboards. Coaches, athletes, and parents can never
+-- reach this at all — they hold no results RLS policy (default-deny).
 create or replace function public.enforce_result_publish()
 returns trigger
 language plpgsql
@@ -1808,8 +1847,18 @@ security definer
 set search_path = public
 as $$
 begin
-  if new.status = 'published' and not public.is_admin_or_referee() then
-    raise exception 'Only a referee or admin may publish results.';
+  -- Only guard the actual transition into 'published' (TG_OP = 'INSERT'
+  -- direct-as-published, or an UPDATE where it wasn't already published).
+  -- A plain new.status = 'published' check without the old.status compare
+  -- would also fire for a referee's UNRELATED column update on a row that
+  -- happens to already be published — exactly what
+  -- recompute_heat_finish_places' cross-lane cascade does every time it
+  -- re-ranks a heat where some other lane is already published, since that
+  -- UPDATE touches every valid result row in the heat regardless of who's
+  -- writing. That over-broad guard blocked referees from ever drafting a
+  -- new lane in a heat that already had any published result at all.
+  if new.status = 'published' and old.status is distinct from 'published' and not public.is_admin() then
+    raise exception 'Only an admin may publish results.';
   end if;
   return new;
 end;
@@ -1823,8 +1872,8 @@ create or replace trigger enforce_result_publish_trigger
 -- ranking each heat's official times fastest-first (DQ/NS excluded, per the
 -- results_outcome_consistency check above which keeps their finish_place
 -- null). Recomputing server-side means every device sees identical,
--- authoritative placements regardless of which client (lane referee vs.
--- Chief Referee) most recently wrote a time.
+-- authoritative placements regardless of which referee most recently
+-- wrote a time.
 create or replace function public.recompute_heat_finish_places()
 returns trigger
 language plpgsql

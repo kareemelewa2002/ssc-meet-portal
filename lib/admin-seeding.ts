@@ -265,7 +265,10 @@ export async function fetchHeatPreview(eventId: string): Promise<PreviewHeat[]> 
   const { data, error } = await supabase
     .from("heats")
     .select(
-      "id, heat_number, heat_group, status, heat_lanes ( id, lane_number, entry_id, entries ( seed_time_ms, is_nt, athletes ( id, users ( full_name ) ) ) )",
+      // Qualify the FK — athletes has two (user_id and parent_id), so a
+      // bare "users(...)" embed is ambiguous to PostgREST (PGRST201) and
+      // was silently emptying the entire heat sheet preview.
+      "id, heat_number, heat_group, status, heat_lanes ( id, lane_number, entry_id, entries ( seed_time_ms, is_nt, athletes ( id, users!athletes_user_id_fkey ( full_name ) ) ) )",
     )
     .eq("event_id", eventId)
     .order("heat_number", { ascending: true });

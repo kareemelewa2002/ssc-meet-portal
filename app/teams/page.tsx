@@ -19,13 +19,16 @@ import {
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AppHeader } from "@/components/layout/app-header";
+import { PendingClubApprovals } from "@/components/admin/pending-club-approvals";
 import { createTeam, fetchTeamDetail, fetchTeams, type TeamDetail } from "@/lib/teams";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import type { TeamRow } from "@/lib/supabase/types";
 
 const AGE_GROUP_LABELS: Record<string, string> = { U14: "U14", U17: "U17", Open: "Open" };
 
 export default function TeamsPage() {
+  const { user } = useCurrentUser();
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -144,6 +147,8 @@ export default function TeamsPage() {
           Teams are permanent on the platform, independent of any single meet volume.
         </p>
       </header>
+
+      {user?.role === "admin" && <PendingClubApprovals />}
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading teams…</p>

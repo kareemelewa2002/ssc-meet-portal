@@ -39,7 +39,12 @@ async function fetchAthleteDetails(athleteIds: string[]): Promise<Map<string, At
   const supabase = createClient();
   const { data, error } = await supabase
     .from("athletes")
-    .select("id, gender, age_group, users ( full_name ), teams ( name )")
+    // Qualify the FK — athletes has two (user_id and parent_id), so a bare
+    // "users(...)" embed is ambiguous to PostgREST (PGRST201). Unlike the
+    // demo-fallback pattern elsewhere, this function returned an EMPTY map
+    // on error, meaning this bug rendered leaderboard rows with blank
+    // names/teams rather than a graceful fallback.
+    .select("id, gender, age_group, users!athletes_user_id_fkey ( full_name ), teams ( name )")
     .in("id", athleteIds);
 
   if (error || !data) return details;
@@ -123,6 +128,71 @@ export async function fetchSeriesLeaderboard(category: AgeGroup): Promise<Leader
     return mergeWithAthleteDetails(data);
   } catch {
     return DEMO_LEADERBOARD;
+  }
+}
+
+export interface ClubLeaderboardEntry {
+  teamId: string;
+  teamName: string;
+  totalPoints: number;
+  athleteCount: number;
+}
+
+interface RawSeriesRow {
+  athlete_id: string;
+  total_points: number;
+}
+
+interface RawAthleteTeamRow {
+  id: string;
+  team_id: string | null;
+  teams: { id: string; name: string } | { id: string; name: string }[] | null;
+}
+
+/** Club Leaderboard Summary — every approved club's swimmers' series
+ * total_points summed together, across every age category. Purely a
+ * client-side aggregation over the existing series_leaderboards view; no
+ * schema changes needed. Athletes with no team (unattached) are excluded —
+ * there's no club to attribute their points to. */
+export async function fetchClubLeaderboard(): Promise<ClubLeaderboardEntry[]> {
+  try {
+    const supabase = createClient();
+    const { data: points, error } = await supabase
+      .from("series_leaderboards")
+      .select("athlete_id, total_points");
+    if (error || !points || points.length === 0) return [];
+
+    const athleteIds = (points as RawSeriesRow[]).map((p) => p.athlete_id);
+    const { data: athletes, error: athleteError } = await supabase
+      .from("athletes")
+      .select("id, team_id, teams ( id, name )")
+      .in("id", athleteIds);
+    if (athleteError || !athletes) return [];
+
+    const teamByAthlete = new Map<string, { id: string; name: string }>();
+    for (const row of athletes as unknown as RawAthleteTeamRow[]) {
+      const team = firstOf(row.teams);
+      if (team) teamByAthlete.set(row.id, team);
+    }
+
+    const totals = new Map<string, ClubLeaderboardEntry>();
+    for (const row of points as RawSeriesRow[]) {
+      const team = teamByAthlete.get(row.athlete_id);
+      if (!team) continue;
+      const existing = totals.get(team.id) ?? {
+        teamId: team.id,
+        teamName: team.name,
+        totalPoints: 0,
+        athleteCount: 0,
+      };
+      existing.totalPoints += row.total_points;
+      existing.athleteCount += 1;
+      totals.set(team.id, existing);
+    }
+
+    return [...totals.values()].sort((a, b) => b.totalPoints - a.totalPoints);
+  } catch {
+    return [];
   }
 }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeftRight, Loader2, Send, Wand2 } from "lucide-react";
+import { ArrowLeftRight, Loader2, Printer, Send, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -270,12 +270,24 @@ export default function AdminSeedingPage() {
 
               {previewEventId === ev.eventId && (
                 <CardContent className="space-y-3 border-t pt-3">
-                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <ArrowLeftRight className="size-3.5" />
-                    Tap two lanes to swap their swimmers.
-                  </p>
+                  <div className="flex items-center justify-between gap-2" data-print-hide>
+                    <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <ArrowLeftRight className="size-3.5" />
+                      Tap two lanes to swap their swimmers.
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="min-h-[40px] gap-1.5"
+                      onClick={() => window.print()}
+                    >
+                      <Printer className="size-3.5" />
+                      Print Heat Sheet
+                    </Button>
+                  </div>
                   {previewHeats.map((heat) => (
-                    <div key={heat.heatId} className="space-y-2 rounded-lg border p-3">
+                    <div key={heat.heatId} className="space-y-2 rounded-lg border p-3" data-print-card>
                       <div className="flex items-center gap-2">
                         <Badge className="h-7 px-2.5">Heat {heat.heatNumber}</Badge>
                         <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U14" : "U17 & Open"}</Badge>

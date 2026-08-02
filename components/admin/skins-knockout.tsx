@@ -530,7 +530,11 @@ function OutcomeControls({
               outdoorMode && "border-yellow-300/40 text-yellow-300",
             )}
           >
-            <SelectValue />
+            {/* Select.Value renders the raw value by default — a render
+                function is required to show the label. */}
+            <SelectValue>
+              {(value: DqReason) => DQ_REASON_LABELS[value] ?? value}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             {DQ_CODES.map((code) => (

@@ -38,25 +38,16 @@ const DEMO_USERS: UserRow[] = [
   { id: "u1", email: "elewakareem2002@gmail.com", full_name: "Root Admin", phone: null, profile_image_url: null, role: "admin", created_at: "", updated_at: "" },
   { id: "u2", email: "coach.reyes@ssc.dev", full_name: "Coach Reyes", phone: null, profile_image_url: null, role: "coach", created_at: "", updated_at: "" },
   { id: "u3", email: "ref.alvi@ssc.dev", full_name: "Referee Alvi", phone: null, profile_image_url: null, role: "referee", created_at: "", updated_at: "" },
-  { id: "u7", email: "usher.okonkwo@ssc.dev", full_name: "Sam Okonkwo", phone: null, profile_image_url: null, role: "usher", created_at: "", updated_at: "" },
-  { id: "u4", email: "captain.khan@ssc.dev", full_name: "Zara Khan", phone: null, profile_image_url: null, role: "team_captain", created_at: "", updated_at: "" },
   { id: "u5", email: "swimmer.leo@ssc.dev", full_name: "Leo Fontaine", phone: null, profile_image_url: null, role: "athlete", created_at: "", updated_at: "" },
   { id: "u6", email: "parent.thompson@ssc.dev", full_name: "Grace Thompson", phone: null, profile_image_url: null, role: "parent", created_at: "", updated_at: "" },
 ];
 
-const ELEVATABLE_ROLES: Extract<UserRole, "admin" | "referee" | "usher" | "entry_helper">[] = [
-  "admin",
-  "referee",
-  "usher",
-  "entry_helper",
-];
+const ELEVATABLE_ROLES: Extract<UserRole, "admin" | "referee">[] = ["admin", "referee"];
 
 function roleBadgeVariant(role: UserRole): "default" | "secondary" | "outline" | "destructive" {
   if (role === "admin") return "destructive";
   if (role === "referee") return "default";
-  if (role === "usher") return "secondary";
-  if (role === "entry_helper") return "secondary";
-  if (role === "team_captain") return "secondary";
+  if (role === "coach") return "secondary";
   return "outline";
 }
 
@@ -127,7 +118,7 @@ export function UserRoleManagement({ initialUsers, className }: UserRoleManageme
     }
   };
 
-  const toggleRole = (user: UserRow, role: Extract<UserRole, "admin" | "referee" | "usher" | "entry_helper">) => {
+  const toggleRole = (user: UserRow, role: Extract<UserRole, "admin" | "referee">) => {
     const hasRole = user.role === role;
     applyRoleChange([user.id], hasRole ? "athlete" : role);
   };
@@ -147,7 +138,7 @@ export function UserRoleManagement({ initialUsers, className }: UserRoleManageme
     );
   };
 
-  const batchGrant = (role: Extract<UserRole, "admin" | "referee" | "usher" | "entry_helper">) => {
+  const batchGrant = (role: Extract<UserRole, "admin" | "referee">) => {
     applyRoleChange(Array.from(selected), role);
     setSelected(new Set());
   };
@@ -158,7 +149,7 @@ export function UserRoleManagement({ initialUsers, className }: UserRoleManageme
         <div>
           <h2 className="text-lg font-bold sm:text-xl">User & Role Management</h2>
           <p className="text-sm text-muted-foreground">
-            Search registered users and grant or revoke admin / referee / usher access.
+            Search registered users and grant or revoke admin / referee access.
           </p>
         </div>
         <Button
@@ -213,7 +204,7 @@ export function UserRoleManagement({ initialUsers, className }: UserRoleManageme
       <Card className="hidden md:block">
         <CardHeader className="pb-2">
           <CardTitle className="text-base">All Users ({filtered.length})</CardTitle>
-          <CardDescription>Toggle admin, referee, or usher access inline. Changes save immediately.</CardDescription>
+          <CardDescription>Toggle admin or referee access inline. Changes save immediately.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>

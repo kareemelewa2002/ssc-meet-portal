@@ -299,7 +299,7 @@ const LIVE_EVENT_SELECT = `
       lane_number,
       entries (
         id, seed_time_ms, is_nt,
-        athletes ( id, gender, age_group, users ( full_name ), teams ( name ) )
+        athletes ( id, gender, age_group, users!athletes_user_id_fkey ( full_name ), teams ( name ) )
       ),
       results ( result_outcome, official_time_ms, finish_place, dq_code, status )
     )
