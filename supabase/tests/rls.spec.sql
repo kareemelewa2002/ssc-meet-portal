@@ -378,9 +378,14 @@ begin
   v_referee := ssc_test.user_id('referee1@ssc-demo.test');
   v_admin   := ssc_test.user_id('elewakareem2002@gmail.com');
 
-  -- seed-demo.sql publishes a result for every seeded lane, so a
-  -- never-scored lane does not exist. Clear one as postgres (setup, not an
-  -- assertion) to recreate the real "referee opens a fresh lane" state.
+  -- The seed now ships a pre-meet state (entries pending, no heats), so
+  -- lanes must be produced the same way the app produces them: confirm an
+  -- event's entries, which fires generate_heats_on_confirm.
+  -- Confirming is admin-only (enforce_entry_status_change).
+  perform ssc_test.act_as(ssc_test.user_id('elewakareem2002@gmail.com'));
+  update public.entries set status = 'confirmed'
+   where event_id = (select event_id from public.entries limit 1);
+  perform set_config('role','postgres',true);
   select hl.id into v_lane from public.heat_lanes hl limit 1;
   delete from public.results where heat_lane_id = v_lane;
   perform ssc_test.check('DB-11', 'precondition: prepared a lane with no result',
@@ -484,6 +489,146 @@ begin
 exception when others then
   perform set_config('role','postgres',true);
   perform ssc_test.check('DB-12','contact privacy', false, sqlerrm);
+end $$;
+
+-- =============================================================================
+-- DB-13 — approving entries generates heats; heats are NOT pre-seeded.
+-- =============================================================================
+do $$
+declare
+  v_event uuid; v_before int; v_after int; v_lanes int; v_confirmed int;
+  v_u14_max int; v_open_min int;
+begin
+  -- Pick an individual event nobody has confirmed yet.
+  select e.event_id into v_event
+    from public.entries e
+    join public.events ev on ev.id = e.event_id
+   where ev.is_relay = false and ev.is_skins = false
+     and not exists (select 1 from public.heats h where h.event_id = e.event_id)
+   group by e.event_id having count(*) >= 4
+   limit 1;
+  perform ssc_test.check('DB-13','precondition: an unseeded event with entries exists',
+    v_event is not null, null);
+  if v_event is null then return; end if;
+
+  select count(*) into v_before from public.heats where event_id = v_event;
+  perform ssc_test.check('DB-13','no heats exist before approval', v_before = 0,
+    format('heats=%s', v_before));
+
+  perform ssc_test.act_as(ssc_test.user_id('elewakareem2002@gmail.com'));
+  update public.entries set status = 'confirmed' where event_id = v_event;
+  perform set_config('role','postgres',true);
+  select count(*) into v_confirmed from public.entries
+   where event_id = v_event and status = 'confirmed';
+  select count(*) into v_after from public.heats where event_id = v_event;
+  select count(*) into v_lanes from public.heat_lanes hl
+    join public.heats h on h.id = hl.heat_id where h.event_id = v_event;
+
+  perform ssc_test.check('DB-13','approval generates heats', v_after > 0, format('heats=%s', v_after));
+  perform ssc_test.check('DB-13','every confirmed entry gets a lane',
+    v_lanes = v_confirmed, format('lanes=%s confirmed=%s', v_lanes, v_confirmed));
+
+  -- U14 always swims before the combined U17/Open field.
+  select max(heat_number) into v_u14_max from public.heats
+   where event_id = v_event and heat_group = 'U13_14';
+  select min(heat_number) into v_open_min from public.heats
+   where event_id = v_event and heat_group = 'U17_OPEN';
+  perform ssc_test.check('DB-13','U14 heats are scheduled before U17/Open',
+    v_u14_max is null or v_open_min is null or v_u14_max < v_open_min,
+    format('u14_max=%s open_min=%s', v_u14_max, v_open_min));
+
+  -- Lanes fill from the middle out.
+  perform ssc_test.check('DB-13','lanes are within the 6-lane pool',
+    not exists (
+      select 1 from public.heat_lanes hl join public.heats h on h.id = hl.heat_id
+      where h.event_id = v_event and (hl.lane_number < 1 or hl.lane_number > 6)
+    ), null);
+exception when others then
+  perform ssc_test.check('DB-13','heat generation on approval', false, sqlerrm);
+end $$;
+
+-- Re-seeding must never destroy live scoring.
+do $$
+declare v_event uuid; v_lane uuid; v_heats_before int; v_heats_after int; v_admin uuid;
+begin
+  select h.event_id, hl.id into v_event, v_lane
+    from public.heat_lanes hl join public.heats h on h.id = hl.heat_id limit 1;
+  v_admin := ssc_test.user_id('elewakareem2002@gmail.com');
+
+  perform ssc_test.act_as(v_admin);
+  insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+  values (v_lane, 'valid', 30000, 'published')
+  on conflict (heat_lane_id) do update set status = 'published';
+  perform set_config('role','postgres',true);
+
+  select count(*) into v_heats_before from public.heats where event_id = v_event;
+  perform public.generate_heats_for_event(v_event);
+  select count(*) into v_heats_after from public.heats where event_id = v_event;
+
+  perform ssc_test.check('DB-13','re-seeding a scored event is a no-op',
+    v_heats_after = v_heats_before and v_heats_after > 0,
+    format('before=%s after=%s', v_heats_before, v_heats_after));
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-13','re-seed guard', false, sqlerrm);
+end $$;
+
+-- =============================================================================
+-- DB-14 — event_results ranks across ALL heats, unlike heat finish_place.
+-- =============================================================================
+do $$
+declare
+  v_event uuid; v_admin uuid; v_rows int; v_firsts int; v_distinct_heats int;
+begin
+  v_admin := ssc_test.user_id('elewakareem2002@gmail.com');
+  select h.event_id into v_event from public.heats h
+   group by h.event_id having count(*) >= 2 limit 1;
+  perform ssc_test.check('DB-14','precondition: an event with 2+ heats', v_event is not null, null);
+  if v_event is null then return; end if;
+
+  perform ssc_test.act_as(v_admin);
+  insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+  select hl.id, 'valid', 28000 + (abs(hashtext(hl.id::text)) % 9000), 'published'
+  from public.heat_lanes hl join public.heats h on h.id = hl.heat_id
+  where h.event_id = v_event
+  on conflict (heat_lane_id) do update
+    set status='published', result_outcome='valid',
+        official_time_ms = excluded.official_time_ms;
+  perform set_config('role','postgres',true);
+
+  select count(*) into v_rows from public.event_results where event_id = v_event;
+  perform ssc_test.check('DB-14','publishing produces event results', v_rows > 0,
+    format('rows=%s', v_rows));
+
+  -- Exactly one 1st place per (age group x gender) partition.
+  select count(*) into v_firsts from (
+    select age_group, gender from public.event_results
+    where event_id = v_event and event_place = 1
+    group by age_group, gender having count(*) <> 1
+  ) bad;
+  perform ssc_test.check('DB-14','one winner per age-group x gender partition',
+    v_firsts = 0, format('partitions with wrong winner count=%s', v_firsts));
+
+  -- The whole point: winners are drawn from more than one heat, proving the
+  -- ranking is cross-heat rather than heat-local.
+  select count(distinct heat_number) into v_distinct_heats
+    from public.event_results where event_id = v_event;
+  perform ssc_test.check('DB-14','ranking spans multiple heats',
+    v_distinct_heats >= 2, format('heats represented=%s', v_distinct_heats));
+
+  -- Ordering is genuinely by time.
+  perform ssc_test.check('DB-14','event_place ascends with official time',
+    not exists (
+      select 1 from public.event_results a
+      join public.event_results b
+        on a.event_id=b.event_id and a.age_group=b.age_group and a.gender=b.gender
+      where a.event_id = v_event
+        and a.event_place < b.event_place
+        and a.official_time_ms > b.official_time_ms
+    ), null);
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-14','event results', false, sqlerrm);
 end $$;
 
 -- =============================================================================

@@ -1407,33 +1407,20 @@ create or replace trigger enforce_no_direct_skins_entry_trigger
 
 -- Unapproved swimmers may set up profiles but cannot enter any meet volume
 -- until an admin sets approved_by_admin = true.
-create or replace function public.enforce_athlete_approved_for_entry()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if public.is_admin() then
-    return new;
-  end if;
-
-  if exists (
-    select 1 from public.athletes a
-    where a.id = new.athlete_id
-      and a.approved_by_admin = false
-  ) then
-    raise exception 'Swimmer registration pending admin approval.';
-  end if;
-
-  return new;
-end;
-$$;
-
+-- Approval NO LONGER gates registration.
+--
+-- The flow is now: an athlete signs up, registers for their events, and the
+-- admin approves the swimmer and confirms their cash in one action at the
+-- meet desk. Blocking the INSERT meant an unapproved swimmer could never
+-- reach that desk with entries to approve — the gate ran before the thing it
+-- was gating existed. What still holds is that entries land as
+-- 'pending_payment' (enforce_entry_status_change below) and only an admin can
+-- confirm them, so nobody swims unapproved; they just aren't blocked from
+-- ASKING.
+--
+-- Parent authorization for U14s is a separate, legal gate and is unaffected.
 drop trigger if exists enforce_athlete_approved_for_entry_trigger on public.entries;
-create trigger enforce_athlete_approved_for_entry_trigger
-  before insert on public.entries
-  for each row execute function public.enforce_athlete_approved_for_entry();
+drop function if exists public.enforce_athlete_approved_for_entry();
 
 -- Only admins may flip approved_by_admin. Self-service inserts are forced
 -- to false so a client cannot self-approve on signup.
@@ -2119,6 +2106,212 @@ $$;
 create or replace trigger recompute_heat_finish_places_trigger
   after insert or update of result_outcome, official_time_ms on public.results
   for each row execute function public.recompute_heat_finish_places();
+
+-- ===========================================================================
+-- HEAT GENERATION — heats are produced when an admin approves entries.
+-- ===========================================================================
+-- Seeding rules (identical to lib/seeding.ts, kept in SQL so approval can
+-- generate heats without a round trip through the app):
+--   * U14 seeds separately from the combined U17/Open field, and always
+--     swims first.
+--   * Buckets larger than 6 chunk into multiple heats, fastest chunk LAST.
+--   * NT swimmers seed ahead of timed swimmers within a bucket (oldest first),
+--     matching how an unseeded entry is treated on deck.
+--   * Lanes fill from the middle out: 4, 3, 5, 2, 1, 6.
+create or replace function public.generate_heats_for_event(p_event_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_heats integer := 0;
+begin
+  -- Never rebuild an event that is already being scored: deleting its heats
+  -- would cascade away real results. Re-seeding is only safe pre-race.
+  if exists (
+    select 1
+    from public.results r
+    join public.heat_lanes hl on hl.id = r.heat_lane_id
+    join public.heats h on h.id = hl.heat_id
+    where h.event_id = p_event_id
+  ) then
+    return 0;
+  end if;
+
+  -- Relay and Skins events are never seeded from individual entries.
+  if exists (
+    select 1 from public.events
+    where id = p_event_id and (is_relay = true or is_skins = true)
+  ) then
+    return 0;
+  end if;
+
+  delete from public.heats where event_id = p_event_id;
+
+  with ranked as (
+    select
+      e.id as entry_id,
+      e.event_id,
+      case when coalesce(e.age_group_at_entry, a.age_group) = 'U14'
+        then 'U13_14' else 'U17_OPEN' end as heat_group,
+      row_number() over (
+        partition by e.event_id,
+          case when coalesce(e.age_group_at_entry, a.age_group) = 'U14'
+            then 'U13_14' else 'U17_OPEN' end
+        order by
+          e.is_nt desc,
+          case when e.is_nt then null else e.seed_time_ms end asc nulls last,
+          case when e.is_nt then a.age end desc nulls last
+      ) as rank_in_bucket,
+      count(*) over (
+        partition by e.event_id,
+          case when coalesce(e.age_group_at_entry, a.age_group) = 'U14'
+            then 'U13_14' else 'U17_OPEN' end
+      ) as bucket_size
+    from public.entries e
+    join public.athletes a on a.id = e.athlete_id
+    where e.event_id = p_event_id
+      and e.status = 'confirmed'
+  ),
+  chunked as (
+    select *,
+      floor((rank_in_bucket - 1) / 6.0)::int as chunk_index,
+      ceil(bucket_size / 6.0)::int as num_chunks,
+      (((rank_in_bucket - 1) % 6) + 1)::int as lane_slot
+    from ranked
+  ),
+  bucketed as (
+    select *,
+      (num_chunks - chunk_index)::int as heat_number_in_bucket,
+      max(case when heat_group = 'U13_14' then num_chunks else 0 end)
+        over (partition by event_id) as u1314_chunk_count
+    from chunked
+  ),
+  plan as (
+    select
+      event_id,
+      heat_group::public.heat_group as heat_group,
+      case when heat_group = 'U13_14'
+        then heat_number_in_bucket
+        else u1314_chunk_count + heat_number_in_bucket
+      end as heat_number,
+      lane_slot,
+      entry_id
+    from bucketed
+  ),
+  inserted_heats as (
+    insert into public.heats (event_id, heat_group, heat_number, heat_order, status)
+    select distinct event_id, heat_group, heat_number, heat_number, 'published'::public.publish_status
+    from plan
+    returning id, event_id, heat_group, heat_number
+  ),
+  inserted_lanes as (
+    insert into public.heat_lanes (heat_id, lane_number, entry_id)
+    select ih.id, (array[4,3,5,2,1,6])[p.lane_slot], p.entry_id
+    from plan p
+    join inserted_heats ih
+      on ih.event_id = p.event_id
+     and ih.heat_group = p.heat_group
+     and ih.heat_number = p.heat_number
+    returning 1
+  )
+  select count(*) into v_heats from inserted_lanes;
+
+  return v_heats;
+end;
+$$;
+
+comment on function public.generate_heats_for_event(uuid) is
+  'Seeds heats + lanes for one event from its CONFIRMED entries. No-op if the '
+  'event already has any result (re-seeding would destroy live scoring) or if '
+  'the event is a relay/skins event.';
+
+-- Approving a swimmer confirms their entries; that is the moment heats can be
+-- built. Statement-level so a multi-row confirm (one swimmer, four events)
+-- rebuilds each affected event exactly once instead of once per row.
+create or replace function public.generate_heats_on_confirm()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event_id uuid;
+begin
+  for v_event_id in
+    select distinct event_id from new_entries where status = 'confirmed'
+  loop
+    perform public.generate_heats_for_event(v_event_id);
+  end loop;
+  return null;
+end;
+$$;
+
+drop trigger if exists generate_heats_on_confirm_insert on public.entries;
+create trigger generate_heats_on_confirm_insert
+  after insert on public.entries
+  referencing new table as new_entries
+  for each statement execute function public.generate_heats_on_confirm();
+
+drop trigger if exists generate_heats_on_confirm_update on public.entries;
+-- No column list: Postgres forbids `update of <col>` together with a
+-- transition table, and the statement-level transition table is what makes
+-- one multi-row confirm rebuild each event once instead of once per entry.
+create trigger generate_heats_on_confirm_update
+  after update on public.entries
+  referencing new table as new_entries
+  for each statement execute function public.generate_heats_on_confirm();
+
+-- ===========================================================================
+-- EVENT RESULTS — overall standings across every heat of an event.
+-- ===========================================================================
+-- recompute_heat_finish_places() ranks WITHIN a heat, which is what a referee
+-- needs on deck. It is not the event result: heats are seeded by speed, so
+-- winning heat 1 is not the same as winning the event. This view is the
+-- combined ranking a spectator means by "the results", partitioned the same
+-- way the meet is scored (event x age group x gender).
+--
+-- A view rather than a table: it is derived entirely from published results,
+-- so it can never drift out of sync the way a trigger-maintained copy would.
+create or replace view public.event_results as
+select
+  ev.id                                             as event_id,
+  ev.name                                           as event_name,
+  ev.session_id,
+  s.meet_volume_id,
+  coalesce(en.age_group_at_entry, a.age_group)      as age_group,
+  a.gender,
+  a.id                                              as athlete_id,
+  u.full_name                                       as athlete_name,
+  t.name                                            as team_name,
+  h.heat_number,
+  hl.lane_number,
+  r.official_time_ms,
+  r.result_outcome,
+  r.dq_code,
+  rank() over (
+    partition by ev.id, coalesce(en.age_group_at_entry, a.age_group), a.gender
+    order by r.official_time_ms asc
+  )                                                 as event_place
+from public.results r
+join public.heat_lanes hl on hl.id = r.heat_lane_id
+join public.heats h       on h.id = hl.heat_id
+join public.events ev     on ev.id = h.event_id
+join public.sessions s    on s.id = ev.session_id
+join public.entries en    on en.id = hl.entry_id
+join public.athletes a    on a.id = en.athlete_id
+join public.users u       on u.id = a.user_id
+left join public.teams t  on t.id = a.team_id
+where r.status = 'published'
+  and r.result_outcome = 'valid'
+  and r.official_time_ms is not null;
+
+comment on view public.event_results is
+  'Overall per-event standings across ALL heats, partitioned by event x age '
+  'group x gender. Distinct from results.finish_place, which ranks only '
+  'within a single heat.';
+
 
 -- ---------------------------------------------------------------------------
 -- leaderboards — public read, system-maintained writes only.

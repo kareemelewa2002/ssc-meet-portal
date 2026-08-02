@@ -508,18 +508,23 @@ where mv.volume_number = 1
 on conflict (athlete_id, meet_volume_id) do update set team_id = excluded.team_id;
 
 -- ---------------------------------------------------------------------------
--- 7. Entries — every individual (non-relay, non-skins) event across all 3
--- sessions, for all 36 regular approved athletes. Seed times are generated
--- deterministically (stroke/distance baseline + age-group + per-athlete +
--- per-event variance) so re-running this script always converges to the
--- same values. Roughly 1 in 12 entries is NT. The 2 gate-test fixtures
--- (unapproved / pending-parent) are excluded — they exist to prove the
--- gates block entry, not to hold entries themselves.
+-- 7. Entries — a FRESH, pre-meet state.
 --
--- athlete02's entries stay 'pending_payment' (everyone else's are
--- pre-'confirmed') — a live fixture for the Admin "Cash Payments on Deck"
--- verification tab, the same role the unapproved/pending-parent swimmers
--- and the unapproved team play for their respective approval workflows.
+-- Every athlete has registered for a varied 2-4 individual events (the cap is
+-- 4 per meet) and is WAITING FOR APPROVAL. Nothing is confirmed, so:
+--   * no heats exist yet   -> they are generated when an admin approves,
+--                             via public.generate_heats_for_event();
+--   * no results exist yet -> they appear as a referee enters times and an
+--                             admin publishes each heat card;
+--   * public.event_results is therefore empty until results are published.
+--
+-- This is deliberately NOT a finished meet. The whole point is to be able to
+-- walk the real workflow: approve -> heats appear -> score -> publish ->
+-- standings appear. Seed times are still deterministic so re-running this
+-- script converges on the same field.
+--
+-- Event spread is by athlete hash so swimmers genuinely differ from one
+-- another rather than everyone entering the same races.
 -- ---------------------------------------------------------------------------
 insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
 select
@@ -533,16 +538,23 @@ select
       + (abs(hashtext(a.id::text || ev.id::text)) % 2000)
   end,
   (abs(hashtext(a.id::text || ev.id::text)) % 12) = 0,
-  case when u.email = 'athlete02@ssc-demo.test' then 'pending_payment' else 'confirmed' end::public.entry_status
-from public.events ev
-join public.sessions s on s.id = ev.session_id
-join public.meet_volumes mv on mv.id = s.meet_volume_id and mv.volume_number = 1
-cross join public.athletes a
+  'pending_payment'::public.entry_status
+from public.athletes a
 join public.users u on u.id = a.user_id
-where ev.is_relay = false
-  and ev.is_skins = false
-  and u.email like 'athlete%@ssc-demo.test'
-  and a.approved_by_admin = true
+join lateral (
+  -- 2-4 events per athlete, chosen deterministically from the individual
+  -- (non-relay, non-skins) programme.
+  select ev.id, ev.distance_m
+  from public.events ev
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  where mv.volume_number = 1
+    and ev.is_relay = false
+    and ev.is_skins = false
+  order by abs(hashtext(a.id::text || ev.id::text))
+  limit 2 + (abs(hashtext(a.id::text)) % 3)
+) ev on true
+where u.email like 'athlete%@ssc-demo.test'
   and a.parent_link_status <> 'pending'
 on conflict (event_id, athlete_id) do update
   set seed_time_ms = excluded.seed_time_ms,
@@ -550,153 +562,44 @@ on conflict (event_id, athlete_id) do update
       status = excluded.status;
 
 -- ---------------------------------------------------------------------------
--- 8. Heats & lanes — official 6-lane sequence [4, 3, 5, 2, 1, 6], U14
--- seeded separately from the combined U17/Open field and always scheduled
--- first (see lib/seeding.ts). Buckets larger than 6 chunk into multiple
--- heats, with the fastest chunk scheduled last within its bucket — the
--- same "fastest heat last" rule the real seeding engine applies. Demo-only
--- heats are rebuilt from scratch each run (delete scoped to Vol. 1's
--- individual events, which only ever contain the demo entries above).
+-- 8. Heats, lanes, results and standings are intentionally NOT seeded.
+--
+-- They are produced by the live workflow:
+--   approve a swimmer  -> generate_heats_on_confirm  -> heats + lanes
+--   referee enters times, admin publishes            -> results
+--   apply_result_points / event_results              -> standings
+--
+-- Any rows left behind by an earlier generation of this script are cleared so
+-- a re-run always lands back on a genuinely fresh pre-meet state.
 -- ---------------------------------------------------------------------------
+delete from public.results
+where heat_lane_id in (
+  select hl.id from public.heat_lanes hl
+  join public.heats h on h.id = hl.heat_id
+  join public.events ev on ev.id = h.event_id
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  where mv.volume_number = 1
+);
+
 delete from public.heats
 where event_id in (
   select ev.id from public.events ev
   join public.sessions s on s.id = ev.session_id
   join public.meet_volumes mv on mv.id = s.meet_volume_id
-  where mv.volume_number = 1 and ev.is_relay = false and ev.is_skins = false
+  where mv.volume_number = 1
 );
 
-create temporary table _seed_heat_plan on commit drop as
-with ranked as (
-  select
-    e.id as entry_id,
-    e.event_id,
-    e.athlete_id,
-    e.seed_time_ms,
-    e.is_nt,
-    case when coalesce(e.age_group_at_entry, a.age_group) = 'U14' then 'U13_14' else 'U17_OPEN' end as heat_group,
-    row_number() over (
-      partition by e.event_id,
-        case when coalesce(e.age_group_at_entry, a.age_group) = 'U14' then 'U13_14' else 'U17_OPEN' end
-      order by
-        e.is_nt desc,
-        case when e.is_nt then null else e.seed_time_ms end asc nulls last,
-        case when e.is_nt then a.age end desc nulls last
-    ) as rank_in_bucket,
-    count(*) over (
-      partition by e.event_id,
-        case when coalesce(e.age_group_at_entry, a.age_group) = 'U14' then 'U13_14' else 'U17_OPEN' end
-    ) as bucket_size
-  from public.entries e
-  join public.athletes a on a.id = e.athlete_id
-  join public.events ev on ev.id = e.event_id
-  join public.sessions s on s.id = ev.session_id
-  join public.meet_volumes mv on mv.id = s.meet_volume_id
-  where mv.volume_number = 1 and ev.is_relay = false and ev.is_skins = false
-),
-chunked as (
-  select
-    *,
-    floor((rank_in_bucket - 1) / 6.0)::int as chunk_index,
-    ceil(bucket_size / 6.0)::int as num_chunks,
-    (((rank_in_bucket - 1) % 6) + 1)::int as lane_slot
-  from ranked
-),
-bucketed as (
-  select
-    *,
-    (num_chunks - chunk_index)::int as heat_number_in_bucket,
-    max(case when heat_group = 'U13_14' then num_chunks else 0 end)
-      over (partition by event_id) as u1314_chunk_count
-  from chunked
-)
-select
-  event_id,
-  heat_group::public.heat_group as heat_group,
-  case when heat_group = 'U13_14'
-    then heat_number_in_bucket
-    else u1314_chunk_count + heat_number_in_bucket
-  end as heat_number,
-  lane_slot,
-  entry_id
-from bucketed;
+delete from public.leaderboards
+where meet_volume_id in (select id from public.meet_volumes where volume_number = 1);
 
-with inserted_heats as (
-  insert into public.heats (event_id, heat_group, heat_number, heat_order, status)
-  select distinct event_id, heat_group, heat_number, heat_number, 'published'::public.publish_status
-  from _seed_heat_plan
-  returning id, event_id, heat_group, heat_number
-)
-insert into public.heat_lanes (heat_id, lane_number, entry_id)
-select ih.id, (array[4,3,5,2,1,6])[p.lane_slot], p.entry_id
-from _seed_heat_plan p
-join inserted_heats ih
-  on ih.event_id = p.event_id and ih.heat_group = p.heat_group and ih.heat_number = p.heat_number;
+-- Everyone starts unapproved: approving them is the first step of the demo.
+update public.athletes a
+set approved_by_admin = false
+from public.users u
+where u.id = a.user_id
+  and u.email like 'athlete%@ssc-demo.test';
 
--- ---------------------------------------------------------------------------
--- 9. Sample published results — official times with realistic drops from
--- seed. Roughly 1 in 4 heats also carries a DQ and a No-Show for QA
--- coverage of those codes, rather than every heat (which would be
--- unrealistically high). finish_place / placement_points are intentionally
--- NOT set here — public.recompute_heat_finish_places() (see schema.sql)
--- derives them automatically from official_time_ms the moment each row
--- lands, exactly as it does for real referee-entered results.
--- ---------------------------------------------------------------------------
-with lane_context as (
-  select
-    hl.id as heat_lane_id,
-    hl.heat_id,
-    hl.lane_number,
-    e.seed_time_ms,
-    e.is_nt,
-    row_number() over (partition by hl.heat_id order by hl.lane_number) as lane_seq,
-    count(*) over (partition by hl.heat_id) as lanes_in_heat,
-    (abs(hashtext(hl.heat_id::text)) % 4) = 0 as heat_has_anomaly
-  from public.heat_lanes hl
-  join public.entries e on e.id = hl.entry_id
-  join public.heats h on h.id = hl.heat_id
-  join public.events ev on ev.id = h.event_id
-  join public.sessions s on s.id = ev.session_id
-  join public.meet_volumes mv on mv.id = s.meet_volume_id
-  where mv.volume_number = 1 and ev.is_relay = false and ev.is_skins = false
-),
-scored as (
-  select
-    heat_lane_id,
-    case
-      when heat_has_anomaly and lane_seq = lanes_in_heat then 'no_show'
-      when heat_has_anomaly and lane_seq = greatest(lanes_in_heat - 1, 1) and lanes_in_heat > 1 then 'dq'
-      else 'valid'
-    end as outcome,
-    case when is_nt then (28000 + (abs(hashtext(heat_lane_id::text)) % 15000))
-      else greatest(5000, seed_time_ms - (150 + (lane_seq * 47) % 400))
-    end as official_time_ms,
-    seed_time_ms
-  from lane_context
-)
-insert into public.results (
-  heat_lane_id, result_outcome, official_time_ms, dq_code, improvement_points, status
-)
-select
-  s.heat_lane_id,
-  s.outcome::public.result_outcome,
-  case when s.outcome = 'valid' then s.official_time_ms end,
-  case when s.outcome = 'dq' then 'false_start'::public.dq_reason end,
-  case
-    when s.outcome = 'valid' and s.seed_time_ms is not null and s.official_time_ms < s.seed_time_ms
-      then least(6, round(((s.seed_time_ms - s.official_time_ms) / 100.0) * 10) / 10)
-    else 0
-  end,
-  'published'::public.publish_status
-from scored s
-on conflict (heat_lane_id) do update
-  set result_outcome = excluded.result_outcome,
-      official_time_ms = excluded.official_time_ms,
-      dq_code = excluded.dq_code,
-      improvement_points = excluded.improvement_points,
-      status = excluded.status;
-
--- ---------------------------------------------------------------------------
 -- 10. Cleanup — drop the seed-only helper function.
 -- ---------------------------------------------------------------------------
 drop function if exists public._seed_get_or_create_user(text, text, text, text);

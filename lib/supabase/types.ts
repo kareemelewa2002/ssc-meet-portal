@@ -79,6 +79,25 @@ export type TeamRow = {
   updated_at: string;
 };
 
+/** public.event_results — overall standings across every heat of an event. */
+export type EventResultRow = {
+  event_id: string;
+  event_name: string;
+  session_id: string;
+  meet_volume_id: string;
+  age_group: AgeGroup;
+  gender: Gender;
+  athlete_id: string;
+  athlete_name: string;
+  team_name: string | null;
+  heat_number: number;
+  lane_number: number;
+  official_time_ms: number;
+  result_outcome: ResultOutcome;
+  dq_code: DqReason | null;
+  event_place: number;
+};
+
 export type TeamMembershipRow = {
   id: string;
   team_id: string;
@@ -321,6 +340,7 @@ export type Database = {
       users: Table<UserRow>;
       teams: Table<TeamRow>;
       team_memberships: Table<TeamMembershipRow>;
+      event_results: Table<EventResultRow>;
       athletes: Table<AthleteRow>;
       volume_team_affiliations: Table<VolumeTeamAffiliationRow>;
       meet_volumes: Table<MeetVolumeRow>;
@@ -361,6 +381,7 @@ export type Database = {
         Args: Record<string, never>;
         Returns: boolean;
       };
+      // NOTE: event_results is a VIEW, exposed read-only through Tables below.
       visible_contacts: {
         Args: { p_user_ids: string[] };
         Returns: { user_id: string; email: string | null; phone: string | null }[];

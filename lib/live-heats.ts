@@ -364,3 +364,76 @@ export async function fetchEventSessionNumber(eventId: string): Promise<number |
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Event results — overall standings across every heat of an event.
+// ---------------------------------------------------------------------------
+
+export interface EventResultView {
+  eventId: string;
+  eventName: string;
+  ageGroup: AgeGroup;
+  gender: Gender;
+  athleteId: string;
+  athleteName: string;
+  teamName: string | null;
+  heatNumber: number;
+  officialTimeMs: number;
+  eventPlace: number;
+}
+
+/**
+ * Reads public.event_results, which ranks published results across ALL heats
+ * of an event. This is deliberately not the same as results.finish_place:
+ * heats are seeded by speed, so winning heat 1 is not winning the event.
+ */
+export async function fetchEventResultsForSession(
+  sessionId: string,
+): Promise<FetchResult<EventResultView[]>> {
+  if (sessionId.startsWith("demo-")) return { data: [], error: null, usedFallback: true };
+
+  const result = await runQuery<
+    {
+      event_id: string;
+      event_name: string;
+      age_group: AgeGroup;
+      gender: Gender;
+      athlete_id: string;
+      athlete_name: string;
+      team_name: string | null;
+      heat_number: number;
+      official_time_ms: number;
+      event_place: number;
+    }[]
+  >(
+    "Loading event results",
+    async () => {
+      const supabase = createClient();
+      return supabase
+        .from("event_results")
+        .select(
+          "event_id, event_name, age_group, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, event_place",
+        )
+        .eq("session_id", sessionId)
+        .order("event_name", { ascending: true })
+        .order("event_place", { ascending: true });
+    },
+    { empty: [] },
+  );
+
+  return {
+    ...result,
+    data: result.data.map((r) => ({
+      eventId: r.event_id,
+      eventName: r.event_name,
+      ageGroup: r.age_group,
+      gender: r.gender,
+      athleteId: r.athlete_id,
+      athleteName: r.athlete_name,
+      teamName: r.team_name,
+      heatNumber: r.heat_number,
+      officialTimeMs: r.official_time_ms,
+      eventPlace: r.event_place,
+    })),
+  };
+}

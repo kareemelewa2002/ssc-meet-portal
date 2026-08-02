@@ -14,8 +14,10 @@ import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
 import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { fetchSessionsForVolume, fetchVolumeByNumber } from "@/lib/volumes";
 import {
+  fetchEventResultsForSession,
   fetchEventSessionNumber,
   fetchLiveEventsForSession,
+  type EventResultView,
   type LiveEventView,
   type LiveHeatView,
   type LiveLaneView,
@@ -206,6 +208,7 @@ export function LiveEventsClient({
   const [ageFilter, setAgeFilter] = useState<AgeGroup | null>(null);
   const [strokeFilter, setStrokeFilter] = useState<string | null>(null);
   const [eventNameFilter, setEventNameFilter] = useState<string | null>(null);
+  const [eventResults, setEventResults] = useState<EventResultView[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -256,7 +259,12 @@ export function LiveEventsClient({
     setDataError(result.error);
     setUsedFallback(result.usedFallback);
     setLoadingEvents(false);
-  }, [currentSession]);
+    // Overall standings only matter on the results view.
+    if (isResults) {
+      const standings = await fetchEventResultsForSession(currentSession.id);
+      setEventResults(standings.data);
+    }
+  }, [currentSession, isResults]);
 
   useEffect(() => {
     setLoadingEvents(true);
@@ -489,6 +497,96 @@ export function LiveEventsClient({
           </Card>
         ) : (
           <div className="space-y-6">
+            {isResults && eventResults.length > 0 && (
+              <section aria-label="Overall event standings" className="space-y-3">
+                <div>
+                  <h2 className={cn("text-base font-bold", outdoorMode && "text-yellow-300")}>
+                    Overall standings
+                  </h2>
+                  <p
+                    className={cn(
+                      "text-xs",
+                      outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
+                    )}
+                  >
+                    Ranked across every heat — heats are seeded by speed, so winning heat 1 is not
+                    the same as winning the event.
+                  </p>
+                </div>
+                {Object.entries(
+                  eventResults
+                    .filter((r) => !eventNameFilter || r.eventName === eventNameFilter)
+                    .filter((r) => !genderFilter || r.gender === genderFilter)
+                    .filter((r) => !ageFilter || r.ageGroup === ageFilter)
+                    .reduce<Record<string, EventResultView[]>>((acc, r) => {
+                      const key = `${r.eventName} · ${r.ageGroup} · ${r.gender}`;
+                      (acc[key] ??= []).push(r);
+                      return acc;
+                    }, {}),
+                ).map(([group, rows]) => (
+                  <Card key={group} className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
+                    <CardHeader className="pb-2">
+                      <p
+                        className={cn(
+                          "text-xs font-bold tracking-wide uppercase",
+                          outdoorMode ? "text-yellow-300" : "text-muted-foreground",
+                        )}
+                      >
+                        {group}
+                      </p>
+                    </CardHeader>
+                    <CardContent className="space-y-1.5">
+                      {rows.map((r) => (
+                        <div
+                          key={r.athleteId}
+                          className={cn(
+                            "flex items-center gap-3 rounded-lg border-2 p-2",
+                            outdoorMode ? "border-yellow-300/30" : "border-border",
+                          )}
+                        >
+                          <Badge
+                            className={cn(
+                              "h-6 min-w-[34px] justify-center font-telemetry text-[11px]",
+                              r.eventPlace === 1 && "bg-neon-lime text-black",
+                              r.eventPlace === 2 && "bg-neon-cyan text-black",
+                              r.eventPlace === 3 && "bg-neon-violet text-white",
+                            )}
+                          >
+                            #{r.eventPlace}
+                          </Badge>
+                          <div className="min-w-0 flex-1">
+                            <AthleteLink
+                              athleteId={r.athleteId}
+                              name={r.athleteName}
+                              className={cn("truncate", outdoorMode && "text-yellow-300")}
+                            />
+                            {r.teamName && (
+                              <p
+                                className={cn(
+                                  "truncate text-xs",
+                                  outdoorMode ? "text-yellow-100/60" : "text-muted-foreground",
+                                )}
+                              >
+                                {r.teamName} · heat {r.heatNumber}
+                              </p>
+                            )}
+                          </div>
+                          <span
+                            className={cn(
+                              "shrink-0 font-telemetry text-sm font-bold",
+                              outdoorMode && "text-yellow-300",
+                            )}
+                          >
+                            {formatTimeMs(r.officialTimeMs)}
+                          </span>
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                ))}
+              </section>
+            )}
+
             {filteredEvents.map((ev) => (
               <div key={ev.eventId} className="space-y-2">
                 <h2 className={cn("text-base font-bold", outdoorMode && "text-yellow-300")}>
