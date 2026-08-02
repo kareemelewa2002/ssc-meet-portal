@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { describeError, failure, ok, type FetchResult } from "@/lib/fetch-policy";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
 export interface LeaderboardEntryView {
@@ -89,14 +90,16 @@ async function mergeWithAthleteDetails(rows: RawPointsRow[]): Promise<Leaderboar
     .filter((entry): entry is LeaderboardEntryView => entry !== null);
 }
 
-/** Points for a single volume's isolated leaderboard. Empty on error falls
- * back to demo data; a genuine empty result (no results published yet) is
- * returned as-is so the UI can show an honest empty state. */
+/** Points for a single volume's isolated leaderboard. A genuine empty result
+ * (no results published yet) returns [] with no error so the UI shows an
+ * honest empty state; a query failure always sets `error`. */
 export async function fetchVolumeLeaderboard(
   volumeId: string,
   category: AgeGroup,
-): Promise<LeaderboardEntryView[]> {
-  if (volumeId.startsWith("demo-")) return DEMO_LEADERBOARD;
+): Promise<FetchResult<LeaderboardEntryView[]>> {
+  if (volumeId.startsWith("demo-")) {
+    return { data: DEMO_LEADERBOARD, error: null, usedFallback: true };
+  }
 
   try {
     const supabase = createClient();
@@ -106,16 +109,20 @@ export async function fetchVolumeLeaderboard(
       .eq("meet_volume_id", volumeId)
       .eq("category", category);
 
-    if (error) return DEMO_LEADERBOARD;
-    if (!data || data.length === 0) return [];
-    return mergeWithAthleteDetails(data);
-  } catch {
-    return DEMO_LEADERBOARD;
+    if (error) {
+      return failure(describeError("Loading volume leaderboard", error), [], DEMO_LEADERBOARD);
+    }
+    if (!data || data.length === 0) return ok([]);
+    return ok(await mergeWithAthleteDetails(data));
+  } catch (err) {
+    return failure(describeError("Loading volume leaderboard", err), [], DEMO_LEADERBOARD);
   }
 }
 
 /** Series-wide standing, summed across every volume via public.series_leaderboards. */
-export async function fetchSeriesLeaderboard(category: AgeGroup): Promise<LeaderboardEntryView[]> {
+export async function fetchSeriesLeaderboard(
+  category: AgeGroup,
+): Promise<FetchResult<LeaderboardEntryView[]>> {
   try {
     const supabase = createClient();
     const { data, error } = await supabase
@@ -123,11 +130,13 @@ export async function fetchSeriesLeaderboard(category: AgeGroup): Promise<Leader
       .select("athlete_id, placement_points, improvement_points, total_points")
       .eq("category", category);
 
-    if (error) return DEMO_LEADERBOARD;
-    if (!data || data.length === 0) return [];
-    return mergeWithAthleteDetails(data);
-  } catch {
-    return DEMO_LEADERBOARD;
+    if (error) {
+      return failure(describeError("Loading series leaderboard", error), [], DEMO_LEADERBOARD);
+    }
+    if (!data || data.length === 0) return ok([]);
+    return ok(await mergeWithAthleteDetails(data));
+  } catch (err) {
+    return failure(describeError("Loading series leaderboard", err), [], DEMO_LEADERBOARD);
   }
 }
 
@@ -154,20 +163,24 @@ interface RawAthleteTeamRow {
  * client-side aggregation over the existing series_leaderboards view; no
  * schema changes needed. Athletes with no team (unattached) are excluded —
  * there's no team to attribute their points to. */
-export async function fetchTeamLeaderboard(): Promise<TeamLeaderboardEntry[]> {
+export async function fetchTeamLeaderboard(): Promise<FetchResult<TeamLeaderboardEntry[]>> {
   try {
     const supabase = createClient();
     const { data: points, error } = await supabase
       .from("series_leaderboards")
       .select("athlete_id, total_points");
-    if (error || !points || points.length === 0) return [];
+    if (error) return failure(describeError("Loading team leaderboard", error), []);
+    if (!points || points.length === 0) return ok([]);
 
     const athleteIds = (points as RawSeriesRow[]).map((p) => p.athlete_id);
     const { data: athletes, error: athleteError } = await supabase
       .from("athletes")
       .select("id, team_id, teams ( id, name )")
       .in("id", athleteIds);
-    if (athleteError || !athletes) return [];
+    if (athleteError) {
+      return failure(describeError("Loading team leaderboard rosters", athleteError), []);
+    }
+    if (!athletes) return ok([]);
 
     const teamByAthlete = new Map<string, { id: string; name: string }>();
     for (const row of athletes as unknown as RawAthleteTeamRow[]) {
@@ -190,9 +203,9 @@ export async function fetchTeamLeaderboard(): Promise<TeamLeaderboardEntry[]> {
       totals.set(team.id, existing);
     }
 
-    return [...totals.values()].sort((a, b) => b.totalPoints - a.totalPoints);
-  } catch {
-    return [];
+    return ok([...totals.values()].sort((a, b) => b.totalPoints - a.totalPoints));
+  } catch (err) {
+    return failure(describeError("Loading team leaderboard", err), []);
   }
 }
 

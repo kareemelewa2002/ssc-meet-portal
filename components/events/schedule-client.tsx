@@ -26,12 +26,12 @@ export function ScheduleClient({ volId }: { volId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const vol = await fetchVolumeByNumber(volId);
+      const volResult = await fetchVolumeByNumber(volId);
       if (cancelled) return;
-      setVolume(vol);
-      if (vol) {
-        const sess = await fetchSessionsForVolume(vol);
-        if (!cancelled) setSessions(sess);
+      setVolume(volResult.data);
+      if (volResult.data) {
+        const sess = await fetchSessionsForVolume(volResult.data);
+        if (!cancelled) setSessions(sess.data);
       }
       if (!cancelled) setLoading(false);
     })();

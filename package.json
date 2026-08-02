@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "db:verify": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-db.ts",
+    "prebuild": "npm run db:verify",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

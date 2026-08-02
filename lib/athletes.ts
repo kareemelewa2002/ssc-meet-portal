@@ -8,6 +8,7 @@ import type {
 } from "@/lib/supabase/types";
 import { firstOf } from "@/lib/live-heats";
 import { calculateAge } from "@/lib/age";
+import { describeError, failure, ok, type FetchResult } from "@/lib/fetch-policy";
 
 export const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
   U14: "U14",
@@ -452,7 +453,7 @@ export function filterCareerResults(
   );
 }
 
-export async function fetchAthleteDirectory(): Promise<AthleteDirectoryCard[]> {
+export async function fetchAthleteDirectory(): Promise<FetchResult<AthleteDirectoryCard[]>> {
   try {
     const supabase = createClient();
     const { data, error } = await supabase
@@ -465,8 +466,15 @@ export async function fetchAthleteDirectory(): Promise<AthleteDirectoryCard[]> {
         "id, age, age_group, gender, users!athletes_user_id_fkey ( full_name, profile_image_url ), teams ( name ), awards ( id, award_type, category, gender, meet_volumes ( volume_number, name ) ), entries ( id )",
       )
       .order("age", { ascending: true });
-    if (error || !data?.length) {
-      return DEMO_ATHLETES.map(toDirectoryCard);
+    // NOTE: an empty directory is a real, valid state (no approved athletes
+    // yet) — only a genuine query error is a failure. Conflating the two is
+    // what let demo athletes render as if they were real swimmers.
+    if (error) {
+      return failure(
+        describeError("Loading the athlete directory", error),
+        [],
+        DEMO_ATHLETES.map(toDirectoryCard),
+      );
     }
 
     type DirectoryRow = {
@@ -486,7 +494,7 @@ export async function fetchAthleteDirectory(): Promise<AthleteDirectoryCard[]> {
       entries: Array<{ id: string }> | null;
     };
 
-    return (data as unknown as DirectoryRow[]).map((row) => {
+    return ok((data as unknown as DirectoryRow[]).map((row) => {
       const user = firstOf(row.users);
       const team = firstOf(row.teams);
       const awardsRaw = row.awards ?? [];
@@ -512,13 +520,19 @@ export async function fetchAthleteDirectory(): Promise<AthleteDirectoryCard[]> {
           };
         }),
       };
-    });
-  } catch {
-    return DEMO_ATHLETES.map(toDirectoryCard);
+    }));
+  } catch (err) {
+    return failure(
+      describeError("Loading the athlete directory", err),
+      [],
+      DEMO_ATHLETES.map(toDirectoryCard),
+    );
   }
 }
 
-export async function fetchAthleteProfile(athleteId: string): Promise<AthleteProfileView | null> {
+export async function fetchAthleteProfile(
+  athleteId: string,
+): Promise<FetchResult<AthleteProfileView | null>> {
   const demo = DEMO_ATHLETES.find((a) => a.id === athleteId);
   try {
     const supabase = createClient();
@@ -529,7 +543,10 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
       .select("id, age, age_group, gender, date_of_birth, users!athletes_user_id_fkey ( full_name, profile_image_url ), teams ( name )")
       .eq("id", athleteId)
       .maybeSingle();
-    if (error || !athlete) return demo ?? null;
+    if (error) return failure(describeError("Loading athlete profile", error), null, demo);
+    // A real 404 (no such athlete) is not a failure — the page renders its
+    // own "athlete not found" state.
+    if (!athlete) return ok(null);
 
     type AthleteEmbed = {
       id: string;
@@ -671,7 +688,7 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
       volumesCounted: Number(s.volumes_counted),
     }));
 
-    return {
+    return ok({
       id: athleteRow.id,
       fullName: user?.full_name ?? "Athlete",
       age: athleteRow.age,
@@ -683,8 +700,8 @@ export async function fetchAthleteProfile(athleteId: string): Promise<AthletePro
       seriesStandings,
       personalBests: [...pbMap.values()],
       careerResults,
-    };
-  } catch {
-    return demo ?? null;
+    });
+  } catch (err) {
+    return failure(describeError("Loading athlete profile", err), null, demo);
   }
 }

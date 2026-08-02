@@ -9,6 +9,7 @@ import { fetchMyManagedTeam, fetchTeamDetail, type TeamDetail } from "@/lib/team
 import type { AgeGroup, TeamRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { TeamJoinRequests } from "@/components/teams/team-join-requests";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 /**
  * Coach-facing team roster — manage the team roster, view members' contact
@@ -21,16 +22,21 @@ export function CoachRoster({ className }: { className?: string }) {
   const [team, setTeam] = useState<TeamRow | null>(null);
   const [detail, setDetail] = useState<TeamDetail | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const myTeam = await fetchMyManagedTeam();
       if (cancelled) return;
-      setTeam(myTeam);
-      if (myTeam) {
-        const d = await fetchTeamDetail(myTeam.id);
-        if (!cancelled) setDetail(d);
+      setTeam(myTeam.data);
+      setDataError(myTeam.error);
+      if (myTeam.data) {
+        const d = await fetchTeamDetail(myTeam.data.id);
+        if (!cancelled) {
+          setDetail(d.data);
+          if (d.error) setDataError(d.error);
+        }
       }
       if (!cancelled) setLoading(false);
     })();
@@ -55,11 +61,18 @@ export function CoachRoster({ className }: { className?: string }) {
       <Card className={className}>
         <CardHeader>
           <CardTitle>Team roster</CardTitle>
-          <CardDescription>
-            You&rsquo;re not currently registered as a team captain — ask an admin to assign you to a
-            team&rsquo;s captain_id, or create a new team from the Teams page.
-          </CardDescription>
+          {!dataError && (
+            <CardDescription>
+              You&rsquo;re not currently registered as a team captain — ask an admin to assign you to a
+              team&rsquo;s captain_id, or create a new team from the Teams page.
+            </CardDescription>
+          )}
         </CardHeader>
+        {dataError && (
+          <CardContent>
+            <DataErrorBanner error={dataError} subject="your team roster" />
+          </CardContent>
+        )}
       </Card>
     );
   }
@@ -83,6 +96,7 @@ export function CoachRoster({ className }: { className?: string }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        <DataErrorBanner error={dataError} subject="your team roster" />
         <TeamJoinRequests teamId={team.id} />
         {roster.length === 0 ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">

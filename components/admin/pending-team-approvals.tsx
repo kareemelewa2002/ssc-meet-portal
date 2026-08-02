@@ -22,7 +22,9 @@ export function PendingTeamApprovals({ className }: { className?: string }) {
     setLoading(true);
     setError(null);
     try {
-      setTeams(await fetchPendingTeams());
+      const result = await fetchPendingTeams();
+      setTeams(result.data);
+      if (result.error) setError(result.error);
     } catch (err) {
       setError(getErrorMessage(err, "Failed to load pending teams."));
     } finally {

@@ -23,6 +23,7 @@ import {
 import { CLOCK_TIME_ERROR, parseTimeToMs } from "@/lib/format";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
 import type { MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 interface EventDraft {
   selected: boolean;
@@ -42,6 +43,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [athlete, setAthlete] = useState<CurrentAthlete | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [enteredEventIds, setEnteredEventIds] = useState<Set<string>>(new Set());
 
@@ -54,17 +56,22 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const vol = await fetchVolumeByNumber(volId);
+      const volResult = await fetchVolumeByNumber(volId);
       if (cancelled) return;
-      setVolume(vol);
+      setVolume(volResult.data);
+      if (volResult.error) setDataError(volResult.error);
 
       let loadedEvents: RegisterableEvent[] = [];
-      if (vol) {
-        const [ev, tm] = await Promise.all([fetchRegisterableEvents(vol.id), fetchTeams()]);
+      if (volResult.data) {
+        const [ev, tm] = await Promise.all([
+          fetchRegisterableEvents(volResult.data.id),
+          fetchTeams(),
+        ]);
         loadedEvents = ev;
         if (!cancelled) {
           setEvents(ev);
-          setTeams(tm.filter((t) => t.approved_by_admin));
+          setTeams(tm.data.filter((t) => t.approved_by_admin));
+          if (tm.error) setDataError(tm.error);
         }
       }
 
@@ -225,6 +232,8 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         <ArrowLeft className="size-4" />
         All Events
       </Link>
+
+      <DataErrorBanner error={dataError} subject="the event schedule" />
 
       <header>
         <h1 className="text-xl font-bold sm:text-2xl">{volume?.name ?? "Meet"} — Event Registration</h1>

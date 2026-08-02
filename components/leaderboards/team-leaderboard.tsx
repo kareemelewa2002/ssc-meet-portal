@@ -5,6 +5,7 @@ import { Trophy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchTeamLeaderboard, type TeamLeaderboardEntry } from "@/lib/leaderboard";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 const MEDAL_VARIANT = ["default", "secondary", "outline"] as const;
 
@@ -13,13 +14,15 @@ const MEDAL_VARIANT = ["default", "secondary", "outline"] as const;
 export function TeamLeaderboard({ className }: { className?: string }) {
   const [entries, setEntries] = useState<TeamLeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const rows = await fetchTeamLeaderboard();
       if (!cancelled) {
-        setEntries(rows);
+        setEntries(rows.data);
+        setDataError(rows.error);
         setLoading(false);
       }
     })();
@@ -38,10 +41,13 @@ export function TeamLeaderboard({ className }: { className?: string }) {
         <CardDescription>Team point totals accumulated across every published heat.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
+        <DataErrorBanner error={dataError} subject="team standings" />
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading team standings…</p>
         ) : entries.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No published results yet.</p>
+          <p className="text-sm text-muted-foreground">
+            {dataError ? "Standings unavailable." : "No published results yet."}
+          </p>
         ) : (
           entries.map((entry, i) => (
             <div

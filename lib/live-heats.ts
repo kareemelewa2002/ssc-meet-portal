@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { DEMO_FALLBACK_ENABLED, runQuery, type FetchResult } from "@/lib/fetch-policy";
 import type {
   AgeGroup,
   DqReason,
@@ -306,28 +307,39 @@ const LIVE_EVENT_SELECT = `
   )
 `;
 
-export async function fetchLiveEventsForSession(sessionId: string): Promise<LiveEventView[]> {
+export async function fetchLiveEventsForSession(
+  sessionId: string,
+): Promise<FetchResult<LiveEventView[]>> {
   // A demo session id means the volume/session itself came from fallback data
-  // (Supabase unreachable) — keep the whole preview consistent.
-  if (sessionId.startsWith("demo-")) return DEMO_LIVE_EVENTS;
-
-  try {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("events")
-      .select(LIVE_EVENT_SELECT)
-      .eq("session_id", sessionId)
-      .order("event_order", { ascending: true });
-
-    // A query error falls back to demo data so the UI still previews
-    // correctly; a genuinely empty result (no events entered yet) is real
-    // and should be shown as such, not masked with fake heats.
-    if (error) return DEMO_LIVE_EVENTS;
-    if (!data) return [];
-    return transformLiveEvents(data as unknown as RawEvent[]);
-  } catch {
-    return DEMO_LIVE_EVENTS;
+  // (only reachable with NEXT_PUBLIC_ALLOW_DEMO_FALLBACK on) — keep the
+  // preview internally consistent rather than mixing demo + live.
+  if (sessionId.startsWith("demo-")) {
+    return { data: DEMO_LIVE_EVENTS, error: null, usedFallback: true };
   }
+
+  const result = await runQuery<RawEvent[]>(
+    "Loading heat sheets for this session",
+    async () => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("events")
+        .select(LIVE_EVENT_SELECT)
+        .eq("session_id", sessionId)
+        .order("event_order", { ascending: true });
+      return { data: data as unknown as RawEvent[] | null, error };
+    },
+    // NOTE: `empty: []` is what a real "no events seeded yet" session returns
+    // too — the difference is that a failure also sets `error`, so the UI can
+    // tell an empty schedule apart from a broken query. That distinction is
+    // exactly what was missing when the 'usher' RLS outage went unnoticed.
+    { empty: [], demo: [] },
+  );
+
+  return {
+    ...result,
+    data: result.error && DEMO_FALLBACK_ENABLED ? DEMO_LIVE_EVENTS : transformLiveEvents(result.data),
+    usedFallback: result.error != null && DEMO_FALLBACK_ENABLED,
+  };
 }
 
 /** Resolves which session number a specific event belongs to — used when a

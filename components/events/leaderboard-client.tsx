@@ -18,6 +18,7 @@ import {
 } from "@/lib/leaderboard";
 import type { AgeGroup, Gender, MeetVolumeRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 type Scope = "volume" | "series";
 type LeaderboardTab = "champions" | "progress";
@@ -111,12 +112,13 @@ export function LeaderboardClient({ volId }: { volId: string }) {
   const [tab, setTab] = useState<LeaderboardTab>("champions");
   const [entries, setEntries] = useState<LeaderboardEntryView[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const vol = await fetchVolumeByNumber(volId);
-      if (!cancelled) setVolume(vol);
+      if (!cancelled) setVolume(vol.data);
     })();
     return () => {
       cancelled = true;
@@ -126,11 +128,12 @@ export function LeaderboardClient({ volId }: { volId: string }) {
   const loadEntries = useCallback(async () => {
     if (!volume) return;
     setLoading(true);
-    const data =
+    const result =
       scope === "volume"
         ? await fetchVolumeLeaderboard(volume.id, category)
         : await fetchSeriesLeaderboard(category);
-    setEntries(data);
+    setEntries(result.data);
+    setDataError(result.error);
     setLoading(false);
   }, [volume, scope, category]);
 
@@ -166,6 +169,12 @@ export function LeaderboardClient({ volId }: { volId: string }) {
           </Link>
           <OutdoorModeToggle />
         </div>
+
+        <DataErrorBanner
+          error={dataError}
+          subject="leaderboard standings"
+          onRetry={() => void loadEntries()}
+        />
 
         <header>
           <h1 className={cn("flex items-center gap-2 text-xl font-bold sm:text-2xl", outdoorMode && "text-yellow-300")}>

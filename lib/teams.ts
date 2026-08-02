@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
+import { describeError, failure, ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
 import type { TeamRow } from "@/lib/supabase/types";
 
 export interface TeamCreateInput {
@@ -55,58 +56,57 @@ export function didTransferTeams(history: TeamHistoryEntry[]): boolean {
 /** The public team directory grid — always approved-only, regardless of
  * viewer role. Pending teams surface separately via fetchPendingTeams(),
  * in the admin approval queue, never mixed into the public listing. */
-export async function fetchTeams(): Promise<TeamRow[]> {
-  try {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("teams")
-      .select("*")
-      .eq("approved_by_admin", true)
-      .order("name", { ascending: true });
-    if (error || !data) return [];
-    return data;
-  } catch {
-    return [];
-  }
+export async function fetchTeams(): Promise<FetchResult<TeamRow[]>> {
+  return runQuery<TeamRow[]>(
+    "Loading the team directory",
+    async () => {
+      const supabase = createClient();
+      return supabase
+        .from("teams")
+        .select("*")
+        .eq("approved_by_admin", true)
+        .order("name", { ascending: true });
+    },
+    { empty: [] },
+  );
 }
 
 /** Admin-only queue — RLS (admins_full_access_teams) already restricts this
  * to admins; non-admin callers simply get an empty list back. */
-export async function fetchPendingTeams(): Promise<TeamRow[]> {
-  try {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("teams")
-      .select("*")
-      .eq("approved_by_admin", false)
-      .order("created_at", { ascending: true });
-    if (error || !data) return [];
-    return data;
-  } catch {
-    return [];
-  }
+export async function fetchPendingTeams(): Promise<FetchResult<TeamRow[]>> {
+  return runQuery<TeamRow[]>(
+    "Loading pending team approvals",
+    async () => {
+      const supabase = createClient();
+      return supabase
+        .from("teams")
+        .select("*")
+        .eq("approved_by_admin", false)
+        .order("created_at", { ascending: true });
+    },
+    { empty: [] },
+  );
 }
 
 /** The team a signed-in Coach manages, via teams.captain_id = auth.uid() —
  * independent of the role column (see supabase/schema.sql's user_role
  * comment: a coach stays 'coach' even while also serving as a team's
  * captain). Null if this coach doesn't captain any team yet. */
-export async function fetchMyManagedTeam(): Promise<TeamRow | null> {
+export async function fetchMyManagedTeam(): Promise<FetchResult<TeamRow | null>> {
   try {
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return null;
-    const { data, error } = await supabase
-      .from("teams")
-      .select("*")
-      .eq("captain_id", user.id)
-      .maybeSingle();
-    if (error || !data) return null;
-    return data;
-  } catch {
-    return null;
+    // Signed out is a legitimate state, not a failure.
+    if (!user) return ok(null);
+    return await runQuery<TeamRow | null>(
+      "Loading the team you manage",
+      async () => supabase.from("teams").select("*").eq("captain_id", user.id).maybeSingle(),
+      { empty: null },
+    );
+  } catch (err) {
+    return failure(`Loading the team you manage: ${String(err)}`, null);
   }
 }
 
@@ -120,22 +120,32 @@ export interface MyAthleteSummary {
  * they're an athlete — drives team-creation eligibility (Open-only) and the
  * "Request to Join Team" button's state on the Teams page. Null for
  * non-athlete roles or signed-out visitors. */
-export async function fetchMyAthleteSummary(): Promise<MyAthleteSummary | null> {
+export async function fetchMyAthleteSummary(): Promise<FetchResult<MyAthleteSummary | null>> {
   try {
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return null;
-    const { data, error } = await supabase
-      .from("athletes")
-      .select("id, age_group, team_id")
-      .eq("user_id", user.id)
-      .maybeSingle();
-    if (error || !data) return null;
-    return { athleteId: data.id, ageGroup: data.age_group, teamId: data.team_id };
-  } catch {
-    return null;
+    // Signed out, or a coach/parent/admin with no athlete row — both are
+    // legitimate "no summary" states, not failures.
+    if (!user) return ok(null);
+    const result = await runQuery<{ id: string; age_group: string; team_id: string | null } | null>(
+      "Loading your athlete profile",
+      async () =>
+        supabase.from("athletes").select("id, age_group, team_id").eq("user_id", user.id).maybeSingle(),
+      { empty: null },
+    );
+    if (result.error || !result.data) return { ...result, data: null };
+    return {
+      ...result,
+      data: {
+        athleteId: result.data.id,
+        ageGroup: result.data.age_group,
+        teamId: result.data.team_id,
+      },
+    };
+  } catch (err) {
+    return failure(`Loading your athlete profile: ${String(err)}`, null);
   }
 }
 
@@ -185,10 +195,14 @@ export interface TeamDetail {
 /** Team profile detail — captain contact + current member roster (athletes
  * whose current team_id is this team; independent of any single volume's
  * representation, which volume_team_affiliations tracks separately). */
-export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
+export async function fetchTeamDetail(teamId: string): Promise<FetchResult<TeamDetail>> {
+  const EMPTY: TeamDetail = { captain: null, roster: [] };
   try {
     const supabase = createClient();
-    const [{ data: team }, { data: roster }] = await Promise.all([
+    const [
+      { data: team, error: teamError },
+      { data: roster, error: rosterError },
+    ] = await Promise.all([
       supabase.from("teams").select("captain_id, users ( full_name, email, phone )").eq("id", teamId).maybeSingle(),
       supabase
         .from("athletes")
@@ -197,6 +211,15 @@ export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
         .select("id, age_group, gender, users!athletes_user_id_fkey ( full_name, email, phone )")
         .eq("team_id", teamId),
     ]);
+
+    // Either half failing means the modal would render a misleadingly empty
+    // roster / missing captain, so surface it rather than silently degrade.
+    if (teamError || rosterError) {
+      return failure(
+        describeError("Loading team roster", teamError ?? rosterError),
+        EMPTY,
+      );
+    }
 
     type RawTeam = {
       captain_id: string | null;
@@ -228,9 +251,9 @@ export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
       };
     });
 
-    return { captain, roster: members };
-  } catch {
-    return { captain: null, roster: [] };
+    return ok({ captain, roster: members });
+  } catch (err) {
+    return failure(describeError("Loading team roster", err), EMPTY);
   }
 }
 
@@ -240,16 +263,25 @@ interface RawAffiliationRow {
   teams: { name: string } | { name: string }[] | null;
 }
 
-export async function fetchTeamHistoryForAthlete(athleteId: string): Promise<TeamHistoryEntry[]> {
-  try {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("volume_team_affiliations")
-      .select("team_id, meet_volumes ( volume_number, name ), teams ( name )")
-      .eq("athlete_id", athleteId);
-    if (error || !data) return [];
+export async function fetchTeamHistoryForAthlete(
+  athleteId: string,
+): Promise<FetchResult<TeamHistoryEntry[]>> {
+  const result = await runQuery<RawAffiliationRow[]>(
+    "Loading team history",
+    async () => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("volume_team_affiliations")
+        .select("team_id, meet_volumes ( volume_number, name ), teams ( name )")
+        .eq("athlete_id", athleteId);
+      return { data: data as unknown as RawAffiliationRow[] | null, error };
+    },
+    { empty: [] },
+  );
 
-    return (data as unknown as RawAffiliationRow[]).map((row) => {
+  return {
+    ...result,
+    data: result.data.map((row) => {
       const volume = firstOf(row.meet_volumes);
       const team = firstOf(row.teams);
       return {
@@ -258,8 +290,6 @@ export async function fetchTeamHistoryForAthlete(athleteId: string): Promise<Tea
         teamId: row.team_id,
         teamName: team?.name ?? null,
       };
-    });
-  } catch {
-    return [];
-  }
+    }),
+  };
 }

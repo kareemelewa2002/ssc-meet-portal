@@ -24,6 +24,7 @@ import { formatTimeMs, timeDropSeconds } from "@/lib/format";
 import { DQ_REASON_LABELS } from "@/lib/results";
 import type { AgeGroup, Gender, MeetVolumeRow, SessionRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
   U14: "U14",
@@ -155,6 +156,10 @@ export function LiveEventsClient({ volId }: { volId: string }) {
   const [events, setEvents] = useState<LiveEventView[]>([]);
   const [loadingEvents, setLoadingEvents] = useState(true);
   const [live, setLive] = useState(false);
+  // A failed query must never look like an empty schedule — see
+  // lib/fetch-policy.ts for why this exists.
+  const [dataError, setDataError] = useState<string | null>(null);
+  const [usedFallback, setUsedFallback] = useState(false);
 
   const [genderFilter, setGenderFilter] = useState<Gender | null>(null);
   const [ageFilter, setAgeFilter] = useState<AgeGroup | null>(null);
@@ -163,12 +168,18 @@ export function LiveEventsClient({ volId }: { volId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const vol = await fetchVolumeByNumber(volId);
+      const volResult = await fetchVolumeByNumber(volId);
       if (cancelled) return;
-      setVolume(vol);
-      if (vol) {
-        const sess = await fetchSessionsForVolume(vol);
-        if (!cancelled) setSessions(sess);
+      setVolume(volResult.data);
+      if (volResult.error) {
+        setDataError(volResult.error);
+        return;
+      }
+      if (volResult.data) {
+        const sess = await fetchSessionsForVolume(volResult.data);
+        if (cancelled) return;
+        setSessions(sess.data);
+        if (sess.error) setDataError(sess.error);
       }
     })();
     return () => {
@@ -198,8 +209,10 @@ export function LiveEventsClient({ volId }: { volId: string }) {
 
   const loadEvents = useCallback(async () => {
     if (!currentSession) return;
-    const data = await fetchLiveEventsForSession(currentSession.id);
-    setEvents(data);
+    const result = await fetchLiveEventsForSession(currentSession.id);
+    setEvents(result.data);
+    setDataError(result.error);
+    setUsedFallback(result.usedFallback);
     setLoadingEvents(false);
   }, [currentSession]);
 
@@ -287,6 +300,13 @@ export function LiveEventsClient({ volId }: { volId: string }) {
           </p>
         </header>
 
+        <DataErrorBanner
+          error={dataError}
+          usedFallback={usedFallback}
+          subject="heat sheets"
+          onRetry={() => void loadEvents()}
+        />
+
         {eventFilterId ? (
           <div
             className={cn(
@@ -369,9 +389,11 @@ export function LiveEventsClient({ volId }: { volId: string }) {
                 )}
               />
               <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
-                {events.length === 0
-                  ? "No heat sheets published for this session yet — check back soon."
-                  : "No swimmers match the selected filters."}
+                {dataError
+                  ? "Heat sheets couldn’t be loaded — see the error above."
+                  : events.length === 0
+                    ? "No heat sheets published for this session yet — check back soon."
+                    : "No swimmers match the selected filters."}
               </p>
             </CardContent>
           </Card>

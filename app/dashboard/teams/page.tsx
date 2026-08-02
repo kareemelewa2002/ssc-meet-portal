@@ -36,7 +36,7 @@ export default function DashboardTeamsPage() {
         if (!athlete) return;
 
         const real = await fetchTeamHistoryForAthlete(athlete.id);
-        if (!cancelled && real.length > 0) setHistory(real);
+        if (!cancelled && real.data.length > 0) setHistory(real.data);
       } finally {
         if (!cancelled) setLoading(false);
       }

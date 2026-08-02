@@ -26,20 +26,23 @@ import {
 import { formatTimeMs } from "@/lib/format";
 import { DQ_REASON_LABELS } from "@/lib/results";
 import { AppHeader } from "@/components/layout/app-header";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 export default function AthleteProfilePage() {
   const params = useParams<{ id: string }>();
   const athleteId = params.id;
   const [profile, setProfile] = useState<AthleteProfileView | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
   const [ledgerQuery, setLedgerQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const data = await fetchAthleteProfile(athleteId);
+      const result = await fetchAthleteProfile(athleteId);
       if (!cancelled) {
-        setProfile(data);
+        setProfile(result.data);
+        setDataError(result.error);
         setLoading(false);
       }
     })();
@@ -67,7 +70,8 @@ export default function AthleteProfilePage() {
           <Link href="/athletes" className="inline-flex min-h-[48px] items-center text-sm text-muted-foreground hover:text-foreground">
             <ArrowLeft className="mr-1 size-4" /> All athletes
           </Link>
-          <p className="font-medium">Athlete not found.</p>
+          <DataErrorBanner error={dataError} subject="this athlete profile" />
+          {!dataError && <p className="font-medium">Athlete not found.</p>}
         </main>
       </div>
     );

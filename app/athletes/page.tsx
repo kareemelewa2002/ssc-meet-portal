@@ -16,6 +16,7 @@ import {
   filterAthletes,
   type AthleteDirectoryCard,
 } from "@/lib/athletes";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
 export default function AthletesDirectoryPage() {
@@ -24,13 +25,15 @@ export default function AthletesDirectoryPage() {
   const [gender, setGender] = useState<Gender | null>(null);
   const [ageGroup, setAgeGroup] = useState<AgeGroup | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const data = await fetchAthleteDirectory();
+      const result = await fetchAthleteDirectory();
       if (!cancelled) {
-        setAthletes(data);
+        setAthletes(result.data);
+        setDataError(result.error);
         setLoading(false);
       }
     })();
@@ -63,6 +66,8 @@ export default function AthletesDirectoryPage() {
           Search the SSC roster by name or team. Tap a card for the full public profile.
         </p>
       </header>
+
+      <DataErrorBanner error={dataError} subject="the athlete directory" />
 
       <div className="relative">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
@@ -104,7 +109,9 @@ export default function AthletesDirectoryPage() {
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-10 text-center">
             <Users className="size-8 text-muted-foreground" />
-            <p className="font-medium">No athletes match your filters</p>
+            <p className="font-medium">
+              {dataError ? "Athlete directory unavailable" : "No athletes match your filters"}
+            </p>
           </CardContent>
         </Card>
       ) : (

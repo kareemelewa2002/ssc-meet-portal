@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { resolveSkinsEventId } from "@/lib/skins-qualification";
 import { SkinsKnockout } from "@/components/admin/skins-knockout";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
 import { PendingSwimmerApprovals } from "@/components/admin/pending-swimmer-approvals";
@@ -22,6 +24,32 @@ const TABS = [
 
 export default function AdminPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("pending");
+  // The Skins bracket queries uuid columns, so it can only ever be mounted
+  // with a real event UUID — never the old "50m-freestyle-skins" slug.
+  const [skinsEventId, setSkinsEventId] = useState<string | null>(null);
+  const [skinsError, setSkinsError] = useState<string | null>(null);
+  const [skinsResolving, setSkinsResolving] = useState(false);
+  // A ref, not state: setSkinsResolving(true) inside the effect would retrigger
+  // it if `skinsResolving` were a dependency, and the resulting cleanup would
+  // cancel the in-flight lookup before it ever resolved.
+  const skinsRequested = useRef(false);
+
+  useEffect(() => {
+    if (tab !== "skins" || skinsRequested.current) return;
+    skinsRequested.current = true;
+    let cancelled = false;
+    setSkinsResolving(true);
+    (async () => {
+      const result = await resolveSkinsEventId();
+      if (cancelled) return;
+      setSkinsEventId(result.data);
+      setSkinsError(result.error);
+      setSkinsResolving(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
 
   return (
     <div className="min-h-screen">
@@ -46,7 +74,24 @@ export default function AdminPage() {
       {tab === "teams" && <PendingTeamApprovals />}
       {tab === "heatcards" && <RefereeHeatCards />}
       {tab === "cash" && <CashPayments />}
-      {tab === "skins" && <SkinsKnockout eventId="50m-freestyle-skins" />}
+      {tab === "skins" && (
+        <>
+          <DataErrorBanner error={skinsError} subject="the Skins event" />
+          {skinsResolving ? (
+            <p className="text-sm text-muted-foreground">Resolving the Skins event…</p>
+          ) : skinsEventId ? (
+            <SkinsKnockout eventId={skinsEventId} />
+          ) : (
+            !skinsError && (
+              <p className="text-sm text-muted-foreground">
+                No Skins event found for this meet. Seed an event with{" "}
+                <code className="font-mono">is_skins = true</code>, or set{" "}
+                <code className="font-mono">NEXT_PUBLIC_SKINS_EVENT_ID</code> to its UUID.
+              </p>
+            )
+          )}
+        </>
+      )}
       {tab === "users" && <UserRoleManagement />}
       </main>
     </div>

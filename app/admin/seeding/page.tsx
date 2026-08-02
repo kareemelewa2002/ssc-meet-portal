@@ -51,12 +51,12 @@ export default function AdminSeedingPage() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const vol = await fetchActiveVolume();
+      const volResult = await fetchActiveVolume();
       if (cancelled) return;
-      setVolume(vol);
-      if (vol) {
-        const sess = await fetchSessionsForVolume(vol);
-        if (!cancelled) setSessions(sess);
+      setVolume(volResult.data);
+      if (volResult.data) {
+        const sess = await fetchSessionsForVolume(volResult.data);
+        if (!cancelled) setSessions(sess.data);
       }
     })();
     return () => {

@@ -22,6 +22,8 @@ import { AppHeader } from "@/components/layout/app-header";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { TeamJoinRequests } from "@/components/teams/team-join-requests";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { firstError } from "@/lib/fetch-policy";
 import {
   createTeam,
   fetchMyAthleteSummary,
@@ -55,6 +57,7 @@ export default function TeamsPage() {
   const [myAthlete, setMyAthlete] = useState<MyAthleteSummary | null>(null);
   const [myJoinRequest, setMyJoinRequest] = useState<MyJoinRequest | null>(null);
   const [joinBusyTeamId, setJoinBusyTeamId] = useState<string | null>(null);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   const canCaptainTeam =
     user?.role === "coach" || user?.role === "admin" || (user?.role === "athlete" && myAthlete?.ageGroup === "Open");
@@ -62,7 +65,9 @@ export default function TeamsPage() {
   const openRoster = async (team: TeamRow) => {
     setRosterTeam(team);
     setRosterLoading(true);
-    setRosterDetail(await fetchTeamDetail(team.id));
+    const detail = await fetchTeamDetail(team.id);
+    setRosterDetail(detail.data);
+    if (detail.error) setDataError(detail.error);
     setRosterLoading(false);
   };
 
@@ -73,9 +78,10 @@ export default function TeamsPage() {
       fetchMyAthleteSummary(),
       fetchMyJoinRequest(),
     ]);
-    setTeams(teamsList);
-    setMyAthlete(athleteSummary);
+    setTeams(teamsList.data);
+    setMyAthlete(athleteSummary.data);
     setMyJoinRequest(joinRequest);
+    setDataError(firstError(teamsList, athleteSummary));
     setLoading(false);
   };
 
@@ -213,6 +219,8 @@ export default function TeamsPage() {
         )}
       </header>
 
+      <DataErrorBanner error={dataError} subject="teams" onRetry={() => void load()} />
+
       {user?.role === "admin" && <PendingTeamApprovals />}
 
       {loading ? (
@@ -220,7 +228,7 @@ export default function TeamsPage() {
       ) : teams.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            No teams yet — be the first to create one.
+            {dataError ? "Team directory unavailable." : "No teams yet — be the first to create one."}
           </CardContent>
         </Card>
       ) : (

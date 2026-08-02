@@ -1,5 +1,8 @@
 import { LANE_SEQUENCE, LANES_PER_HEAT, type DraftHeat, type DraftHeatLane } from "@/lib/seeding";
 import type { AgeGroup, HeatGroup, SkinsResponse } from "@/lib/supabase/types";
+import { createClient } from "@/lib/supabase/client";
+import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
+import { isValidUuid } from "@/lib/utils";
 
 export const SKINS_SLOTS_PER_CATEGORY = 6;
 
@@ -148,4 +151,33 @@ export function nextRolloverAthlete(
   const beforeIds = new Set(before.filter((q) => q.isActiveQualifier).map((q) => q.athleteId));
   const newlyActive = after.find((q) => q.isActiveQualifier && !beforeIds.has(q.athleteId));
   return newlyActive ?? null;
+}
+
+/**
+ * Resolves the Skins event's real UUID.
+ *
+ * The admin dashboard used to hard-code `eventId="50m-freestyle-skins"` — a
+ * slug, not a UUID — so every query it issued against uuid columns failed
+ * with 22P02 and the Skins tab could never load real data.
+ * NEXT_PUBLIC_SKINS_EVENT_ID is the intended override, but it ships as the
+ * literal string "placeholder-skins-event-uuid" in fresh checkouts, so it is
+ * only trusted when it actually parses as a UUID. Otherwise the single
+ * `events.is_skins = true` row is authoritative — that flag is set by
+ * supabase/seed-demo.sql's canonical program, so this self-heals across
+ * re-seeds instead of drifting whenever ids are regenerated.
+ */
+export async function resolveSkinsEventId(): Promise<FetchResult<string | null>> {
+  const configured = process.env.NEXT_PUBLIC_SKINS_EVENT_ID;
+  if (configured && isValidUuid(configured)) return ok(configured);
+
+  const result = await runQuery<{ id: string }[]>(
+    "Resolving the Skins event",
+    async () => {
+      const supabase = createClient();
+      return supabase.from("events").select("id").eq("is_skins", true).limit(1);
+    },
+    { empty: [] },
+  );
+
+  return { ...result, data: result.data[0]?.id ?? null };
 }
