@@ -135,18 +135,10 @@ test.describe("Part 5 checklist — Referee Flow", () => {
 });
 
 test.describe("Part 5 checklist — Admin Flow", () => {
-  test("admin approves pending athletes/teams, marks cash payment received, publishes a referee heat card", async ({ page }) => {
+  test("admin approves pending teams, confirms cash payment, publishes a referee heat card", async ({ page }) => {
     await login(page, CREDENTIALS.admin);
     await page.goto("/admin");
     await page.waitForTimeout(1000);
-
-    // Approve pending athletes (if any are currently pending).
-    const approveSwimmerBtn = page.getByRole("button", { name: "Approve Swimmer" }).first();
-    if (await approveSwimmerBtn.count()) {
-      await approveSwimmerBtn.click();
-      await page.waitForTimeout(1000);
-      await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
-    }
 
     // Approve pending teams (if any are currently pending).
     await page.getByRole("button", { name: "Pending Team Approvals" }).click();
@@ -161,7 +153,7 @@ test.describe("Part 5 checklist — Admin Flow", () => {
     // Mark a cash payment received (if any are currently pending).
     await page.getByRole("button", { name: "Cash Payments" }).click();
     await page.waitForTimeout(800);
-    const cashBtn = page.getByRole("button", { name: "Approve & Confirm Payment" }).first();
+    const cashBtn = page.getByRole("button", { name: "Confirm Payment" }).first();
     if (await cashBtn.count()) {
       await cashBtn.click();
       await page.waitForTimeout(1000);

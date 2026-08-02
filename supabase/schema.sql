@@ -355,8 +355,15 @@ create table if not exists public.athletes (
 );
 
 -- Idempotent column add for databases that already had athletes without approval.
+-- Retained for historical rows and for the admin "deactivate" affordance,
+-- but it no longer gates anything: athletes are approved on creation. The
+-- real gate is payment — an admin confirms cash at the desk, which confirms
+-- the entries and seeds the heats. A separate account-approval step just
+-- meant a swimmer could pay and still not be able to swim.
 alter table public.athletes
-  add column if not exists approved_by_admin boolean not null default false;
+  add column if not exists approved_by_admin boolean not null default true;
+alter table public.athletes alter column approved_by_admin set default true;
+update public.athletes set approved_by_admin = true where approved_by_admin = false;
 
 -- ---------------------------------------------------------------------------
 -- SAFETY & PRIVACY ACKNOWLEDGEMENT
@@ -1009,7 +1016,7 @@ begin
         else 'none'
       end::public.parent_link_status,
       case when v_needs_parent and v_parent_id is null then v_parent_email else null end,
-      false,
+      true,
       -- A U14 cannot accept for themselves no matter what the form sent;
       -- their guardian must do it from their own account afterwards.
       case

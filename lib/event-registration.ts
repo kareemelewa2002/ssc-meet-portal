@@ -145,7 +145,7 @@ export interface SubmitEntriesResult {
 export async function submitEventRegistration(params: {
   athleteId: string;
   parentLinkStatus: ParentLinkStatus;
-  approvedByAdmin?: boolean;
+  safetyAcceptedAt?: string | null;
   meetVolumeId: string;
   teamId: string | null;
   selections: EventSelection[];
@@ -153,13 +153,13 @@ export async function submitEventRegistration(params: {
   const {
     athleteId,
     parentLinkStatus,
-    approvedByAdmin,
+    safetyAcceptedAt,
     meetVolumeId,
     teamId,
     selections,
   } = params;
 
-  const gate = canSubmitEntries({ parentLinkStatus, approvedByAdmin });
+  const gate = canSubmitEntries({ parentLinkStatus, safetyAcceptedAt });
   if (!gate.ok) {
     return { success: false, error: gate.error };
   }

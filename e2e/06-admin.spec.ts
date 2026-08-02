@@ -8,18 +8,11 @@ test.describe("Admin dashboard", () => {
     await page.waitForTimeout(1000);
   });
 
-  test("Pending Swimmer Registrations tab renders without error (row or honest empty state)", async ({ page }) => {
-    await expect(page.locator('[data-slot="card-title"]', { hasText: "Pending swimmer registrations" })).toBeVisible();
-    // Either a real pending row or the explicit empty-state message —
-    // never a silently blank card, and never the old hardcoded demo
-    // fixture names ("Jordan Blake" / "Sasha Okonkwo").
-    await page.waitForTimeout(1000);
-    const bodyText = await page.locator("main").innerText();
-    expect(bodyText).not.toContain("Jordan Blake");
-    expect(bodyText).not.toContain("Sasha Okonkwo");
-    const hasEmptyState = bodyText.includes("No pending swimmer registrations.");
-    const hasApproveButton = await page.getByRole("button", { name: "Approve Swimmer" }).count();
-    expect(hasEmptyState || hasApproveButton > 0).toBe(true);
+  test("there is no swimmer-approval queue — accounts need no approval", async ({ page }) => {
+    // Approving accounts was removed: paying the entry fee is the gate, and
+    // confirming that payment is what seeds the heats.
+    await expect(page.getByRole("button", { name: "Pending Swimmer Registrations" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Approve Swimmer" })).toHaveCount(0);
   });
 
   test("Pending Team Approvals tab can approve a real pending team", async ({ page }) => {
@@ -82,7 +75,7 @@ test.describe("Admin dashboard", () => {
 
     const target = (await row.count()) ? row : anyRow;
     await expect(target.getByText(/Cash Payment Pending on Deck/)).toBeVisible();
-    await target.getByRole("button", { name: "Approve & Confirm Payment" }).click();
+    await target.getByRole("button", { name: "Confirm Payment" }).click();
     await page.waitForTimeout(1500);
     await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
   });

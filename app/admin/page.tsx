@@ -7,7 +7,6 @@ import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { resolveSkinsEventId } from "@/lib/skins-qualification";
 import { SkinsKnockout } from "@/components/admin/skins-knockout";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
-import { PendingSwimmerApprovals } from "@/components/admin/pending-swimmer-approvals";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
 import { CashPayments } from "@/components/admin/cash-payments";
@@ -15,7 +14,6 @@ import { AppHeader } from "@/components/layout/app-header";
 import { AdminKpiStrip } from "@/components/admin/admin-kpi-strip";
 
 const TABS = [
-  { id: "pending", label: "Pending Swimmer Registrations", shortLabel: "Swimmers" },
   { id: "teams", label: "Pending Team Approvals", shortLabel: "Teams" },
   { id: "heatcards", label: "Referee Heat Cards", shortLabel: "Heat Cards" },
   { id: "cash", label: "Cash Payments", shortLabel: "Cash" },
@@ -24,7 +22,7 @@ const TABS = [
 ] as const;
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("pending");
+  const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("cash");
   // The Skins bracket queries uuid columns, so it can only ever be mounted
   // with a real event UUID — never the old "50m-freestyle-skins" slug.
   const [skinsEventId, setSkinsEventId] = useState<string | null>(null);
@@ -80,7 +78,6 @@ export default function AdminPage() {
         ))}
       </div>
 
-      {tab === "pending" && <PendingSwimmerApprovals />}
       {tab === "teams" && <PendingTeamApprovals />}
       {tab === "heatcards" && <RefereeHeatCards />}
       {tab === "cash" && <CashPayments />}

@@ -19,7 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import {
   fetchPendingCashPayments,
-  approveAndConfirmPayment,
+  confirmCashPayment,
   type PendingPaymentAthlete,
 } from "@/lib/admin-cash-payments";
 
@@ -50,12 +50,12 @@ export function CashPayments({ className }: { className?: string }) {
     setBusyAthleteId(row.athleteId);
     setError(null);
     try {
-      const res = await approveAndConfirmPayment(row.athleteId, row.entryIds);
+      const res = await confirmCashPayment(row.entryIds);
       if (!res.success) throw new Error(res.error ?? "Failed to confirm cash payment.");
       setRows((prev) => prev.filter((r) => r.athleteId !== row.athleteId));
       toast.success(
-        "Swimmer approved & payment confirmed",
-        `${row.athleteName} — ${row.totalEgp} EGP received.`,
+        "Payment confirmed — heats seeded",
+        `${row.athleteName} — ${row.totalEgp} EGP received. Their races are now in the heat sheet.`,
       );
     } catch (err) {
       const message = getErrorMessage(err, "Failed to confirm cash payment.");
@@ -70,9 +70,10 @@ export function CashPayments({ className }: { className?: string }) {
     <Card className={className}>
       <CardHeader className="flex flex-row items-start justify-between gap-3">
         <div>
-          <CardTitle>Approvals & cash on deck</CardTitle>
+          <CardTitle>Cash on deck</CardTitle>
           <CardDescription>
-            Verify each swimmer&rsquo;s cash payment (300 EGP / race) at the meet desk, then confirm here.
+            Verify each swimmer&rsquo;s cash payment (300 EGP / race) at the meet desk, then confirm
+            here. Confirming seeds their races into the heat sheet.
           </CardDescription>
         </div>
         <Button
@@ -144,7 +145,7 @@ export function CashPayments({ className }: { className?: string }) {
                         ) : (
                           <CheckCircle2 className="size-4" />
                         )}
-                        Approve & Confirm Payment
+                        Confirm Payment
                       </Button>
                     </TableCell>
                   </TableRow>

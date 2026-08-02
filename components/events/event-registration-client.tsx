@@ -38,7 +38,6 @@ interface EventDraft {
 interface CurrentAthlete {
   id: string;
   parentLinkStatus: ParentLinkStatus;
-  approvedByAdmin: boolean;
   ageGroup: AgeGroup | null;
   safetyAcceptedAt: string | null | undefined;
 }
@@ -93,7 +92,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         }
         const { data: athleteRow } = await supabase
           .from("athletes")
-          .select("id, parent_link_status, approved_by_admin, age_group")
+          .select("id, parent_link_status, age_group")
           .eq("user_id", user.id)
           .maybeSingle();
         if (!athleteRow) {
@@ -117,7 +116,6 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           setAthlete({
             id: athleteRow.id,
             parentLinkStatus: athleteRow.parent_link_status,
-            approvedByAdmin: athleteRow.approved_by_admin,
             ageGroup: athleteRow.age_group,
             safetyAcceptedAt: safetyAcceptedAt,
           });
@@ -249,7 +247,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
       const res = await submitEventRegistration({
         athleteId: athlete.id,
         parentLinkStatus: athlete.parentLinkStatus,
-        approvedByAdmin: athlete.approvedByAdmin,
+        safetyAcceptedAt: athlete.safetyAcceptedAt,
         meetVolumeId: volume.id,
         teamId,
         selections,

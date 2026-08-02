@@ -18,7 +18,7 @@ import {
 } from "@/lib/age";
 import {
   PARENT_EMAIL_REQUIRED_MESSAGE,
-  SWIMMER_PENDING_APPROVAL_MESSAGE,
+  SAFETY_NOT_ACCEPTED_MESSAGE,
   buildAthleteProfileInsert,
   canSubmitEntries,
   validateAthleteAge,
@@ -73,26 +73,26 @@ describe("Scenario A — Registration, Approval & Parent Linkage Gate", () => {
     expect(profile.approved_by_admin).toBe(false);
   });
 
-  it("A3: an unapproved swimmer is blocked from event registration with the exact message", () => {
-    const result = canSubmitEntries({ parentLinkStatus: "none", approvedByAdmin: false });
+  it("A3: the safety acknowledgement blocks registration until accepted", () => {
+    const result = canSubmitEntries({ parentLinkStatus: "none", safetyAcceptedAt: null });
     expect(result.ok).toBe(false);
-    expect(result.error).toBe(SWIMMER_PENDING_APPROVAL_MESSAGE);
-    expect(SWIMMER_PENDING_APPROVAL_MESSAGE).toBe("Swimmer registration pending admin approval.");
+    expect(result.error).toBe(SAFETY_NOT_ACCEPTED_MESSAGE);
   });
 
-  it("A4: the admin approval workflow unblocks registration (before/after transition)", () => {
-    const before = canSubmitEntries({ parentLinkStatus: "none", approvedByAdmin: false });
-    expect(before.ok).toBe(false);
-
-    // Admin clicks "Approve Swimmer" in /admin — approved_by_admin flips true.
-    const after = canSubmitEntries({ parentLinkStatus: "none", approvedByAdmin: true });
-    expect(after.ok).toBe(true);
+  it("A4: account approval is NO LONGER a gate — paying the entry fee is", () => {
+    // The admin's decision point moved to confirming cash at the desk, which
+    // is also what seeds the heats. Vetting accounts up front blocked
+    // swimmers who had already paid.
+    expect(
+      canSubmitEntries({ parentLinkStatus: "none", safetyAcceptedAt: "2026-08-01" }).ok,
+    ).toBe(true);
   });
 
-  it("A3+A4 combined with a still-pending parent link: approval alone is not sufficient", () => {
-    // Mirrors the seed's "Zoe Whitfield" fixture: approved_by_admin = true but
-    // parent_link_status = 'pending' — both gates are independent.
-    const result = canSubmitEntries({ parentLinkStatus: "pending", approvedByAdmin: true });
+  it("A3+A4: a still-pending parent link blocks regardless of safety acceptance", () => {
+    const result = canSubmitEntries({
+      parentLinkStatus: "pending",
+      safetyAcceptedAt: "2026-08-01",
+    });
     expect(result.ok).toBe(false);
   });
 });

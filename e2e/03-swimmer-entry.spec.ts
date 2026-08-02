@@ -13,55 +13,20 @@ import { CREDENTIALS, login, requireFixture, SEED_PASSWORD } from "./helpers";
  *   3. Now approved -> a fresh entry submission succeeds.
  */
 test.describe.serial("Swimmer & meet entry", () => {
-  test("unapproved swimmer is blocked from event entry", async ({ page }) => {
+  test("an athlete needs no admin approval to register for races", async ({ page }) => {
     await login(page, CREDENTIALS.unapproved);
     await page.goto("/events/1/register", { waitUntil: "networkidle" });
-    // The gate only renders after the athlete row resolves; asserting too
-    // early reports "not pending" for a page that simply hasn't loaded.
     await page.waitForTimeout(2500);
 
-    const gate = page.getByText("Swimmer registration pending admin approval.");
-    // This suite runs serially against the live, persistent seed database
-    // (no reset between runs) — a prior run's "admin approves" step may
-    // have already consumed athlete37's unapproved state. Re-applying
-    // supabase/seed-demo.sql resets it back to unapproved for a clean run.
-    requireFixture((await gate.count()) > 0, "athlete37 in its seeded unapproved state");
-
-    await expect(gate).toBeVisible();
-    // The submit button must be disabled while the gate is unmet.
-    const submit = page.getByRole("button", { name: /^Submit/ });
-    if (await submit.count()) {
-      await expect(submit).toBeDisabled();
-    }
-  });
-
-  test("admin approves the pending swimmer", async ({ page }) => {
-    await login(page, CREDENTIALS.admin);
-    await page.goto("/admin", { waitUntil: "networkidle" });
-    // Pending swimmers load asynchronously. Without waiting for the card to
-    // settle, row.count() returns 0 on a still-empty table, the approval is
-    // skipped, and the NEXT test fails with a disabled Submit button — a
-    // race that reads exactly like an app bug.
-    await expect(
-      page.locator('[data-slot="card-title"]', { hasText: "Pending swimmer registrations" }),
-    ).toBeVisible();
-    await page.waitForTimeout(1500);
-    const row = page.locator("tr", { hasText: CREDENTIALS.unapproved });
-    // Idempotent: if a prior run already approved athlete37, the row (and
-    // its Approve button) simply won't be there anymore — nothing to do.
-    if (await row.count()) {
-      await row.getByRole("button", { name: /Approve Swimmer/i }).click();
-      await expect(page.locator("tr", { hasText: CREDENTIALS.unapproved })).toHaveCount(0, {
-        timeout: 10_000,
-      });
-    }
+    // Account approval was removed entirely — paying the entry fee is the
+    // gate now. This message must never appear again.
+    await expect(page.getByText("Swimmer registration pending admin approval.")).toHaveCount(0);
   });
 
   test("approved swimmer can submit a race entry with an mm:ss.cc seed time", async ({ page }) => {
     await login(page, CREDENTIALS.unapproved);
     await page.goto("/events/1/register", { waitUntil: "networkidle" });
     await page.waitForTimeout(2000);
-    await expect(page.getByText("Swimmer registration pending admin approval.")).toHaveCount(0);
 
     // A 15+ swimmer who predates the safety acknowledgement accepts it here.
     const acceptSafety = page.getByRole("button", { name: /I accept the safety/i });
@@ -70,11 +35,8 @@ test.describe.serial("Swimmer & meet entry", () => {
       await page.waitForTimeout(1500);
     }
 
-    // Pick the first registerable event card and enter a valid mm:ss.cc time.
-    // This fixture is self-consuming: every run enters one more event for
-    // athlete37, so eventually there is nothing left to select.
-    // The buttons can be present but DISABLED once the 4-event-per-meet cap
-    // is reached, so presence alone is not a usable fixture.
+    // Buttons can be present but DISABLED once the 4-event-per-meet cap is
+    // reached, so presence alone is not a usable fixture.
     const selectButtons = page.getByRole("button", { name: "Select" });
     const enabledCount = await selectButtons.evaluateAll(
       (nodes) => nodes.filter((n) => !(n as HTMLButtonElement).disabled).length,
@@ -83,10 +45,8 @@ test.describe.serial("Swimmer & meet entry", () => {
       enabledCount > 0,
       "a free event slot for athlete37 (they are at the 4-event cap for this meet)",
     );
-    const firstSelect = selectButtons.first();
-    await expect(firstSelect).toBeVisible({ timeout: 10_000 });
-    await firstSelect.click();
 
+    await selectButtons.first().click();
     const timeInput = page.locator('input[placeholder="mm:ss.cc or ss.cc"]').first();
     await timeInput.fill("1:04.12");
     await expect(timeInput).toHaveValue("1:04.12");

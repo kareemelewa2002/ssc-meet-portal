@@ -120,19 +120,17 @@ export const SAFETY_NOT_ACCEPTED_MESSAGE =
   "The safety & privacy acknowledgement must be accepted before entering a meet. For swimmers under 15 this must be done by their parent, from the parent's own account.";
 
 /**
- * Gates meet entry. Approval is deliberately NOT checked here any more — it
- * now happens after registration, together with payment. What still blocks a
- * swimmer is anything that would be unlawful or unsafe to swim without:
- * parent linkage for a U14, and the safety acknowledgement.
+ * Gates meet entry.
+ *
+ * Account approval is gone entirely: paying the entry fee is the seriousness
+ * signal, and the admin confirming that payment is what seeds the heats. What
+ * still blocks a swimmer is only what would be unlawful or unsafe to swim
+ * without — parent linkage for a U14, and the safety acknowledgement.
  */
 export function canSubmitEntries(athlete: {
   parentLinkStatus: ParentLinkStatus;
-  approvedByAdmin?: boolean;
   safetyAcceptedAt?: string | null;
 }): ValidationResult {
-  if (athlete.approvedByAdmin === false) {
-    return { ok: false, error: SWIMMER_PENDING_APPROVAL_MESSAGE };
-  }
   if (athlete.parentLinkStatus === "pending") {
     return {
       ok: false,

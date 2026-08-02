@@ -80,27 +80,17 @@ export async function fetchPendingCashPayments(): Promise<PendingPaymentAthlete[
 }
 
 /**
- * Approves the swimmer AND confirms their cash in one admin action.
+ * Confirms a swimmer's cash payment — the single admin decision point.
  *
- * These used to be two separate queues: an athlete was approved at signup
- * time, and payment was confirmed later. Registration no longer waits on
- * approval, so the admin's single decision point is now "this swimmer turned
- * up and paid" — approving them and confirming the entries together. Doing
- * them as one call keeps the two from drifting apart (an approved swimmer
- * with unpaid entries, or paid entries for an unapproved swimmer).
+ * Account approval no longer exists: paying the entry fee is the seriousness
+ * signal. Confirming here flips the entries to 'confirmed', which fires
+ * generate_heats_on_confirm and seeds the heats for every event they entered.
  */
-export async function approveAndConfirmPayment(
-  athleteId: string,
+export async function confirmCashPayment(
   entryIds: string[],
 ): Promise<{ success: boolean; error?: string }> {
   if (entryIds.length === 0) return { success: false, error: "No entries to confirm." };
   const supabase = createClient();
-
-  const { error: approveError } = await supabase
-    .from("athletes")
-    .update({ approved_by_admin: true })
-    .eq("id", athleteId);
-  if (approveError) return { success: false, error: approveError.message };
 
   const { error } = await supabase
     .from("entries")

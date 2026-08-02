@@ -10,7 +10,7 @@ import { SkeletonStat } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 export interface AdminKpis {
-  pendingSwimmers: number;
+  registeredAthletes: number;
   unapprovedTeams: number;
   cashQueueCount: number;
   cashQueueEgp: number;
@@ -22,7 +22,7 @@ export interface AdminKpis {
  * whole strip. */
 export async function fetchAdminKpis(): Promise<FetchResult<AdminKpis>> {
   const EMPTY: AdminKpis = {
-    pendingSwimmers: 0,
+    registeredAthletes: 0,
     unapprovedTeams: 0,
     cashQueueCount: 0,
     cashQueueEgp: 0,
@@ -31,7 +31,7 @@ export async function fetchAdminKpis(): Promise<FetchResult<AdminKpis>> {
   try {
     const supabase = createClient();
     const [swimmers, teams, cash, drafts] = await Promise.all([
-      supabase.from("athletes").select("*", { count: "exact", head: true }).eq("approved_by_admin", false),
+      supabase.from("athletes").select("*", { count: "exact", head: true }),
       supabase.from("teams").select("*", { count: "exact", head: true }).eq("approved_by_admin", false),
       supabase.from("entries").select("*", { count: "exact", head: true }).eq("status", "pending_payment"),
       supabase.from("results").select("*", { count: "exact", head: true }).eq("status", "draft"),
@@ -42,7 +42,7 @@ export async function fetchAdminKpis(): Promise<FetchResult<AdminKpis>> {
 
     const cashCount = cash.count ?? 0;
     return ok({
-      pendingSwimmers: swimmers.count ?? 0,
+      registeredAthletes: swimmers.count ?? 0,
       unapprovedTeams: teams.count ?? 0,
       cashQueueCount: cashCount,
       // Every unpaid entry is one race at the flat deck price.
@@ -104,14 +104,15 @@ export function AdminKpiStrip({ className }: { className?: string }) {
 
   const tiles: Tile[] = [
     {
-      key: "pendingSwimmers",
-      label: "Pending Swimmers",
-      value: String(kpis.pendingSwimmers),
-      sub: kpis.pendingSwimmers === 0 ? "queue clear" : "awaiting approval",
+      // Accounts need no approval — this is a roster size, not a queue.
+      key: "registeredAthletes",
+      label: "Registered Athletes",
+      value: String(kpis.registeredAthletes),
+      sub: "accounts on the platform",
       icon: UserRoundCheck,
       accent: "text-neon-cyan",
       glow: "shadow-[var(--shadow-brutal-cyan)]",
-      active: kpis.pendingSwimmers > 0,
+      active: false,
     },
     {
       key: "unapprovedTeams",

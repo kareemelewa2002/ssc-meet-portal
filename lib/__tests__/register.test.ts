@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PARENT_EMAIL_REQUIRED_MESSAGE,
-  SWIMMER_PENDING_APPROVAL_MESSAGE,
+  SAFETY_NOT_ACCEPTED_MESSAGE,
   buildAthleteProfileInsert,
   buildParentInviteLink,
   canSubmitEntries,
@@ -88,20 +88,29 @@ describe("buildParentInviteLink", () => {
 
 describe("canSubmitEntries", () => {
   it("blocks entry submission while parent linkage is pending", () => {
-    const result = canSubmitEntries({ parentLinkStatus: "pending", approvedByAdmin: true });
-    expect(result.ok).toBe(false);
+    expect(canSubmitEntries({ parentLinkStatus: "pending" }).ok).toBe(false);
   });
 
-  it("blocks entry submission while swimmer registration is unapproved", () => {
-    const result = canSubmitEntries({ parentLinkStatus: "none", approvedByAdmin: false });
+  it("blocks entry submission until the safety acknowledgement is accepted", () => {
+    const result = canSubmitEntries({ parentLinkStatus: "none", safetyAcceptedAt: null });
     expect(result.ok).toBe(false);
-    expect(result.error).toBe(SWIMMER_PENDING_APPROVAL_MESSAGE);
+    expect(result.error).toBe(SAFETY_NOT_ACCEPTED_MESSAGE);
   });
 
-  it("allows entry submission once verified/not required and approved", () => {
-    expect(canSubmitEntries({ parentLinkStatus: "verified", approvedByAdmin: true }).ok).toBe(true);
-    expect(canSubmitEntries({ parentLinkStatus: "none", approvedByAdmin: true }).ok).toBe(true);
-    // Undefined approval is treated as not explicitly blocked (legacy callers).
+  it("no longer gates on admin account approval — paying the fee is the gate", () => {
+    // An account that would previously have been "unapproved" can now enter;
+    // the admin's decision point is confirming payment, not vetting accounts.
+    expect(canSubmitEntries({ parentLinkStatus: "none", safetyAcceptedAt: "2026-08-01" }).ok).toBe(
+      true,
+    );
+  });
+
+  it("allows entry submission once linkage is resolved and safety accepted", () => {
+    expect(
+      canSubmitEntries({ parentLinkStatus: "verified", safetyAcceptedAt: "2026-08-01" }).ok,
+    ).toBe(true);
+    // Unknown safety status (column absent on an un-migrated database) does
+    // not gate — only a known-NULL does.
     expect(canSubmitEntries({ parentLinkStatus: "none" }).ok).toBe(true);
   });
 });

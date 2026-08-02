@@ -626,9 +626,10 @@ where u.id = a.user_id
   and u.email like 'athlete%@ssc-demo.test'
   and a.age_group = 'U14';
 
--- Everyone starts unapproved: approving them is the first step of the demo.
+-- Athlete accounts need no admin approval — confirming their payment is the
+-- only gate, and that is what seeds the heats.
 update public.athletes a
-set approved_by_admin = false
+set approved_by_admin = true
 from public.users u
 where u.id = a.user_id
   and u.email like 'athlete%@ssc-demo.test';
