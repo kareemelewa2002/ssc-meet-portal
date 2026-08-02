@@ -5,6 +5,7 @@ import type { DqReason, PublishStatus, ResultOutcome } from "@/lib/supabase/type
 export interface PendingReviewLane {
   heatLaneId: string;
   laneNumber: number;
+  athleteId: string;
   athleteName: string;
   teamName: string | null;
   resultOutcome: ResultOutcome | null;
@@ -92,6 +93,7 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
       existing.lanes.push({
         heatLaneId: lane.id,
         laneNumber: lane.lane_number,
+        athleteId: athlete.id,
         athleteName: user.full_name,
         teamName: team?.name ?? null,
         resultOutcome: result?.result_outcome ?? null,

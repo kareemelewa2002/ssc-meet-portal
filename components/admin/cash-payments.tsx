@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/table";
 import { getErrorMessage } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
+import { AthleteLink } from "@/components/athletes/athlete-link";
 import {
   fetchPendingCashPayments,
   markCashPaymentReceived,
@@ -96,7 +97,7 @@ export function CashPayments({ className }: { className?: string }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Swimmer</TableHead>
-                  <TableHead>Club</TableHead>
+                  <TableHead>Team</TableHead>
                   <TableHead>Races</TableHead>
                   <TableHead>Amount due</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -105,7 +106,9 @@ export function CashPayments({ className }: { className?: string }) {
               <TableBody>
                 {rows.map((row) => (
                   <TableRow key={row.athleteId}>
-                    <TableCell className="font-medium">{row.athleteName}</TableCell>
+                    <TableCell className="font-medium">
+                      <AthleteLink athleteId={row.athleteId} name={row.athleteName} />
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{row.teamName ?? "Unaffiliated"}</TableCell>
                     <TableCell>{row.raceCount}</TableCell>
                     <TableCell>

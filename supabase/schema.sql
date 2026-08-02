@@ -16,7 +16,7 @@ create extension if not exists pgcrypto;
 -- (Postgres enums can only ever grow via ALTER TYPE ... ADD VALUE, never
 -- shrink) — the migration block below downgrades any user still on one of
 -- those to its replacement (usher/entry_helper -> referee, team_captain ->
--- coach, since teams.captain_id already carries "who manages this club"
+-- coach, since teams.captain_id already carries "who manages this team"
 -- independently of the role column) before the type is rebuilt clean.
 do $$
 begin
@@ -289,7 +289,7 @@ create table if not exists public.teams (
   id uuid primary key default gen_random_uuid(),
   name text not null unique,
   abbreviation text,
-  club_logo_url text,
+  team_logo_url text,
   captain_id uuid references public.users (id) on delete set null,
   -- Teams exist permanently on the platform, independent of any meet volume.
   -- Pending admin approval in /admin before they can be selected for entries.
@@ -297,6 +297,18 @@ create table if not exists public.teams (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Terminology sweep: "Club" -> "Team" everywhere, including this column
+-- (idempotent — only runs if an older database still has the old name).
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'teams' and column_name = 'club_logo_url'
+  ) then
+    alter table public.teams rename column club_logo_url to team_logo_url;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- team_memberships
@@ -320,10 +332,12 @@ create table if not exists public.athletes (
   team_id uuid references public.teams (id) on delete set null,
   parent_id uuid references public.users (id) on delete set null,
   date_of_birth date not null,
-  -- Current age as of signup/last update — used to build entries.age_group_at_entry
-  -- and heat-seeding, but NEVER for historical performance display (see
-  -- public.age_at_date() and the All-Time views, which always derive age from
-  -- date_of_birth + the meet's actual date).
+  -- The age the swimmer turns in the signup calendar year (see
+  -- public.age_turning_this_year()), not their exact chronological age —
+  -- this is what age_group is derived from, and what owns_athlete()'s
+  -- parent-linkage window checks. NEVER used for historical performance
+  -- display (see public.age_at_date() and the All-Time views, which always
+  -- derive age from date_of_birth + the meet's actual date).
   age integer not null check (age >= 13 and age < 120),
   age_group public.age_group not null,
   gender public.gender not null,
@@ -640,6 +654,20 @@ as $$
   end;
 $$;
 
+-- The age a swimmer turns during p_on_date's calendar year — the swim-
+-- federation convention used for age-group brackets, signup eligibility, and
+-- the parent-link gate (see athletes.age's comment below), so a swimmer's
+-- bracket never flips mid-season around their birthday. Distinct from
+-- age_at_date() above, which is exact/calendar-aware and reserved for
+-- historical performance display.
+create or replace function public.age_turning_this_year(p_dob date, p_on_date date)
+returns integer
+language sql
+immutable
+as $$
+  select (extract(year from p_on_date) - extract(year from p_dob))::integer;
+$$;
+
 -- =============================================================================
 -- series_leaderboards — sums every volume's leaderboard rows per athlete, so
 -- the series standing accumulates automatically as new volumes publish
@@ -670,7 +698,7 @@ select
   u.full_name as athlete_name,
   u.profile_image_url,
   -- Historical team representation for THIS volume, not the athlete's
-  -- current team — a swimmer who's since transferred still shows the club
+  -- current team — a swimmer who's since transferred still shows the team
   -- they actually swam for when this race happened.
   -- vta.id (row existence), not vta.team_id, distinguishes "no affiliation
   -- recorded yet, fall back to current team" from "recorded as unattached
@@ -929,7 +957,7 @@ begin
 
   if resolved_role = 'athlete' and (new.raw_user_meta_data ? 'date_of_birth') then
     v_dob := (new.raw_user_meta_data ->> 'date_of_birth')::date;
-    v_age := greatest(public.age_at_date(v_dob, current_date), 13);
+    v_age := greatest(public.age_turning_this_year(v_dob, current_date), 13);
     v_parent_email := nullif(trim(new.raw_user_meta_data ->> 'parent_email'), '');
     v_needs_parent := public.age_group_for_age(v_age) = 'U14';
 
@@ -1015,6 +1043,106 @@ create or replace trigger enforce_role_change_trigger
 create or replace trigger users_set_updated_at
   before update on public.users
   for each row execute function public.set_updated_at();
+
+-- ---------------------------------------------------------------------------
+-- Team captaincy & join-request guards — Team/Coach domain rules: only
+-- Open-category (18+) athletes or Coach/Admin accounts may create and
+-- captain a team; an athlete may hold at most one pending join request
+-- across the whole platform at a time; and once accepted onto a team, an
+-- athlete's team_id is locked from further transfer requests until the
+-- current meet volume concludes (status flips to 'completed').
+-- ---------------------------------------------------------------------------
+
+create or replace function public.can_captain_team()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.users u
+    where u.id = auth.uid()
+      and (
+        u.role in ('coach', 'admin')
+        or exists (
+          select 1 from public.athletes a
+          where a.user_id = u.id and a.age_group = 'Open'
+        )
+      )
+  );
+$$;
+
+-- A meet volume is "in progress" once it has a confirmed date and hasn't
+-- concluded yet — team transfers stay locked for the duration.
+create or replace function public.meet_in_progress()
+returns boolean
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select exists (select 1 from public.meet_volumes where status = 'scheduled');
+$$;
+
+create or replace function public.enforce_team_membership_request_rules()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_current_team_id uuid;
+begin
+  if exists (
+    select 1 from public.team_memberships
+    where user_id = new.user_id and status = 'pending'
+  ) then
+    raise exception
+      'You already have a pending team join request. Cancel it before requesting to join another team.';
+  end if;
+
+  select team_id into v_current_team_id from public.athletes where user_id = new.user_id;
+
+  if v_current_team_id is not null and public.meet_in_progress() then
+    raise exception 'Team transfers are locked until the current meet volume concludes.';
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace trigger enforce_team_membership_request_rules_trigger
+  before insert on public.team_memberships
+  for each row execute function public.enforce_team_membership_request_rules();
+
+-- Hard safety net behind the trigger above — closes the race a plain
+-- BEFORE INSERT check alone can't (two concurrent requests from the same
+-- user racing past the trigger's SELECT before either commits).
+create unique index if not exists one_pending_team_membership_per_user
+  on public.team_memberships (user_id)
+  where status = 'pending';
+
+-- Accepting a membership request is what actually moves the athlete onto
+-- the team's roster.
+create or replace function public.sync_athlete_team_on_membership_accept()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.status = 'accepted' and old.status is distinct from 'accepted' then
+    update public.athletes set team_id = new.team_id where user_id = new.user_id;
+    new.responded_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+create or replace trigger sync_athlete_team_on_membership_accept_trigger
+  before update on public.team_memberships
+  for each row execute function public.sync_athlete_team_on_membership_accept();
 
 -- =============================================================================
 -- 5. LEADERBOARD MAINTENANCE
@@ -1293,7 +1421,7 @@ begin
   where a.id = new.athlete_id;
 
   if v_dob is not null and v_meet_date is not null then
-    new.age_group_at_entry := public.age_group_for_age(public.age_at_date(v_dob, v_meet_date));
+    new.age_group_at_entry := public.age_group_for_age(public.age_turning_this_year(v_dob, v_meet_date));
   end if;
 
   return new;
@@ -1642,9 +1770,14 @@ drop policy if exists "public_view_approved_teams" on public.teams;
 create policy "public_view_approved_teams" on public.teams
   for select using (approved_by_admin = true or captain_id = auth.uid());
 
+-- Only Open-category (18+) athletes or Coach/Admin accounts may create and
+-- captain a team — see public.can_captain_team() in section 4.
 drop policy if exists "authenticated_create_team" on public.teams;
-create policy "authenticated_create_team" on public.teams
-  for insert with check (auth.uid() is not null and captain_id = auth.uid());
+drop policy if exists "eligible_user_create_team" on public.teams;
+create policy "eligible_user_create_team" on public.teams
+  for insert with check (
+    auth.uid() is not null and captain_id = auth.uid() and public.can_captain_team()
+  );
 
 drop policy if exists "captain_update_own_team" on public.teams;
 create policy "captain_update_own_team" on public.teams
@@ -1671,6 +1804,13 @@ drop policy if exists "captain_manage_membership_status" on public.team_membersh
 create policy "captain_manage_membership_status" on public.team_memberships
   for update using (public.is_team_captain_of(team_id))
   with check (public.is_team_captain_of(team_id));
+
+-- "Reject" (captain) and "cancel" (the requester) both just delete the
+-- pending row — team_memberships only persists real states (pending,
+-- accepted), same convention as public.rejectTeam() for team approvals.
+drop policy if exists "captain_or_requester_delete_membership" on public.team_memberships;
+create policy "captain_or_requester_delete_membership" on public.team_memberships
+  for delete using (user_id = auth.uid() or public.is_team_captain_of(team_id));
 
 -- ---------------------------------------------------------------------------
 -- athletes

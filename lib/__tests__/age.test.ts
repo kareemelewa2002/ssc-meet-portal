@@ -3,6 +3,8 @@ import {
   MIN_SIGNUP_AGE,
   PARENT_LINK_MAX_AGE,
   ageGroupForAge,
+  ageGroupForBirthYear,
+  ageTurningThisYear,
   calculateAge,
   describeAgeAtSwim,
   isEligibleForSignup,
@@ -35,6 +37,19 @@ describe("calculateAge", () => {
   });
 });
 
+describe("ageTurningThisYear", () => {
+  it("is a pure calendar-year subtraction, independent of whether the birthday has passed", () => {
+    // Born Nov 1 2012; even before the Nov birthday, they "turn 14" in 2026.
+    expect(ageTurningThisYear("2012-11-01", "2026-10-02")).toBe(14);
+    expect(ageTurningThisYear("2012-01-01", "2026-10-02")).toBe(14);
+  });
+
+  it("never differs from calculateAge by more than the birthday-not-yet-happened case", () => {
+    expect(ageTurningThisYear("2013-10-02", "2026-10-02")).toBe(13);
+    expect(ageTurningThisYear("2013-10-03", "2026-10-02")).toBe(13);
+  });
+});
+
 describe("ageGroupForAge", () => {
   it("buckets 13-14 as U14", () => {
     expect(ageGroupForAge(13)).toBe("U14");
@@ -52,27 +67,55 @@ describe("ageGroupForAge", () => {
   });
 });
 
-describe("isEligibleForSignup", () => {
-  it("rejects under 13", () => {
-    expect(isEligibleForSignup(12)).toBe(false);
-    expect(isEligibleForSignup(MIN_SIGNUP_AGE - 1)).toBe(false);
+describe("ageGroupForBirthYear", () => {
+  // Reference year 2026: U14 = born 2012/2013, U17 = born 2009/2010/2011,
+  // Open = born 2008 or earlier — regardless of whether the birthday has
+  // happened yet this year.
+  it("buckets swimmers born 2012 or 2013 as U14, even before their birthday", () => {
+    expect(ageGroupForBirthYear("2012-01-01", "2026-01-01")).toBe("U14");
+    expect(ageGroupForBirthYear("2013-12-31", "2026-01-01")).toBe("U14");
   });
 
-  it("accepts 13 and older", () => {
-    expect(isEligibleForSignup(13)).toBe(true);
-    expect(isEligibleForSignup(30)).toBe(true);
+  it("buckets swimmers born 2009-2011 as U17", () => {
+    expect(ageGroupForBirthYear("2009-06-01", "2026-01-01")).toBe("U17");
+    expect(ageGroupForBirthYear("2010-06-01", "2026-01-01")).toBe("U17");
+    expect(ageGroupForBirthYear("2011-06-01", "2026-01-01")).toBe("U17");
+  });
+
+  it("buckets swimmers born 2008 or earlier as Open", () => {
+    expect(ageGroupForBirthYear("2008-01-01", "2026-01-01")).toBe("Open");
+    expect(ageGroupForBirthYear("1995-01-01", "2026-01-01")).toBe("Open");
+  });
+});
+
+describe("isEligibleForSignup", () => {
+  it("rejects swimmers who turn 12 or younger this year", () => {
+    expect(isEligibleForSignup("2014-01-01", "2026-01-01")).toBe(false);
+  });
+
+  it("accepts swimmers who turn 13 or older this year, even before their birthday", () => {
+    expect(isEligibleForSignup("2013-12-31", "2026-01-01")).toBe(true);
+    expect(isEligibleForSignup("1996-01-01", "2026-01-01")).toBe(true);
+  });
+
+  it("uses MIN_SIGNUP_AGE as the exact cutoff", () => {
+    expect(MIN_SIGNUP_AGE).toBe(13);
   });
 });
 
 describe("requiresParentLink", () => {
-  it("requires linkage for ages 13-14 (under 15)", () => {
-    expect(requiresParentLink(13)).toBe(true);
-    expect(requiresParentLink(PARENT_LINK_MAX_AGE)).toBe(true);
+  it("requires linkage for swimmers turning 13-14 this year (born 2012/2013)", () => {
+    expect(requiresParentLink("2013-01-01", "2026-01-01")).toBe(true);
+    expect(requiresParentLink("2012-01-01", "2026-01-01")).toBe(true);
   });
 
-  it("does not require linkage from 15 onward", () => {
-    expect(requiresParentLink(15)).toBe(false);
-    expect(requiresParentLink(30)).toBe(false);
+  it("does not require linkage from born-2011-or-earlier onward", () => {
+    expect(requiresParentLink("2011-01-01", "2026-01-01")).toBe(false);
+    expect(requiresParentLink("1996-01-01", "2026-01-01")).toBe(false);
+  });
+
+  it("uses PARENT_LINK_MAX_AGE as the exact cutoff", () => {
+    expect(PARENT_LINK_MAX_AGE).toBe(14);
   });
 });
 

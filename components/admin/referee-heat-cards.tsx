@@ -10,6 +10,7 @@ import { getErrorMessage } from "@/lib/utils";
 import { formatTimeMs } from "@/lib/format";
 import { RESULT_OUTCOME_LABELS, DQ_REASON_LABELS } from "@/lib/results";
 import { useToast } from "@/hooks/use-toast";
+import { AthleteLink } from "@/components/athletes/athlete-link";
 import {
   fetchPendingReviewHeats,
   publishHeatResults,
@@ -125,7 +126,11 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                     <Badge variant="outline" className="shrink-0">
                       L{lane.laneNumber}
                     </Badge>
-                    <span className="min-w-0 flex-1 truncate font-medium">{lane.athleteName}</span>
+                    <AthleteLink
+                      athleteId={lane.athleteId}
+                      name={lane.athleteName}
+                      className="min-w-0 flex-1 truncate"
+                    />
                     {lane.teamName && (
                       <span className="shrink-0 text-xs text-muted-foreground">{lane.teamName}</span>
                     )}

@@ -12,7 +12,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { AppHeader } from "@/components/layout/app-header";
 import { cn } from "@/lib/utils";
-import { calculateAge, requiresParentLink } from "@/lib/age";
+import { ageGroupForBirthYear, ageTurningThisYear, requiresParentLink } from "@/lib/age";
 import { uploadAvatar } from "@/lib/storage";
 import {
   buildParentInviteLink,
@@ -62,14 +62,18 @@ function RegisterPageInner() {
   const [result, setResult] = useState<{ pendingParent: boolean } | null>(null);
 
   const age = useMemo(
-    () => (dateOfBirth ? calculateAge(dateOfBirth) : null),
+    () => (dateOfBirth ? ageTurningThisYear(dateOfBirth) : null),
     [dateOfBirth],
   );
   const ageRejection = useMemo(
     () => (dateOfBirth ? validateAthleteAge(dateOfBirth) : { ok: true }),
     [dateOfBirth],
   );
-  const needsParentEmail = age != null && requiresParentLink(age);
+  const ageGroupPreview = useMemo(
+    () => (dateOfBirth ? ageGroupForBirthYear(dateOfBirth) : null),
+    [dateOfBirth],
+  );
+  const needsParentEmail = dateOfBirth !== "" && requiresParentLink(dateOfBirth);
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -248,7 +252,9 @@ function RegisterPageInner() {
                 <p className="text-sm text-destructive">{ageRejection.error}</p>
               )}
               {age != null && ageRejection.ok && (
-                <p className="text-xs text-muted-foreground">Age {age} at signup.</p>
+                <p className="text-xs text-muted-foreground">
+                  Turns {age} this year — competes in the {ageGroupPreview} age group.
+                </p>
               )}
             </div>
 

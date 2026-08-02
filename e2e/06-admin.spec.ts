@@ -22,22 +22,22 @@ test.describe("Admin dashboard", () => {
     expect(hasEmptyState || hasApproveButton > 0).toBe(true);
   });
 
-  test("Pending Club Approvals tab can approve a real pending club", async ({ page }) => {
+  test("Pending Team Approvals tab can approve a real pending team", async ({ page }) => {
     // The tab button holds both a mobile shortLabel span and a desktop
     // full-label span, toggled by Tailwind responsive classes — at
     // Playwright's default desktop viewport, the full label is what's
     // actually visible/accessible.
-    await page.getByRole("button", { name: "Pending Club Approvals" }).click();
+    await page.getByRole("button", { name: "Pending Team Approvals" }).click();
     await page.waitForTimeout(800);
 
     const row = page.locator("tr", { hasText: "Sunburst Aquatics" });
     test.skip(
       (await row.count()) === 0,
-      "Sunburst Aquatics (the seeded pending club fixture) isn't in the live database yet — " +
+      "Sunburst Aquatics (the seeded pending team fixture) isn't in the live database yet — " +
         "re-apply the updated supabase/seed-demo.sql to exercise this test.",
     );
 
-    await row.getByRole("button", { name: "Approve Club" }).click();
+    await row.getByRole("button", { name: "Approve Team" }).click();
     await page.waitForTimeout(1000);
     await expect(page.locator("tr", { hasText: "Sunburst Aquatics" })).toHaveCount(0);
     await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);

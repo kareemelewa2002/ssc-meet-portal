@@ -31,7 +31,6 @@ const CREDENTIAL_GROUPS: CredentialGroup[] = [
       {
         label: "Referee (attendance + time entry)",
         email: "referee1@ssc-demo.test",
-        note: "…through referee8@ssc-demo.test",
       },
     ],
   },

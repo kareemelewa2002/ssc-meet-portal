@@ -6,14 +6,14 @@ import { cn } from "@/lib/utils";
 import { SkinsKnockout } from "@/components/admin/skins-knockout";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
 import { PendingSwimmerApprovals } from "@/components/admin/pending-swimmer-approvals";
-import { PendingClubApprovals } from "@/components/admin/pending-club-approvals";
+import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
 import { CashPayments } from "@/components/admin/cash-payments";
 import { AppHeader } from "@/components/layout/app-header";
 
 const TABS = [
   { id: "pending", label: "Pending Swimmer Registrations", shortLabel: "Swimmers" },
-  { id: "clubs", label: "Pending Club Approvals", shortLabel: "Clubs" },
+  { id: "teams", label: "Pending Team Approvals", shortLabel: "Teams" },
   { id: "heatcards", label: "Referee Heat Cards", shortLabel: "Heat Cards" },
   { id: "cash", label: "Cash Payments", shortLabel: "Cash" },
   { id: "skins", label: "Skins Knockout", shortLabel: "Skins" },
@@ -43,7 +43,7 @@ export default function AdminPage() {
       </div>
 
       {tab === "pending" && <PendingSwimmerApprovals />}
-      {tab === "clubs" && <PendingClubApprovals />}
+      {tab === "teams" && <PendingTeamApprovals />}
       {tab === "heatcards" && <RefereeHeatCards />}
       {tab === "cash" && <CashPayments />}
       {tab === "skins" && <SkinsKnockout eventId="50m-freestyle-skins" />}

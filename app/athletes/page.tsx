@@ -60,7 +60,7 @@ export default function AthletesDirectoryPage() {
           </Link>
         </div>
         <p className="text-sm text-muted-foreground">
-          Search the SSC roster by name or club. Tap a card for the full public profile.
+          Search the SSC roster by name or team. Tap a card for the full public profile.
         </p>
       </header>
 
@@ -69,7 +69,7 @@ export default function AthletesDirectoryPage() {
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name or club team…"
+          placeholder="Search by name or team…"
           className="min-h-[48px] pl-9"
           aria-label="Search athletes"
         />

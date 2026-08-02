@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { AthleteLink } from "@/components/athletes/athlete-link";
-import { ClubLeaderboard } from "@/components/leaderboards/club-leaderboard";
+import { TeamLeaderboard } from "@/components/leaderboards/team-leaderboard";
 import { AppHeader } from "@/components/layout/app-header";
 import {
   DEMO_ALL_TIME_RACES,
@@ -215,7 +215,7 @@ export function AllTimeClient() {
         </TabsContent>
       </Tabs>
 
-      <ClubLeaderboard />
+      <TeamLeaderboard />
       </main>
     </div>
   );

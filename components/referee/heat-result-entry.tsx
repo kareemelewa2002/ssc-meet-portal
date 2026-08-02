@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
-import { cn, getErrorMessage } from "@/lib/utils";
+import { cn, getErrorMessage, isValidUuid } from "@/lib/utils";
 import {
   DQ_REASON_LABELS,
   RESULT_OUTCOME_LABELS,
@@ -37,8 +37,6 @@ export interface HeatLaneAthlete {
   entryId?: string;
   attendanceStatus?: AttendanceStatus;
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function attendanceBadgeVariant(status: AttendanceStatus): "default" | "destructive" | "outline" {
   if (status === "present") return "default";
@@ -151,7 +149,7 @@ export function HeatResultEntry({
     // querying with one always 400s ("invalid input syntax for type uuid").
     // This fires on first mount, before a real heat's lanes replace the
     // caller's bundled default, so skip the round-trip entirely.
-    if (laneIds.length === 0 || !laneIds.every((id) => UUID_RE.test(id))) return;
+    if (laneIds.length === 0 || !laneIds.every(isValidUuid)) return;
 
     let cancelled = false;
     (async () => {
@@ -241,6 +239,11 @@ export function HeatResultEntry({
       for (const lane of readyLanes) {
         const draft = drafts[lane.heatLaneId];
         if (!draft?.outcome) continue;
+        // A demo/placeholder lane (no real heat selected yet) has no
+        // matching heat_lanes row — upserting one would violate the
+        // results.heat_lane_id foreign key. Skip it; there's nothing real
+        // to persist until a genuine heat is selected.
+        if (!isValidUuid(lane.heatLaneId)) continue;
 
         // finishPlace/placementPoints are intentionally omitted — the
         // database's recompute_heat_finish_places trigger derives them from

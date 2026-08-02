@@ -49,8 +49,8 @@ interface RefereeLane {
 
 const DEMO_SESSIONS: SessionRow[] = [
   {
-    id: "sess-1",
-    meet_volume_id: "vol-1",
+    id: "00000000-0000-4000-8000-000000000001",
+    meet_volume_id: "00000000-0000-4000-8000-000000000000",
     session_number: 1,
     name: "Session 1",
     meet_date: "2026-10-02",
@@ -61,20 +61,26 @@ const DEMO_SESSIONS: SessionRow[] = [
 ];
 
 const DEMO_EVENTS: RefereeEventOption[] = [
-  { id: "ev-1", name: "50 Freestyle", sessionId: "sess-1" },
+  { id: "00000000-0000-4000-8000-000000000002", name: "50 Freestyle", sessionId: "00000000-0000-4000-8000-000000000001" },
 ];
 
 const DEMO_HEATS: RefereeHeatOption[] = [
-  { id: "demo-heat-1", heatNumber: 3, status: "draft" },
+  { id: "00000000-0000-4000-8000-000000000003", heatNumber: 3, status: "draft" },
 ];
 
+// Every id below is a real (if obviously fake) RFC4122-shaped UUID — never
+// a bare string like "hl-1". Postgres's uuid column type rejects anything
+// else outright ("invalid input syntax for type uuid"), and this exact
+// shape of placeholder used to be the demo fallback everywhere on this
+// page, including inside markAttendance's real Supabase write path, which
+// had no guard against ever sending one.
 const DEMO_LANES: RefereeLane[] = [
-  { heatLaneId: "hl-1", laneNumber: 1, athleteName: "Mia Reyes", teamName: "Blue Marlins", seedTimeMs: 31000, athleteId: "ath-mia", attendanceStatus: "pending" },
-  { heatLaneId: "hl-2", laneNumber: 2, athleteName: "Noah Alvi", teamName: "Riptide", seedTimeMs: 30500, athleteId: "ath-noah", attendanceStatus: "present" },
-  { heatLaneId: "hl-3", laneNumber: 3, athleteName: "Zara Khan", teamName: "Blue Marlins", seedTimeMs: 29800, athleteId: "ath-zara", attendanceStatus: "pending" },
-  { heatLaneId: "hl-4", laneNumber: 4, athleteName: "Leo Fontaine", teamName: "Tidal Wave", seedTimeMs: 29200, athleteId: "ath-leo", attendanceStatus: "present" },
-  { heatLaneId: "hl-5", laneNumber: 5, athleteName: "Ava Thompson", teamName: "Riptide", seedTimeMs: 31500, athleteId: "ath-ava", attendanceStatus: "absent" },
-  { heatLaneId: "hl-6", laneNumber: 6, athleteName: "Kian Osei", teamName: "Tidal Wave", seedTimeMs: 32000, athleteId: "ath-kian", attendanceStatus: "pending" },
+  { heatLaneId: "00000000-0000-4000-8000-000000000101", laneNumber: 1, athleteName: "Mia Reyes", teamName: "Blue Marlins", seedTimeMs: 31000, athleteId: "00000000-0000-4000-8000-000000000201", attendanceStatus: "pending" },
+  { heatLaneId: "00000000-0000-4000-8000-000000000102", laneNumber: 2, athleteName: "Noah Alvi", teamName: "Riptide", seedTimeMs: 30500, athleteId: "00000000-0000-4000-8000-000000000202", attendanceStatus: "present" },
+  { heatLaneId: "00000000-0000-4000-8000-000000000103", laneNumber: 3, athleteName: "Zara Khan", teamName: "Blue Marlins", seedTimeMs: 29800, athleteId: "00000000-0000-4000-8000-000000000203", attendanceStatus: "pending" },
+  { heatLaneId: "00000000-0000-4000-8000-000000000104", laneNumber: 4, athleteName: "Leo Fontaine", teamName: "Tidal Wave", seedTimeMs: 29200, athleteId: "00000000-0000-4000-8000-000000000204", attendanceStatus: "present" },
+  { heatLaneId: "00000000-0000-4000-8000-000000000105", laneNumber: 5, athleteName: "Ava Thompson", teamName: "Riptide", seedTimeMs: 31500, athleteId: "00000000-0000-4000-8000-000000000205", attendanceStatus: "absent" },
+  { heatLaneId: "00000000-0000-4000-8000-000000000106", laneNumber: 6, athleteName: "Kian Osei", teamName: "Tidal Wave", seedTimeMs: 32000, athleteId: "00000000-0000-4000-8000-000000000206", attendanceStatus: "pending" },
 ];
 
 /**

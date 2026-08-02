@@ -7,7 +7,7 @@ import { fetchMeetSummaryStats, type MeetSummaryStats } from "@/lib/meet-stats";
 
 const STATS = [
   { key: "athleteCount" as const, label: "Athletes Registered", icon: Users },
-  { key: "clubCount" as const, label: "Clubs Participating", icon: Building2 },
+  { key: "teamCount" as const, label: "Teams Participating", icon: Building2 },
   { key: "eventCount" as const, label: "Events Scheduled", icon: ListChecks },
 ];
 

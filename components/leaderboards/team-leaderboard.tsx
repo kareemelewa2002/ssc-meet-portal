@@ -4,20 +4,20 @@ import { useEffect, useState } from "react";
 import { Trophy } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchClubLeaderboard, type ClubLeaderboardEntry } from "@/lib/leaderboard";
+import { fetchTeamLeaderboard, type TeamLeaderboardEntry } from "@/lib/leaderboard";
 
 const MEDAL_VARIANT = ["default", "secondary", "outline"] as const;
 
-/** Real-time club standings — every approved club's swimmers' series
+/** Real-time team standings — every approved team's swimmers' series
  * points summed together. Part of the All-Time Records page. */
-export function ClubLeaderboard({ className }: { className?: string }) {
-  const [entries, setEntries] = useState<ClubLeaderboardEntry[]>([]);
+export function TeamLeaderboard({ className }: { className?: string }) {
+  const [entries, setEntries] = useState<TeamLeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const rows = await fetchClubLeaderboard();
+      const rows = await fetchTeamLeaderboard();
       if (!cancelled) {
         setEntries(rows);
         setLoading(false);
@@ -33,13 +33,13 @@ export function ClubLeaderboard({ className }: { className?: string }) {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Trophy className="size-4 text-amber-500" />
-          Club Leaderboard
+          Team Leaderboard
         </CardTitle>
         <CardDescription>Team point totals accumulated across every published heat.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading club standings…</p>
+          <p className="text-sm text-muted-foreground">Loading team standings…</p>
         ) : entries.length === 0 ? (
           <p className="text-sm text-muted-foreground">No published results yet.</p>
         ) : (

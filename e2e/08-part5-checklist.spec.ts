@@ -13,7 +13,7 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
     // View PBs — the athlete's own career ledger on their public profile.
     await page.goto("/athletes");
     await page.waitForTimeout(1000);
-    const search = page.getByPlaceholder(/search by name or club/i);
+    const search = page.getByPlaceholder(/search by name or team/i);
     await search.fill("");
     const ownCard = page.locator("main a", { hasText: "Chloe Bennett" }).first();
     test.skip(!(await ownCard.count()), "athlete01's directory card not found — check the seed's full_name for this email.");
@@ -65,7 +65,7 @@ test.describe("Part 5 checklist — Parent Flow", () => {
 
     await page.goto("/athletes");
     await page.waitForTimeout(1000);
-    await page.getByPlaceholder(/search by name or club/i).fill("Chloe Bennett");
+    await page.getByPlaceholder(/search by name or team/i).fill("Chloe Bennett");
     await page.waitForTimeout(800);
     const card = page.locator("main").getByText("Chloe Bennett").first();
     test.skip(!(await card.count()), "athlete01's directory card not found under this name.");
@@ -79,12 +79,12 @@ test.describe("Part 5 checklist — Parent Flow", () => {
 });
 
 test.describe("Part 5 checklist — Coach Flow", () => {
-  test("coach.riptide views their club roster with each swimmer's PBs reachable", async ({ page }) => {
+  test("coach.riptide views their team roster with each swimmer's PBs reachable", async ({ page }) => {
     await login(page, CREDENTIALS.coachRiptide);
     await page.goto("/dashboard");
     await page.waitForTimeout(1500);
 
-    const coachHeading = page.getByText("Coach Dashboard");
+    const coachHeading = page.locator("main").getByText("Coach Dashboard");
     // coach.riptide's live role may still be the stale pre-scope-lock
     // 'team_captain' value until schema.sql is re-applied — the dashboard
     // correctly falls back to the athlete view rather than misrendering.
@@ -97,7 +97,7 @@ test.describe("Part 5 checklist — Coach Flow", () => {
     await expect(page.getByText("Riptide Swim Club")).toBeVisible();
 
     const firstSwimmer = page.locator("a.font-medium").first();
-    test.skip(!(await firstSwimmer.count()), "No roster rows for this club.");
+    test.skip(!(await firstSwimmer.count()), "No roster rows for this team.");
     await firstSwimmer.click();
     await page.waitForURL("**/athletes/**");
     await expect(page.getByText("PB")).toBeVisible();
@@ -132,7 +132,7 @@ test.describe("Part 5 checklist — Referee Flow", () => {
 });
 
 test.describe("Part 5 checklist — Admin Flow", () => {
-  test("admin approves pending athletes/clubs, marks cash payment received, publishes a referee heat card", async ({ page }) => {
+  test("admin approves pending athletes/teams, marks cash payment received, publishes a referee heat card", async ({ page }) => {
     await login(page, CREDENTIALS.admin);
     await page.goto("/admin");
     await page.waitForTimeout(1000);
@@ -145,12 +145,12 @@ test.describe("Part 5 checklist — Admin Flow", () => {
       await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
     }
 
-    // Approve pending clubs (if any are currently pending).
-    await page.getByRole("button", { name: "Pending Club Approvals" }).click();
+    // Approve pending teams (if any are currently pending).
+    await page.getByRole("button", { name: "Pending Team Approvals" }).click();
     await page.waitForTimeout(800);
-    const approveClubBtn = page.getByRole("button", { name: "Approve Club" }).first();
-    if (await approveClubBtn.count()) {
-      await approveClubBtn.click();
+    const approveTeamBtn = page.getByRole("button", { name: "Approve Team" }).first();
+    if (await approveTeamBtn.count()) {
+      await approveTeamBtn.click();
       await page.waitForTimeout(1000);
       await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
     }

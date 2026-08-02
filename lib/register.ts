@@ -1,8 +1,9 @@
 import { createClient } from "@/lib/supabase/client";
 import {
+  MIN_SIGNUP_AGE,
   SIGNUP_AGE_REJECTION_MESSAGE,
-  ageGroupForAge,
-  calculateAge,
+  ageGroupForBirthYear,
+  ageTurningThisYear,
   isEligibleForSignup,
   requiresParentLink,
 } from "@/lib/age";
@@ -34,8 +35,7 @@ export interface ValidationResult {
 }
 
 export function validateAthleteAge(dateOfBirth: string, today: Date = new Date()): ValidationResult {
-  const age = calculateAge(dateOfBirth, today);
-  if (!isEligibleForSignup(age)) {
+  if (!isEligibleForSignup(dateOfBirth, today)) {
     return { ok: false, error: SIGNUP_AGE_REJECTION_MESSAGE };
   }
   return { ok: true };
@@ -49,8 +49,7 @@ export function validateParentLinkage(
   parentEmail: string | null | undefined,
   today: Date = new Date(),
 ): ValidationResult {
-  const age = calculateAge(dateOfBirth, today);
-  if (requiresParentLink(age) && !parentEmail?.trim()) {
+  if (requiresParentLink(dateOfBirth, today) && !parentEmail?.trim()) {
     return { ok: false, error: PARENT_EMAIL_REQUIRED_MESSAGE };
   }
   return { ok: true };
@@ -84,12 +83,16 @@ export function buildAthleteProfileInsert(
   bio: AthleteBioInput,
   today: Date = new Date(),
 ): AthleteProfileInsertPayload {
-  const age = calculateAge(bio.dateOfBirth, today);
-  const needsParent = requiresParentLink(age);
+  // Stored `age` mirrors the SQL trigger (public.handle_new_auth_user): the
+  // age the swimmer turns this year, not their exact calendar age — same
+  // value age_group and the parent-link gate are derived from, and clamped
+  // to the athletes.age table's `>= 13` check constraint.
+  const age = Math.max(ageTurningThisYear(bio.dateOfBirth, today), MIN_SIGNUP_AGE);
+  const needsParent = requiresParentLink(bio.dateOfBirth, today);
   return {
     date_of_birth: bio.dateOfBirth,
     age,
-    age_group: ageGroupForAge(age),
+    age_group: ageGroupForBirthYear(bio.dateOfBirth, today),
     gender: bio.gender,
     height_cm: bio.heightCm ?? null,
     weight_kg: bio.weightKg ?? null,

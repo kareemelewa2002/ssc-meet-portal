@@ -19,8 +19,8 @@ test.describe("Registration & validation", () => {
     await page.locator("#email").fill(`e2e.u14.noparent.${Date.now()}@gmail.com`);
     await page.locator("#phone").fill("+10000000001");
     await page.locator("#password").fill("Password123!");
-    await page.locator("#dob").fill("2012-05-01"); // age 14
-    await expect(page.getByText(/Age 14 at signup/i)).toBeVisible();
+    await page.locator("#dob").fill("2012-05-01"); // turns 14 this year (U14)
+    await expect(page.getByText(/Turns 14 this year.*U14/i)).toBeVisible();
     // Parent email field must appear for this age.
     await expect(page.locator("#parentEmail")).toBeVisible();
 
@@ -32,10 +32,22 @@ test.describe("Registration & validation", () => {
     await expect(page.locator("#fullName")).toBeVisible();
   });
 
+  test("birth-year rule: a swimmer born 2013 is eligible U14 even before their birthday this year", async ({ page }) => {
+    await page.goto("/register");
+    // Dec 25 birthday hasn't happened yet relative to today — exact calendar
+    // age would be 12 (ineligible under the old rule), but the swim-
+    // federation birth-year convention (turns 13 in 2026) makes this
+    // swimmer eligible and U14 regardless of the exact date.
+    await page.locator("#dob").fill("2013-12-25");
+    await expect(page.getByText(/Turns 13 this year.*U14/i)).toBeVisible();
+    await expect(page.getByText(/at least 13 years old/i)).toHaveCount(0);
+    await expect(page.locator("#parentEmail")).toBeVisible();
+  });
+
   test("U17/Open swimmers never see a parent email field", async ({ page }) => {
     await page.goto("/register");
-    await page.locator("#dob").fill("2010-05-01"); // age 16 (U17)
-    await expect(page.getByText(/Age 16 at signup/i)).toBeVisible();
+    await page.locator("#dob").fill("2010-05-01"); // turns 16 this year (U17)
+    await expect(page.getByText(/Turns 16 this year.*U17/i)).toBeVisible();
     await expect(page.locator("#parentEmail")).toHaveCount(0);
   });
 
@@ -64,7 +76,9 @@ test.describe("Registration & validation", () => {
   test("U17/Open self-registration succeeds with parent_link_status = 'none'", async ({ page }) => {
     const email = `e2e.u17.${Date.now()}@gmail.com`;
     await page.goto("/register");
-    await page.locator("#fullName").fill("E2E U17 Self Register");
+    // Any persisted signup this test creates should read as a real swimmer,
+    // not obvious test junk in the admin's live user list.
+    await page.locator("#fullName").fill("Youssef Hassan");
     await page.locator("#email").fill(email);
     await page.locator("#phone").fill("+10000000002");
     await page.locator("#password").fill("Password123!");
@@ -87,7 +101,9 @@ test.describe("Registration & validation", () => {
   test("U14 with parent email supplied succeeds with a pending parent-invite link", async ({ page }) => {
     const email = `e2e.u14.parent.${Date.now()}@gmail.com`;
     await page.goto("/register");
-    await page.locator("#fullName").fill("E2E U14 With Parent");
+    // Any persisted signup this test creates should read as a real swimmer,
+    // not obvious test junk in the admin's live user list.
+    await page.locator("#fullName").fill("Mariam El-Sayed");
     await page.locator("#email").fill(email);
     await page.locator("#phone").fill("+10000000003");
     await page.locator("#password").fill("Password123!");

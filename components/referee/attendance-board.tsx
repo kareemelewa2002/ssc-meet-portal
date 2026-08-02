@@ -5,7 +5,7 @@ import { Check, Loader2, UserRoundX, Users } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn, getErrorMessage } from "@/lib/utils";
+import { cn, getErrorMessage, isValidUuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import {
   applyAttendancePatch,
@@ -65,6 +65,13 @@ export function AttendanceBoard({
     const nextStatus: AttendanceStatus = current === status ? "pending" : status;
 
     setLanes((prev) => setLaneAttendance(prev, heatLaneId, status));
+
+    // A demo/placeholder lane (no real heat selected yet) is never a real
+    // database row — keep the optimistic local toggle for UI review, but
+    // never send it to Supabase (CRITICAL: this used to always fire the
+    // write regardless, 400ing with "invalid input syntax for type uuid").
+    if (!isValidUuid(heatLaneId)) return;
+
     setSavingLaneId(heatLaneId);
     try {
       const supabase = createClient();

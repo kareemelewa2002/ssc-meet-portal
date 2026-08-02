@@ -57,18 +57,18 @@ test.describe("Spectator, leaderboards & navigation", () => {
   });
 
   test.describe("AppHeader dropdown works correctly across roles", () => {
-    const roleChecks: { credEmail: string; roleLabel: string }[] = [
-      { credEmail: CREDENTIALS.admin, roleLabel: "Admin" },
+    const roleChecks: { credEmail: string; roleLabel: string; dashboardHref: string | null }[] = [
+      { credEmail: CREDENTIALS.admin, roleLabel: "Admin", dashboardHref: "/admin" },
       // Scope lock: 'team_captain' no longer exists as a role — a coach
-      // stays 'coach' permanently even while also captaining their club
+      // stays 'coach' permanently even while also captaining their team
       // (teams.captain_id tracks that independently of the role column).
-      { credEmail: CREDENTIALS.coachRiptide, roleLabel: "Coach" },
-      { credEmail: CREDENTIALS.parent1, roleLabel: "Parent" },
-      { credEmail: CREDENTIALS.approvedOpen, roleLabel: "Athlete" },
+      { credEmail: CREDENTIALS.coachRiptide, roleLabel: "Coach", dashboardHref: "/coach" },
+      { credEmail: CREDENTIALS.parent1, roleLabel: "Parent", dashboardHref: null },
+      { credEmail: CREDENTIALS.approvedOpen, roleLabel: "Athlete", dashboardHref: null },
     ];
 
-    for (const { credEmail, roleLabel } of roleChecks) {
-      test(`${roleLabel} account: avatar opens the menu with name, role badge, and Sign Out`, async ({ page }) => {
+    for (const { credEmail, roleLabel, dashboardHref } of roleChecks) {
+      test(`${roleLabel} account: avatar opens the menu with name, role badge, Profile/Settings/Sign Out (+ Role Dashboard if applicable)`, async ({ page }) => {
         const errors: string[] = [];
         page.on("pageerror", (e) => errors.push(e.message));
         page.on("console", (m) => {
@@ -93,7 +93,19 @@ test.describe("Spectator, leaderboards & navigation", () => {
         );
 
         await expect(badge).toBeVisible();
+        await expect(page.getByText("Profile", { exact: true })).toBeVisible();
+        await expect(page.getByText("Account Settings")).toBeVisible();
         await expect(page.getByText("Sign Out")).toBeVisible();
+
+        const dashboardItem = page.locator('[data-slot="dropdown-menu-item"]', { hasText: "Role Dashboard" });
+        if (dashboardHref) {
+          await expect(dashboardItem).toBeVisible();
+          const href = await dashboardItem.first().getAttribute("href");
+          expect(href).toBe(dashboardHref);
+        } else {
+          await expect(dashboardItem).toHaveCount(0);
+        }
+
         expect(errors.filter((e) => !/favicon/i.test(e))).toEqual([]);
       });
     }

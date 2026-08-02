@@ -15,6 +15,10 @@ export const SIGNUP_AGE_REJECTION_MESSAGE =
  * today). Mirrors supabase/schema.sql's public.age_at_date() exactly —
  * calendar-aware (accounts for whether the birthday has occurred yet in the
  * reference year), not a naive year subtraction.
+ *
+ * DISPLAY ONLY (profile page, historical "age at swim" ledgers). Never use
+ * this for age-group bucketing, signup eligibility, or the parent-link gate
+ * — those use ageTurningThisYear below, the swim-federation convention.
  */
 export function calculateAge(dateOfBirth: string | Date, onDate: string | Date = new Date()): number {
   const dob = new Date(dateOfBirth);
@@ -31,20 +35,42 @@ export function calculateAge(dateOfBirth: string | Date, onDate: string | Date =
   return years;
 }
 
-/** U14 (13-14), U17 (15-17), Open (18+). */
+/**
+ * The age a swimmer turns during `referenceDate`'s calendar year — the
+ * standard swim-federation convention for age-group brackets, signup
+ * eligibility, and the parent-link gate, so a swimmer's bracket never flips
+ * mid-season around their birthday. Mirrors
+ * supabase/schema.sql's public.age_turning_this_year().
+ */
+export function ageTurningThisYear(dateOfBirth: string | Date, referenceDate: string | Date = new Date()): number {
+  const dob = new Date(dateOfBirth);
+  const ref = new Date(referenceDate);
+  return ref.getFullYear() - dob.getFullYear();
+}
+
+/** Buckets a turning-age (see ageTurningThisYear) into U14 (13-14), U17 (15-17), Open (18+). */
 export function ageGroupForAge(age: number): AgeGroup {
   if (age <= 14) return "U14";
   if (age <= 17) return "U17";
   return "Open";
 }
 
-export function isEligibleForSignup(age: number): boolean {
-  return age >= MIN_SIGNUP_AGE;
+/** U14: turns 13-14 this year (e.g. born 2012/2013 for the 2026 season).
+ * U17: turns 15-17 (born 2009/2010/2011). Open: turns 18+ (born 2008 or earlier). */
+export function ageGroupForBirthYear(
+  dateOfBirth: string | Date,
+  referenceDate: string | Date = new Date(),
+): AgeGroup {
+  return ageGroupForAge(ageTurningThisYear(dateOfBirth, referenceDate));
 }
 
-/** Under 15 (ages 13-14) — needs a parent/guardian linked before entering a meet. */
-export function requiresParentLink(age: number): boolean {
-  return age <= PARENT_LINK_MAX_AGE;
+export function isEligibleForSignup(dateOfBirth: string | Date, referenceDate: string | Date = new Date()): boolean {
+  return ageTurningThisYear(dateOfBirth, referenceDate) >= MIN_SIGNUP_AGE;
+}
+
+/** Under 15 (turns 13-14 this year) — needs a parent/guardian linked before entering a meet. */
+export function requiresParentLink(dateOfBirth: string | Date, referenceDate: string | Date = new Date()): boolean {
+  return ageTurningThisYear(dateOfBirth, referenceDate) <= PARENT_LINK_MAX_AGE;
 }
 
 /**

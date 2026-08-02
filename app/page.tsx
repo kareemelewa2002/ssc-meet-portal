@@ -86,8 +86,8 @@ export default function HomePage() {
     },
     {
       href: "/teams",
-      label: "Club Directory",
-      description: "Approved clubs, captains, and team rosters.",
+      label: "Team Directory",
+      description: "Approved teams, captains, and rosters.",
       icon: Building2,
     },
   ];
@@ -101,27 +101,32 @@ export default function HomePage() {
     >
       <AppHeader title="Sprint Swimming Challenge" />
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-16 sm:p-8">
-        <header className="flex items-start justify-between gap-3">
+        <header
+          className={cn(
+            "flex items-start justify-between gap-3 rounded-3xl border-2 border-black p-4 shadow-[6px_6px_0px_#000] sm:p-6",
+            outdoorMode ? "bg-black" : "bg-primary/5 backdrop-blur-md",
+          )}
+        >
           <div className="flex items-center gap-3">
             <div
               className={cn(
-                "flex size-11 items-center justify-center rounded-xl",
+                "flex size-12 shrink-0 items-center justify-center rounded-2xl border-2 border-black shadow-[3px_3px_0px_#000] sm:size-14",
                 outdoorMode ? "bg-yellow-300 text-black" : "bg-primary text-primary-foreground",
               )}
             >
-              <Waves className="size-6" />
+              <Waves className="size-6 sm:size-7" />
             </div>
             <div>
               <h1
                 className={cn(
-                  "text-xl font-bold tracking-tight sm:text-2xl",
+                  "text-2xl leading-none font-extrabold tracking-tight sm:text-4xl",
                   outdoorMode && "text-yellow-300",
                 )}
               >
                 Sprint Swimming Challenge
               </h1>
-              <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
-                Spectator portal — live heats, results & series standings
+              <p className={cn("mt-1.5 text-sm font-medium", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
+                Live heats, results & series standings — every splash, tracked.
               </p>
             </div>
           </div>
@@ -131,32 +136,47 @@ export default function HomePage() {
         <MeetSummaryStats outdoorMode={outdoorMode} />
 
         <section aria-label="Quick navigation" className="grid gap-3 sm:grid-cols-3">
-          {navLinks.map((link) => {
+          {navLinks.map((link, i) => {
             const Icon = link.icon;
             const disabled = !link.href;
+            const isHero = i === 0;
             const content = (
               <Card
                 className={cn(
-                  "h-full transition-colors",
-                  disabled && "opacity-50",
-                  !disabled && "hover:border-primary/50",
-                  outdoorMode && "border-yellow-300/40 bg-black",
+                  "h-full transition-all",
+                  disabled && "opacity-50 shadow-none",
+                  !disabled && "hover:-translate-y-1 hover:shadow-[6px_6px_0px_#000] active:translate-y-0 active:shadow-[4px_4px_0px_#000]",
+                  outdoorMode && "border-yellow-300/60 bg-black shadow-[4px_4px_0px_#facc15]",
                 )}
               >
-                <CardContent className="flex min-h-[48px] items-center gap-3 py-4">
+                <CardContent
+                  className={cn(
+                    "flex min-h-[48px] items-center gap-3",
+                    isHero ? "py-6 sm:flex-col sm:items-start sm:gap-4 sm:py-8" : "py-4",
+                  )}
+                >
                   <div
                     className={cn(
-                      "flex size-10 shrink-0 items-center justify-center rounded-lg",
+                      "flex shrink-0 items-center justify-center rounded-xl border-2 border-black",
+                      isHero ? "size-12" : "size-10",
                       outdoorMode ? "bg-yellow-300 text-black" : "bg-muted text-foreground",
                     )}
                   >
-                    {disabled ? <Lock className="size-5" /> : <Icon className="size-5" />}
+                    {disabled ? <Lock className="size-5" /> : <Icon className={isHero ? "size-6" : "size-5"} />}
                   </div>
                   <div className="min-w-0">
-                    <p className={cn("font-semibold", outdoorMode && "text-yellow-300")}>{link.label}</p>
                     <p
                       className={cn(
-                        "truncate text-xs",
+                        "font-bold tracking-tight",
+                        isHero && "text-lg",
+                        outdoorMode && "text-yellow-300",
+                      )}
+                    >
+                      {link.label}
+                    </p>
+                    <p
+                      className={cn(
+                        "text-xs",
                         outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
                       )}
                     >
@@ -167,9 +187,15 @@ export default function HomePage() {
               </Card>
             );
             return disabled ? (
-              <div key={link.label}>{content}</div>
+              <div key={link.label} className={isHero ? "sm:col-span-2 sm:row-span-2" : undefined}>
+                {content}
+              </div>
             ) : (
-              <Link key={link.label} href={link.href!} className="block min-h-[48px]">
+              <Link
+                key={link.label}
+                href={link.href!}
+                className={cn("block min-h-[48px]", isHero && "sm:col-span-2 sm:row-span-2")}
+              >
                 {content}
               </Link>
             );

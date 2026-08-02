@@ -93,7 +93,11 @@ test.describe("Consolidated Referee deck", () => {
     await expect(page.getByText(/Chief Referee|Observer|Lane \d Lock/i)).toHaveCount(0);
   });
 
-  test("two referees viewing the same default heat see each other's saved draft live", async ({ browser }) => {
+  test("two devices on the same Referee account see each other's saved draft live", async ({ browser }) => {
+    // A single dedicated Referee account (seed-demo.sql scope lock) — this
+    // simulates the same referee with a phone AND a tablet open at once,
+    // proving the sync is a genuine postgres_changes subscription rather
+    // than per-session local state, without needing a second seeded user.
     const ctxA = await browser.newContext();
     const ctxB = await browser.newContext();
     const pageA = await ctxA.newPage();
@@ -101,7 +105,7 @@ test.describe("Consolidated Referee deck", () => {
 
     try {
       await login(pageA, CREDENTIALS.referee1);
-      await login(pageB, CREDENTIALS.referee2);
+      await login(pageB, CREDENTIALS.referee1);
       await pageA.goto("/referee");
       await pageB.goto("/referee");
       await pageA.waitForTimeout(1500);

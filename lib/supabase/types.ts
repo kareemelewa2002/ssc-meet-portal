@@ -11,7 +11,7 @@
 // Scope-locked to exactly 5 roles. 'usher'/'entry_helper' folded into
 // 'referee' (a single consolidated deck-official role now handles both
 // call-room attendance and time entry); 'team_captain' folded into 'coach'
-// (teams.captain_id already tracks "who manages this club" independently
+// (teams.captain_id already tracks "who manages this team" independently
 // of the role column — a coach can be a team's captain without a distinct
 // role value for it).
 export type UserRole = "admin" | "referee" | "coach" | "athlete" | "parent";
@@ -72,7 +72,7 @@ export type TeamRow = {
   id: string;
   name: string;
   abbreviation: string | null;
-  club_logo_url: string | null;
+  team_logo_url: string | null;
   captain_id: string | null;
   approved_by_admin: boolean;
   created_at: string;

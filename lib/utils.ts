@@ -5,6 +5,16 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Every real Postgres id in this app is a uuid column — a demo/placeholder
+ * string like "hl-1" always 400s with "invalid input syntax for type uuid"
+ * if it ever reaches a real query. Callers use this to skip the round-trip
+ * entirely instead of letting it fail. */
+export function isValidUuid(value: string): boolean {
+  return UUID_RE.test(value)
+}
+
 /**
  * Extracts a display message from a caught error. Supabase/Postgrest errors
  * thrown via `throw fetchError` are plain `{message, code, ...}` objects,

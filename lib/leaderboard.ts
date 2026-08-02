@@ -131,7 +131,7 @@ export async function fetchSeriesLeaderboard(category: AgeGroup): Promise<Leader
   }
 }
 
-export interface ClubLeaderboardEntry {
+export interface TeamLeaderboardEntry {
   teamId: string;
   teamName: string;
   totalPoints: number;
@@ -149,12 +149,12 @@ interface RawAthleteTeamRow {
   teams: { id: string; name: string } | { id: string; name: string }[] | null;
 }
 
-/** Club Leaderboard Summary — every approved club's swimmers' series
+/** Team Leaderboard Summary — every approved team's swimmers' series
  * total_points summed together, across every age category. Purely a
  * client-side aggregation over the existing series_leaderboards view; no
  * schema changes needed. Athletes with no team (unattached) are excluded —
- * there's no club to attribute their points to. */
-export async function fetchClubLeaderboard(): Promise<ClubLeaderboardEntry[]> {
+ * there's no team to attribute their points to. */
+export async function fetchTeamLeaderboard(): Promise<TeamLeaderboardEntry[]> {
   try {
     const supabase = createClient();
     const { data: points, error } = await supabase
@@ -175,7 +175,7 @@ export async function fetchClubLeaderboard(): Promise<ClubLeaderboardEntry[]> {
       if (team) teamByAthlete.set(row.id, team);
     }
 
-    const totals = new Map<string, ClubLeaderboardEntry>();
+    const totals = new Map<string, TeamLeaderboardEntry>();
     for (const row of points as RawSeriesRow[]) {
       const team = teamByAthlete.get(row.athlete_id);
       if (!team) continue;

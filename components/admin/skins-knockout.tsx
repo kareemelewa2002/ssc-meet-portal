@@ -24,10 +24,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn, getErrorMessage } from "@/lib/utils";
+import { cn, getErrorMessage, isValidUuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { LANE_SEQUENCE } from "@/lib/seeding";
 import { DQ_REASON_LABELS, scoreHeatResult } from "@/lib/results";
+import { AthleteLink } from "@/components/athletes/athlete-link";
 import type { DqReason, ResultOutcome } from "@/lib/supabase/types";
 
 export type SkinsRound = 6 | 4 | 2;
@@ -191,6 +192,12 @@ export function SkinsKnockout({
 
       for (const swimmer of swimmers) {
         if (!swimmer.outcome) continue;
+        // A demo/placeholder swimmer (no real Skins field wired up yet —
+        // see eventId prop) has no matching heat_lanes row, and
+        // heat_lanes.entry_id is a uuid column: querying it with a
+        // non-UUID string like "demo-1" 400s outright rather than just
+        // returning no match. Skip it — there's nothing real to publish.
+        if (!isValidUuid(swimmer.entryId)) continue;
         const { data: lane, error: laneError } = await supabase
           .from("heat_lanes")
           .select("id")
@@ -578,9 +585,11 @@ function LaneRow({
         L{swimmer.laneNumber}
       </div>
       <div className="min-w-0 flex-1">
-        <p className={cn("truncate font-medium", eliminated && "line-through opacity-60")}>
-          {swimmer.athleteName}
-        </p>
+        <AthleteLink
+          athleteId={swimmer.athleteId}
+          name={swimmer.athleteName}
+          className={cn("block truncate font-medium", eliminated && "line-through opacity-60")}
+        />
         {swimmer.teamName && (
           <p className={cn("truncate text-xs", outdoorMode ? "text-yellow-100/60" : "text-muted-foreground")}>
             {swimmer.teamName}
@@ -647,7 +656,7 @@ function MobileSwimmerCard({
             outdoorMode && "text-yellow-300",
           )}
         >
-          {swimmer.athleteName}
+          <AthleteLink athleteId={swimmer.athleteId} name={swimmer.athleteName} />
         </CardTitle>
         {swimmer.teamName && (
           <CardDescription className={outdoorMode ? "text-yellow-100/70" : undefined}>
@@ -749,7 +758,7 @@ function BracketTree({
                           : s.athleteName
                     }
                   >
-                    {s.athleteName}
+                    <AthleteLink athleteId={s.athleteId} name={s.athleteName} />
                     {s.outcome === "no_show" ? " · NS" : s.outcome === "dq" ? " · DQ" : ""}
                   </div>
                 );

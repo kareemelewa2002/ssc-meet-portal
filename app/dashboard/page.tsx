@@ -1,13 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SkinsQualificationModal } from "@/components/dashboard/skins-qualification-modal";
-import { CoachRoster } from "@/components/dashboard/coach-roster";
+import { AthleteLink } from "@/components/athletes/athlete-link";
 import { AppHeader } from "@/components/layout/app-header";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useSkinsQualifiers } from "@/hooks/use-skins-qualifiers";
@@ -32,16 +33,25 @@ const DEMO_INVITE: SkinsCandidate = {
 };
 
 export default function DashboardPage() {
-  const { user } = useCurrentUser();
+  const router = useRouter();
+  const { user, loading: userLoading } = useCurrentUser();
   const isCoach = user?.role === "coach";
   const skinsEventId = process.env.NEXT_PUBLIC_SKINS_EVENT_ID ?? null;
   const { boards, candidates, loading, error, respond } = useSkinsQualifiers(skinsEventId);
   const [modalOpen, setModalOpen] = useState(false);
 
+  // Coaches have their own dedicated dashboard at /coach — Skins slot
+  // management below is athlete-only and doesn't apply to them.
+  useEffect(() => {
+    if (!userLoading && isCoach) router.replace("/coach");
+  }, [userLoading, isCoach, router]);
+
   const myInvite = useMemo(() => {
     const pending = candidates.find((c) => c.response === "pending");
     return pending ?? candidates[0] ?? DEMO_INVITE;
   }, [candidates]);
+
+  if (isCoach) return null;
 
   return (
     <div className="min-h-screen">
@@ -49,32 +59,22 @@ export default function DashboardPage() {
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
       <header className="flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold tracking-tight">
-            {isCoach ? "Coach Dashboard" : "Athlete Dashboard"}
-          </h1>
+          <h1 className="text-2xl font-bold tracking-tight">Athlete Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            {isCoach
-              ? "Your club roster, at a glance — tap any swimmer for their full entry & results history."
-              : "Skins slots are assigned from official meet results — not via event registration."}
+            Skins slots are assigned from official meet results — not via event registration.
           </p>
         </div>
-        {!isCoach && (
-          <Button
-            variant="outline"
-            nativeButton={false}
-            className="min-h-[48px] gap-2"
-            render={<Link href="/dashboard/teams" />}
-          >
-            <Users className="size-4" />
-            My Teams
-          </Button>
-        )}
+        <Button
+          variant="outline"
+          nativeButton={false}
+          className="min-h-[48px] gap-2"
+          render={<Link href="/dashboard/teams" />}
+        >
+          <Users className="size-4" />
+          My Teams
+        </Button>
       </header>
 
-      {isCoach && <CoachRoster />}
-
-      {!isCoach && (
-      <>
       <Card>
         <CardHeader>
           <CardTitle>Session 3 Skins invite</CardTitle>
@@ -145,7 +145,7 @@ export default function DashboardPage() {
                 )}
                 {board.active.map((q) => (
                   <li key={`${q.athleteId}-${q.category}`} className="truncate">
-                    #{q.slotNumber} {q.athleteName}{" "}
+                    #{q.slotNumber} <AthleteLink athleteId={q.athleteId} name={q.athleteName} />{" "}
                     <span className="text-muted-foreground">({q.response})</span>
                   </li>
                 ))}
@@ -154,8 +154,6 @@ export default function DashboardPage() {
           ))}
         </CardContent>
       </Card>
-      </>
-      )}
       </main>
     </div>
   );

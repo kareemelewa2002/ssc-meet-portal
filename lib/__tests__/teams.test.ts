@@ -6,7 +6,7 @@ describe("buildTeamCreateInsert", () => {
     const payload = buildTeamCreateInsert({
       name: "  Blue Marlins  ",
       abbreviation: " BLM ",
-      clubLogoUrl: null,
+      teamLogoUrl: null,
       captainId: "coach-1",
     });
     expect(payload.name).toBe("Blue Marlins");

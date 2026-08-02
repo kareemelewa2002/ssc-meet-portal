@@ -183,12 +183,12 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 2. Club teams
+-- 2. Teams
 -- ---------------------------------------------------------------------------
--- The 4th club is intentionally left unapproved — a live fixture for the
--- Admin "Pending Club Approvals" workflow (approve/reject), the same role
+-- The 4th team is intentionally left unapproved — a live fixture for the
+-- Admin "Pending Team Approvals" workflow (approve/reject), the same role
 -- the unapproved/pending-parent athletes play for swimmer approvals.
-insert into public.teams (name, abbreviation, club_logo_url, approved_by_admin)
+insert into public.teams (name, abbreviation, team_logo_url, approved_by_admin)
 values
   ('Riptide Swim Club', 'RIPT', 'https://placehold.co/128x128?text=RIPT', true),
   ('Blue Marlins', 'BLUM', 'https://placehold.co/128x128?text=BLUM', true),
@@ -196,7 +196,7 @@ values
   ('Sunburst Aquatics', 'SUNB', 'https://placehold.co/128x128?text=SUNB', false)
 on conflict (name) do update
   set abbreviation = excluded.abbreviation,
-      club_logo_url = excluded.club_logo_url,
+      team_logo_url = excluded.team_logo_url,
       approved_by_admin = excluded.approved_by_admin;
 
 -- ---------------------------------------------------------------------------
@@ -312,20 +312,15 @@ where e.session_id = s.id
 -- those old seed identities are gone, folded into a flat pool of referees.
 do $$
 begin
-  -- 8 consolidated Referees — each handles call-room attendance AND heat
-  -- time entry for whichever heat they open; no lane-claim or chief tier.
+  -- A single dedicated Referee account — the consolidated Referee role
+  -- covers call-room attendance AND heat time entry for whichever heat
+  -- they open; no lane-claim/chief tier, so there's no need for a pool
+  -- of interchangeable referee seats.
   perform public._seed_get_or_create_user('referee1@ssc-demo.test', 'Marcus Lee', 'referee', '+1-555-0102');
-  perform public._seed_get_or_create_user('referee2@ssc-demo.test', 'Sara Kildow', 'referee', '+1-555-0103');
-  perform public._seed_get_or_create_user('referee3@ssc-demo.test', 'David Okoro', 'referee', '+1-555-0110');
-  perform public._seed_get_or_create_user('referee4@ssc-demo.test', 'Helena Voss', 'referee', '+1-555-0111');
-  perform public._seed_get_or_create_user('referee5@ssc-demo.test', 'Tomasz Nowak', 'referee', '+1-555-0112');
-  perform public._seed_get_or_create_user('referee6@ssc-demo.test', 'Aisha Rahman', 'referee', '+1-555-0113');
-  perform public._seed_get_or_create_user('referee7@ssc-demo.test', 'Connor Hayes', 'referee', '+1-555-0114');
-  perform public._seed_get_or_create_user('referee8@ssc-demo.test', 'Yuki Tanaka', 'referee', '+1-555-0115');
 
-  -- Coaches — one per club. Also each club's captain_id (assigned below),
+  -- Coaches — one per team. Also each team's captain_id (assigned below),
   -- but that never changes their role away from 'coach' — teams.captain_id
-  -- already tracks "who manages this club" independently of role.
+  -- already tracks "who manages this team" independently of role.
   perform public._seed_get_or_create_user('coach.riptide@ssc-demo.test', 'Coach Riley Adams', 'coach', '+1-555-0106');
   perform public._seed_get_or_create_user('coach.marlins@ssc-demo.test', 'Coach Jordan Kim', 'coach', '+1-555-0130');
   perform public._seed_get_or_create_user('coach.tidalwave@ssc-demo.test', 'Coach Alicia Moreno', 'coach', '+1-555-0131');
@@ -345,7 +340,7 @@ where name = 'Tidal Wave';
 
 -- ---------------------------------------------------------------------------
 -- 5. Athletes — 36 regular swimmers (12 per age group, 6 male + 6 female
--- each, distributed across all 3 clubs), plus 1 unapproved swimmer and 1
+-- each, distributed across all 3 teams), plus 1 unapproved swimmer and 1
 -- under-15 swimmer with a still-pending parent linkage to exercise both
 -- approval gates independently of the regular population.
 -- ---------------------------------------------------------------------------
@@ -410,7 +405,7 @@ begin
       v_age integer;
     begin
       v_user_id := public._seed_get_or_create_user(rec.email, rec.full_name, 'athlete', null);
-      v_age := public.age_at_date(rec.dob, current_date);
+      v_age := public.age_turning_this_year(rec.dob, current_date);
 
       insert into public.athletes (
         user_id, team_id, parent_id, date_of_birth, age, age_group, gender,
@@ -446,8 +441,8 @@ begin
       user_id, team_id, date_of_birth, age, age_group, gender,
       specialty_events, parent_link_status, approved_by_admin
     ) values (
-      v_nathan_id, v_riptide, date '2006-05-05', public.age_at_date(date '2006-05-05', current_date),
-      public.age_group_for_age(public.age_at_date(date '2006-05-05', current_date)), 'male',
+      v_nathan_id, v_riptide, date '2006-05-05', public.age_turning_this_year(date '2006-05-05', current_date),
+      public.age_group_for_age(public.age_turning_this_year(date '2006-05-05', current_date)), 'male',
       array['Freestyle'], 'none', false
     )
     on conflict (user_id) do update set approved_by_admin = false, parent_link_status = 'none';
@@ -457,8 +452,8 @@ begin
       user_id, team_id, date_of_birth, age, age_group, gender,
       specialty_events, parent_link_status, pending_parent_email, approved_by_admin
     ) values (
-      v_zoe_id, v_marlins, date '2012-08-01', public.age_at_date(date '2012-08-01', current_date),
-      public.age_group_for_age(public.age_at_date(date '2012-08-01', current_date)), 'female',
+      v_zoe_id, v_marlins, date '2012-08-01', public.age_turning_this_year(date '2012-08-01', current_date),
+      public.age_group_for_age(public.age_turning_this_year(date '2012-08-01', current_date)), 'female',
       array['Freestyle'], 'pending', 'unclaimed.parent@ssc-demo.test', true
     )
     on conflict (user_id) do update
@@ -470,9 +465,9 @@ end $$;
 
 -- ---------------------------------------------------------------------------
 -- 6. Volume team affiliations (Feature 2). All 36 regular athletes represent
--- their current club for SSC Vol. 1, EXCEPT Isabella Cruz (athlete19), who
+-- their current team for SSC Vol. 1, EXCEPT Isabella Cruz (athlete19), who
 -- is deliberately recorded as having swum Vol. 1 unattached — demonstrating
--- that historical team display is independent of an athlete's current club.
+-- that historical team display is independent of an athlete's current team.
 -- ---------------------------------------------------------------------------
 insert into public.volume_team_affiliations (athlete_id, meet_volume_id, team_id)
 select a.id, mv.id, case when u.email = 'athlete19@ssc-demo.test' then null else a.team_id end
@@ -497,7 +492,7 @@ on conflict (athlete_id, meet_volume_id) do update set team_id = excluded.team_i
 -- athlete02's entries stay 'pending_payment' (everyone else's are
 -- pre-'confirmed') — a live fixture for the Admin "Cash Payments on Deck"
 -- verification tab, the same role the unapproved/pending-parent swimmers
--- and the unapproved club play for their respective approval workflows.
+-- and the unapproved team play for their respective approval workflows.
 -- ---------------------------------------------------------------------------
 insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
 select

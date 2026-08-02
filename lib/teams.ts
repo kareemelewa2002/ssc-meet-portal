@@ -5,14 +5,14 @@ import type { TeamRow } from "@/lib/supabase/types";
 export interface TeamCreateInput {
   name: string;
   abbreviation?: string | null;
-  clubLogoUrl?: string | null;
+  teamLogoUrl?: string | null;
   captainId: string;
 }
 
 export interface TeamCreateInsertPayload {
   name: string;
   abbreviation: string | null;
-  club_logo_url: string | null;
+  team_logo_url: string | null;
   captain_id: string;
   approved_by_admin: false;
 }
@@ -23,7 +23,7 @@ export function buildTeamCreateInsert(input: TeamCreateInput): TeamCreateInsertP
   return {
     name: input.name.trim(),
     abbreviation: input.abbreviation?.trim() || null,
-    club_logo_url: input.clubLogoUrl?.trim() || null,
+    team_logo_url: input.teamLogoUrl?.trim() || null,
     captain_id: input.captainId,
     approved_by_admin: false,
   };
@@ -52,8 +52,8 @@ export function didTransferTeams(history: TeamHistoryEntry[]): boolean {
   return distinctTeams.size > 1;
 }
 
-/** The public club directory grid — always approved-only, regardless of
- * viewer role. Pending clubs surface separately via fetchPendingTeams(),
+/** The public team directory grid — always approved-only, regardless of
+ * viewer role. Pending teams surface separately via fetchPendingTeams(),
  * in the admin approval queue, never mixed into the public listing. */
 export async function fetchTeams(): Promise<TeamRow[]> {
   try {
@@ -87,10 +87,10 @@ export async function fetchPendingTeams(): Promise<TeamRow[]> {
   }
 }
 
-/** The club a signed-in Coach manages, via teams.captain_id = auth.uid() —
+/** The team a signed-in Coach manages, via teams.captain_id = auth.uid() —
  * independent of the role column (see supabase/schema.sql's user_role
  * comment: a coach stays 'coach' even while also serving as a team's
- * captain). Null if this coach doesn't captain any club yet. */
+ * captain). Null if this coach doesn't captain any team yet. */
 export async function fetchMyManagedTeam(): Promise<TeamRow | null> {
   try {
     const supabase = createClient();
@@ -110,6 +110,35 @@ export async function fetchMyManagedTeam(): Promise<TeamRow | null> {
   }
 }
 
+export interface MyAthleteSummary {
+  athleteId: string;
+  ageGroup: string;
+  teamId: string | null;
+}
+
+/** The signed-in user's own athlete row (age group + current team), if
+ * they're an athlete — drives team-creation eligibility (Open-only) and the
+ * "Request to Join Team" button's state on the Teams page. Null for
+ * non-athlete roles or signed-out visitors. */
+export async function fetchMyAthleteSummary(): Promise<MyAthleteSummary | null> {
+  try {
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return null;
+    const { data, error } = await supabase
+      .from("athletes")
+      .select("id, age_group, team_id")
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (error || !data) return null;
+    return { athleteId: data.id, ageGroup: data.age_group, teamId: data.team_id };
+  } catch {
+    return null;
+  }
+}
+
 export async function approveTeam(teamId: string): Promise<{ success: boolean; error?: string }> {
   const supabase = createClient();
   const { error } = await supabase.from("teams").update({ approved_by_admin: true }).eq("id", teamId);
@@ -117,7 +146,7 @@ export async function approveTeam(teamId: string): Promise<{ success: boolean; e
   return { success: true };
 }
 
-/** "Reject" deletes the pending club outright — teams only exist once
+/** "Reject" deletes the pending team outright — teams only exist once
  * approved; there's no separate "rejected" state to persist. */
 export async function rejectTeam(teamId: string): Promise<{ success: boolean; error?: string }> {
   const supabase = createClient();
@@ -144,6 +173,8 @@ export interface TeamRosterMember {
   fullName: string;
   ageGroup: string;
   gender: string;
+  email: string;
+  phone: string | null;
 }
 
 export interface TeamDetail {
@@ -151,8 +182,8 @@ export interface TeamDetail {
   roster: TeamRosterMember[];
 }
 
-/** Club profile detail — captain contact + current member roster (athletes
- * whose current team_id is this club; independent of any single volume's
+/** Team profile detail — captain contact + current member roster (athletes
+ * whose current team_id is this team; independent of any single volume's
  * representation, which volume_team_affiliations tracks separately). */
 export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
   try {
@@ -163,7 +194,7 @@ export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
         .from("athletes")
         // Qualify the FK — athletes has two (user_id and parent_id), so a
         // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-        .select("id, age_group, gender, users!athletes_user_id_fkey ( full_name )")
+        .select("id, age_group, gender, users!athletes_user_id_fkey ( full_name, email, phone )")
         .eq("team_id", teamId),
     ]);
 
@@ -175,7 +206,7 @@ export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
       id: string;
       age_group: string;
       gender: string;
-      users: { full_name: string } | { full_name: string }[] | null;
+      users: { full_name: string; email: string; phone: string | null } | { full_name: string; email: string; phone: string | null }[] | null;
     };
 
     const rawTeam = team as unknown as RawTeam | null;
@@ -192,6 +223,8 @@ export async function fetchTeamDetail(teamId: string): Promise<TeamDetail> {
         fullName: user?.full_name ?? "Athlete",
         ageGroup: row.age_group,
         gender: row.gender,
+        email: user?.email ?? "—",
+        phone: user?.phone ?? null,
       };
     });
 

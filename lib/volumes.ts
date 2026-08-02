@@ -23,17 +23,49 @@ export const DEMO_VOLUMES: MeetVolumeRow[] = [
   },
 ];
 
-export async function fetchVolumeByNumber(volumeNumber: number): Promise<MeetVolumeRow | null> {
-  const fallback = DEMO_VOLUMES.find((v) => v.volume_number === volumeNumber) ?? null;
+/** "SSC Vol. 1" -> "ssc-vol-1" — lowercase, non-alphanumerics collapsed to
+ * single hyphens, trimmed. Used both to build slug links and to resolve
+ * a volume by slug below. */
+export function slugifyVolumeName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Resolves a meet volume from a route param that may be either the numeric
+ * volume_number ("1") or a slugified name ("ssc-vol-1") — both forms are
+ * valid /events/[volId]/... URLs. A bare Number(volId) on a slug produces
+ * NaN, which 400s against the integer volume_number column outright rather
+ * than just finding nothing, so the numeric path is only ever attempted
+ * when volId genuinely parses as a positive integer.
+ */
+export async function fetchVolumeByNumber(volId: string | number): Promise<MeetVolumeRow | null> {
+  const raw = String(volId).trim();
+  const asNumber = Number(raw);
+  const isNumeric = raw !== "" && Number.isInteger(asNumber) && asNumber > 0;
+
+  const fallback =
+    (isNumeric ? DEMO_VOLUMES.find((v) => v.volume_number === asNumber) : null) ??
+    DEMO_VOLUMES.find((v) => slugifyVolumeName(v.name) === raw.toLowerCase()) ??
+    null;
+
   try {
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from("meet_volumes")
-      .select("*")
-      .eq("volume_number", volumeNumber)
-      .maybeSingle();
-    if (error || !data) return fallback;
-    return data;
+    if (isNumeric) {
+      const { data, error } = await supabase
+        .from("meet_volumes")
+        .select("*")
+        .eq("volume_number", asNumber)
+        .maybeSingle();
+      if (!error && data) return data;
+    }
+    // Slug fallback — matches by name client-side since slugifying happens
+    // in JS, not SQL (the table has no separate slug column).
+    const { data: all, error: allError } = await supabase.from("meet_volumes").select("*");
+    if (allError || !all) return fallback;
+    return all.find((v) => slugifyVolumeName(v.name) === raw.toLowerCase()) ?? fallback;
   } catch {
     return fallback;
   }

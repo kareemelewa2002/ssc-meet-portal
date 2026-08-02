@@ -9,9 +9,11 @@ export const SEED_PASSWORD = "Password123!";
 // chief_referee anymore.
 export const CREDENTIALS = {
   admin: "elewakareem2002@gmail.com",
+  // A single dedicated Referee account — seed-demo.sql no longer seeds a
+  // pool of interchangeable referees.
   referee1: "referee1@ssc-demo.test",
-  referee2: "referee2@ssc-demo.test",
   coachRiptide: "coach.riptide@ssc-demo.test",
+  coachMarlins: "coach.marlins@ssc-demo.test",
   parent1: "parent1@ssc-demo.test",
   approvedU14: "athlete01@ssc-demo.test",
   approvedU17: "athlete13@ssc-demo.test",

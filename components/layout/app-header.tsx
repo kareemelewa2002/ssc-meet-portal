@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Home, LogIn, LogOut } from "lucide-react";
+import { ArrowLeft, Home, LayoutDashboard, LogIn, LogOut, Settings, User } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,12 +18,21 @@ import {
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
+import type { UserRole } from "@/lib/supabase/types";
 
 export interface AppHeaderProps {
   /** Page title shown centered in the bar. */
   title?: string;
   className?: string;
 }
+
+/** Only roles with a dedicated deck portal get a "Role Dashboard" link —
+ * athletes/parents use /profile and the public pages instead. */
+const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
+  admin: "/admin",
+  referee: "/referee",
+  coach: "/coach",
+};
 
 function initialsFor(fullName: string): string {
   return fullName
@@ -58,7 +67,7 @@ export function AppHeader({ title, className }: AppHeaderProps) {
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 flex min-h-[56px] items-center justify-between gap-2 border-b bg-background/95 px-2 py-2 backdrop-blur-sm sm:px-6",
+        "sticky top-0 z-30 flex min-h-[56px] items-center justify-between gap-2 border-b-2 border-black bg-background/80 px-2 py-2 backdrop-blur-md sm:px-6",
         className,
       )}
     >
@@ -86,7 +95,7 @@ export function AppHeader({ title, className }: AppHeaderProps) {
       </div>
 
       {title && (
-        <h1 className="min-w-0 flex-1 truncate text-center text-sm font-semibold sm:text-base">
+        <h1 className="min-w-0 flex-1 truncate text-center text-sm font-extrabold tracking-tight sm:text-base">
           {title}
         </h1>
       )}
@@ -97,7 +106,12 @@ export function AppHeader({ title, className }: AppHeaderProps) {
         ) : user ? (
           <DropdownMenu>
             <DropdownMenuTrigger
-              render={<Button variant="ghost" className="h-10 min-h-[44px] gap-2 px-2" />}
+              render={
+                <Button
+                  variant="ghost"
+                  className="h-10 min-h-[44px] touch-manipulation gap-2 px-2"
+                />
+              }
             >
               <Avatar className="size-8">
                 {user.profileImageUrl ? (
@@ -118,6 +132,24 @@ export function AppHeader({ title, className }: AppHeaderProps) {
                   </Badge>
                 </div>
               </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="min-h-[40px]" render={<Link href="/profile" />}>
+                <User className="size-4" />
+                Profile
+              </DropdownMenuItem>
+              {ROLE_DASHBOARD_HREF[user.role] && (
+                <DropdownMenuItem
+                  className="min-h-[40px]"
+                  render={<Link href={ROLE_DASHBOARD_HREF[user.role]!} />}
+                >
+                  <LayoutDashboard className="size-4" />
+                  Role Dashboard
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem className="min-h-[40px]" render={<Link href="/settings" />}>
+                <Settings className="size-4" />
+                Account Settings
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 variant="destructive"

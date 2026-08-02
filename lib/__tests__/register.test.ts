@@ -21,6 +21,11 @@ describe("validateAthleteAge", () => {
   it("accepts swimmers 13 and older", () => {
     expect(validateAthleteAge("2013-06-01", new Date("2026-10-02")).ok).toBe(true);
   });
+
+  it("accepts a swimmer born 2013 even before their birthday this year (birth-year rule)", () => {
+    // Turns 13 in 2026 regardless of whether Dec 31 has passed by Jan 1.
+    expect(validateAthleteAge("2013-12-31", new Date("2026-01-01")).ok).toBe(true);
+  });
 });
 
 describe("validateParentLinkage", () => {

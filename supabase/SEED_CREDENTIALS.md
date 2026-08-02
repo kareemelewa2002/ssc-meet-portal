@@ -18,7 +18,7 @@ separate Usher, Entry Desk Helper, or Chief Referee anymore).
 | Role | Email |
 |---|---|
 | Superadmin / Meet Director (Admin) | `elewakareem2002@gmail.com` |
-| Referees (1–8) | `referee1@ssc-demo.test` … `referee8@ssc-demo.test` |
+| Referee (single dedicated account) | `referee1@ssc-demo.test` |
 | Coaches | `coach.riptide@ssc-demo.test`, `coach.marlins@ssc-demo.test`, `coach.tidalwave@ssc-demo.test` |
 | Parents (1–3) | `parent1@ssc-demo.test` … `parent3@ssc-demo.test` |
 | U14 swimmers, ages 13–14 (1–12) | `athlete01@ssc-demo.test` … `athlete12@ssc-demo.test` |

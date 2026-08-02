@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Building2, Loader2, Plus, ShieldCheck, Users } from "lucide-react";
+import { Building2, Loader2, Plus, ShieldCheck, UserPlus, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -19,16 +19,28 @@ import {
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AppHeader } from "@/components/layout/app-header";
-import { PendingClubApprovals } from "@/components/admin/pending-club-approvals";
-import { createTeam, fetchTeamDetail, fetchTeams, type TeamDetail } from "@/lib/teams";
+import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
+import { TeamJoinRequests } from "@/components/teams/team-join-requests";
+import { AthleteLink } from "@/components/athletes/athlete-link";
+import {
+  createTeam,
+  fetchMyAthleteSummary,
+  fetchTeamDetail,
+  fetchTeams,
+  type MyAthleteSummary,
+  type TeamDetail,
+} from "@/lib/teams";
+import { cancelJoinRequest, fetchMyJoinRequest, requestToJoinTeam, type MyJoinRequest } from "@/lib/team-memberships";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { useToast } from "@/hooks/use-toast";
 import type { TeamRow } from "@/lib/supabase/types";
 
 const AGE_GROUP_LABELS: Record<string, string> = { U14: "U14", U17: "U17", Open: "Open" };
 
 export default function TeamsPage() {
   const { user } = useCurrentUser();
+  const toast = useToast();
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -40,6 +52,12 @@ export default function TeamsPage() {
   const [rosterTeam, setRosterTeam] = useState<TeamRow | null>(null);
   const [rosterDetail, setRosterDetail] = useState<TeamDetail | null>(null);
   const [rosterLoading, setRosterLoading] = useState(false);
+  const [myAthlete, setMyAthlete] = useState<MyAthleteSummary | null>(null);
+  const [myJoinRequest, setMyJoinRequest] = useState<MyJoinRequest | null>(null);
+  const [joinBusyTeamId, setJoinBusyTeamId] = useState<string | null>(null);
+
+  const canCaptainTeam =
+    user?.role === "coach" || user?.role === "admin" || (user?.role === "athlete" && myAthlete?.ageGroup === "Open");
 
   const openRoster = async (team: TeamRow) => {
     setRosterTeam(team);
@@ -50,13 +68,52 @@ export default function TeamsPage() {
 
   const load = async () => {
     setLoading(true);
-    setTeams(await fetchTeams());
+    const [teamsList, athleteSummary, joinRequest] = await Promise.all([
+      fetchTeams(),
+      fetchMyAthleteSummary(),
+      fetchMyJoinRequest(),
+    ]);
+    setTeams(teamsList);
+    setMyAthlete(athleteSummary);
+    setMyJoinRequest(joinRequest);
     setLoading(false);
   };
 
   useEffect(() => {
     void load();
   }, []);
+
+  const handleRequestToJoin = async (team: TeamRow) => {
+    setJoinBusyTeamId(team.id);
+    try {
+      const res = await requestToJoinTeam(team.id);
+      if (!res.success) {
+        toast.error("Couldn't send join request", res.error);
+        return;
+      }
+      setMyJoinRequest({ id: "", teamId: team.id, teamName: team.name, status: "pending", requestedAt: new Date().toISOString() });
+      toast.success("Join request sent", `${team.name}'s captain will review your request.`);
+      void load();
+    } finally {
+      setJoinBusyTeamId(null);
+    }
+  };
+
+  const handleCancelJoin = async () => {
+    if (!myJoinRequest) return;
+    setJoinBusyTeamId(myJoinRequest.teamId);
+    try {
+      const res = await cancelJoinRequest(myJoinRequest.id);
+      if (!res.success) {
+        toast.error("Couldn't cancel request", res.error);
+        return;
+      }
+      setMyJoinRequest(null);
+      toast.success("Join request canceled");
+    } finally {
+      setJoinBusyTeamId(null);
+    }
+  };
 
   const handleCreate = async () => {
     setError(null);
@@ -77,7 +134,7 @@ export default function TeamsPage() {
       const res = await createTeam({
         name,
         abbreviation: abbreviation || null,
-        clubLogoUrl: logoUrl || null,
+        teamLogoUrl: logoUrl || null,
         captainId: user.id,
       });
       if (!res.success) {
@@ -96,59 +153,67 @@ export default function TeamsPage() {
 
   return (
     <div className="min-h-screen">
-      <AppHeader title="Club Directory" />
+      <AppHeader title="Team Directory" />
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
-      <div className="flex items-center justify-end gap-3">
-        <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-          <DialogTrigger render={<Button className="min-h-[48px] gap-2" />}>
-            <Plus className="size-4" />
-            Create Team
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Create a new team</DialogTitle>
-              <DialogDescription>
-                Teams exist permanently on the platform and require admin approval before they
-                can be selected as representation for a meet volume.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 py-2">
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-              <div className="space-y-1.5">
-                <Label htmlFor="teamName">Team name</Label>
-                <Input id="teamName" className="min-h-[48px]" value={name} onChange={(e) => setName(e.target.value)} />
+      {!loading && canCaptainTeam && (
+        <div className="flex items-center justify-end gap-3">
+          <Dialog open={modalOpen} onOpenChange={setModalOpen}>
+            <DialogTrigger render={<Button className="min-h-[48px] gap-2" />}>
+              <Plus className="size-4" />
+              Create Team
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Create a new team</DialogTitle>
+                <DialogDescription>
+                  Teams exist permanently on the platform and require admin approval before they
+                  can be selected as representation for a meet volume.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-3 py-2">
+                {error && (
+                  <Alert variant="destructive">
+                    <AlertDescription>{error}</AlertDescription>
+                  </Alert>
+                )}
+                <div className="space-y-1.5">
+                  <Label htmlFor="teamName">Team name</Label>
+                  <Input id="teamName" className="min-h-[48px]" value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="abbr">Abbreviation</Label>
+                  <Input id="abbr" className="min-h-[48px]" value={abbreviation} onChange={(e) => setAbbreviation(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="logo">Team logo URL</Label>
+                  <Input id="logo" type="url" className="min-h-[48px]" value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} />
+                </div>
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="abbr">Abbreviation</Label>
-                <Input id="abbr" className="min-h-[48px]" value={abbreviation} onChange={(e) => setAbbreviation(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="logo">Club logo URL</Label>
-                <Input id="logo" type="url" className="min-h-[48px]" value={logoUrl} onChange={(e) => setLogoUrl(e.target.value)} />
-              </div>
-            </div>
-            <DialogFooter>
-              <Button className="min-h-[48px] w-full" disabled={submitting} onClick={() => void handleCreate()}>
-                {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
-                Submit for approval
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+              <DialogFooter>
+                <Button className="min-h-[48px] w-full" disabled={submitting} onClick={() => void handleCreate()}>
+                  {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
+                  Submit for approval
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      )}
 
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Teams</h1>
         <p className="text-sm text-muted-foreground">
           Teams are permanent on the platform, independent of any single meet volume.
         </p>
+        {!loading && user?.role === "athlete" && !canCaptainTeam && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Only Open age-group (18+) athletes, coaches, or admins can create a team — browse and request to
+            join one below instead.
+          </p>
+        )}
       </header>
 
-      {user?.role === "admin" && <PendingClubApprovals />}
+      {user?.role === "admin" && <PendingTeamApprovals />}
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading teams…</p>
@@ -164,7 +229,7 @@ export default function TeamsPage() {
             <Card key={team.id}>
               <CardHeader className="flex-row items-center gap-3 space-y-0">
                 <Avatar className="size-12">
-                  {team.club_logo_url ? <AvatarImage src={team.club_logo_url} alt={team.name} /> : null}
+                  {team.team_logo_url ? <AvatarImage src={team.team_logo_url} alt={team.name} /> : null}
                   <AvatarFallback>{team.abbreviation ?? team.name.slice(0, 2).toUpperCase()}</AvatarFallback>
                 </Avatar>
                 <div className="min-w-0 flex-1">
@@ -183,7 +248,7 @@ export default function TeamsPage() {
                   </Badge>
                 )}
               </CardHeader>
-              <CardContent>
+              <CardContent className="space-y-2">
                 <Button
                   variant="outline"
                   className="min-h-[44px] w-full gap-2"
@@ -192,6 +257,40 @@ export default function TeamsPage() {
                   <Users className="size-4" />
                   View Roster & Captain Contact
                 </Button>
+                {user?.role === "athlete" &&
+                  (myAthlete?.teamId === team.id ? (
+                    <Badge variant="outline" className="w-full justify-center gap-1 py-2">
+                      <ShieldCheck className="size-3.5" />
+                      Your Team
+                    </Badge>
+                  ) : myJoinRequest?.teamId === team.id ? (
+                    <Button
+                      variant="outline"
+                      className="min-h-[44px] w-full gap-2"
+                      disabled={joinBusyTeamId === team.id}
+                      onClick={() => void handleCancelJoin()}
+                    >
+                      {joinBusyTeamId === team.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <XCircle className="size-4" />
+                      )}
+                      Cancel Request (Pending)
+                    </Button>
+                  ) : (
+                    <Button
+                      className="min-h-[44px] w-full gap-2"
+                      disabled={joinBusyTeamId === team.id || !!myJoinRequest}
+                      onClick={() => void handleRequestToJoin(team)}
+                    >
+                      {joinBusyTeamId === team.id ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <UserPlus className="size-4" />
+                      )}
+                      Request to Join Team
+                    </Button>
+                  ))}
               </CardContent>
             </Card>
           ))}
@@ -208,6 +307,9 @@ export default function TeamsPage() {
             <p className="py-4 text-center text-sm text-muted-foreground">Loading roster…</p>
           ) : (
             <div className="space-y-4 py-2">
+              {user && rosterTeam && user.id === rosterTeam.captain_id && (
+                <TeamJoinRequests teamId={rosterTeam.id} />
+              )}
               <div>
                 <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Captain</p>
                 {rosterDetail?.captain ? (
@@ -233,7 +335,7 @@ export default function TeamsPage() {
                         key={m.athleteId}
                         className="flex items-center justify-between gap-2 rounded-lg border p-2 text-sm"
                       >
-                        <span className="truncate font-medium">{m.fullName}</span>
+                        <AthleteLink athleteId={m.athleteId} name={m.fullName} className="truncate" />
                         <span className="flex shrink-0 gap-1">
                           <Badge variant="outline" className="text-[10px]">
                             {AGE_GROUP_LABELS[m.ageGroup] ?? m.ageGroup}

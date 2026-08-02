@@ -11,7 +11,7 @@ import { getErrorMessage } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type { TeamRow } from "@/lib/supabase/types";
 
-export function PendingClubApprovals({ className }: { className?: string }) {
+export function PendingTeamApprovals({ className }: { className?: string }) {
   const toast = useToast();
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -24,7 +24,7 @@ export function PendingClubApprovals({ className }: { className?: string }) {
     try {
       setTeams(await fetchPendingTeams());
     } catch (err) {
-      setError(getErrorMessage(err, "Failed to load pending clubs."));
+      setError(getErrorMessage(err, "Failed to load pending teams."));
     } finally {
       setLoading(false);
     }
@@ -41,13 +41,13 @@ export function PendingClubApprovals({ className }: { className?: string }) {
     try {
       const res = await approveTeam(teamId);
       if (!res.success) {
-        const message = res.error ?? "Failed to approve club.";
+        const message = res.error ?? "Failed to approve team.";
         setError(message);
-        toast.error("Failed to approve club", message);
+        toast.error("Failed to approve team", message);
         return;
       }
       setTeams((prev) => prev.filter((t) => t.id !== teamId));
-      toast.success("Club approved", team ? `${team.name} now appears in the public directory.` : undefined);
+      toast.success("Team approved", team ? `${team.name} now appears in the public directory.` : undefined);
     } finally {
       setBusyId(null);
     }
@@ -59,13 +59,13 @@ export function PendingClubApprovals({ className }: { className?: string }) {
     try {
       const res = await rejectTeam(teamId);
       if (!res.success) {
-        const message = res.error ?? "Failed to reject club.";
+        const message = res.error ?? "Failed to reject team.";
         setError(message);
-        toast.error("Failed to reject club", message);
+        toast.error("Failed to reject team", message);
         return;
       }
       setTeams((prev) => prev.filter((t) => t.id !== teamId));
-      toast.success("Club rejected");
+      toast.success("Team rejected");
     } finally {
       setBusyId(null);
     }
@@ -75,9 +75,9 @@ export function PendingClubApprovals({ className }: { className?: string }) {
     <Card className={className}>
       <CardHeader className="flex-row items-start justify-between gap-3">
         <div>
-          <CardTitle>Pending club approvals</CardTitle>
+          <CardTitle>Pending team approvals</CardTitle>
           <CardDescription>
-            New clubs start unapproved and stay out of the public directory until reviewed here.
+            New teams start unapproved and stay out of the public directory until reviewed here.
           </CardDescription>
         </div>
         <Button
@@ -98,7 +98,7 @@ export function PendingClubApprovals({ className }: { className?: string }) {
         )}
 
         {teams.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No pending club approvals.</p>
+          <p className="text-sm text-muted-foreground">No pending team approvals.</p>
         ) : (
           <div className="space-y-3">
             {teams.map((team) => (
@@ -108,7 +108,7 @@ export function PendingClubApprovals({ className }: { className?: string }) {
               >
                 <div className="flex min-w-0 items-center gap-3">
                   <Avatar className="size-10 shrink-0">
-                    {team.club_logo_url ? <AvatarImage src={team.club_logo_url} alt={team.name} /> : null}
+                    {team.team_logo_url ? <AvatarImage src={team.team_logo_url} alt={team.name} /> : null}
                     <AvatarFallback>
                       <Building2 className="size-4" />
                     </AvatarFallback>
@@ -132,7 +132,7 @@ export function PendingClubApprovals({ className }: { className?: string }) {
                     ) : (
                       <CheckCircle2 className="size-4" />
                     )}
-                    Approve Club
+                    Approve Team
                   </Button>
                   <Button
                     type="button"
@@ -142,7 +142,7 @@ export function PendingClubApprovals({ className }: { className?: string }) {
                     onClick={() => void reject(team.id)}
                   >
                     <XCircle className="size-4" />
-                    Reject Club
+                    Reject Team
                   </Button>
                 </div>
               </div>

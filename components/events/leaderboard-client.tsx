@@ -115,7 +115,7 @@ export function LeaderboardClient({ volId }: { volId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const vol = await fetchVolumeByNumber(Number(volId));
+      const vol = await fetchVolumeByNumber(volId);
       if (!cancelled) setVolume(vol);
     })();
     return () => {

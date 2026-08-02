@@ -28,13 +28,13 @@ function ToastRoot({ className, ...props }: ToastPrimitive.Root.Props) {
     <ToastPrimitive.Root
       data-slot="toast"
       className={cn(
-        "[--gap:0.6rem] absolute right-0 bottom-0 left-auto w-full origin-bottom rounded-lg border bg-card p-3 text-card-foreground shadow-lg transition-[transform,opacity] duration-300",
+        "[--gap:0.6rem] absolute right-0 bottom-0 left-auto w-full origin-bottom rounded-xl border-2 border-black bg-card p-3 text-card-foreground shadow-[4px_4px_0px_#000] transition-[transform,opacity] duration-300",
         "[--offset-y:calc(var(--toast-offset-y)*-1+calc(var(--toast-index)*var(--gap)*-1))]",
         "[transform:translateY(var(--offset-y))_scale(calc(max(0,1-(var(--toast-index)*0.06))))]",
         "data-expanded:[transform:translateY(var(--offset-y))]",
         "data-starting-style:translate-y-[150%] data-starting-style:opacity-0",
         "data-ending-style:translate-y-[150%] data-ending-style:opacity-0",
-        "data-[type=success]:border-emerald-500/40 data-[type=error]:border-destructive/40",
+        "data-[type=success]:bg-emerald-50 data-[type=error]:bg-destructive/10",
         className
       )}
       {...props}

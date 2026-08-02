@@ -20,6 +20,7 @@ import { getErrorMessage } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import type { AgeGroup, Gender, ParentLinkStatus } from "@/lib/supabase/types";
 import { firstOf } from "@/lib/live-heats";
+import { AthleteLink } from "@/components/athletes/athlete-link";
 
 export interface PendingSwimmer {
   id: string;
@@ -243,7 +244,7 @@ export function PendingSwimmerApprovals({ className }: { className?: string }) {
                   <TableHead>Swimmer</TableHead>
                   <TableHead>Age / DOB</TableHead>
                   <TableHead>Metrics</TableHead>
-                  <TableHead>Club</TableHead>
+                  <TableHead>Team</TableHead>
                   <TableHead>Parent link</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -252,7 +253,7 @@ export function PendingSwimmerApprovals({ className }: { className?: string }) {
                 {swimmers.map((swimmer) => (
                   <TableRow key={swimmer.id}>
                     <TableCell>
-                      <p className="font-medium">{swimmer.fullName}</p>
+                      <AthleteLink athleteId={swimmer.id} name={swimmer.fullName} className="font-medium" />
                       <p className="text-xs text-muted-foreground">{swimmer.email}</p>
                       <div className="mt-1 flex flex-wrap gap-1">
                         <Badge variant="outline">{AGE_GROUP_LABELS[swimmer.ageGroup]}</Badge>
