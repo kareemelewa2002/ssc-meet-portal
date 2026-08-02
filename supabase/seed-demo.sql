@@ -461,6 +461,33 @@ begin
           pending_parent_email = 'unclaimed.parent@ssc-demo.test',
           approved_by_admin = true;
   end;
+
+  -- ---- Unattached-swimmer fixture (team_id stays NULL) ----
+  -- Every other seeded athlete already belongs to a team, and
+  -- enforce_team_membership_request_rules() locks transfers for anyone with a
+  -- team while a volume is 'scheduled'. Without a genuinely unattached
+  -- swimmer there is no way to exercise the join-request happy path at all —
+  -- the E2E suite could only ever observe the lock. This is also simply
+  -- realistic: a real meet always has swimmers who haven't joined a team yet.
+  declare
+    v_unattached_id uuid;
+  begin
+    v_unattached_id := public._seed_get_or_create_user(
+      'athlete39@ssc-demo.test', 'Selim Fahmy', 'athlete', null);
+    insert into public.athletes (
+      user_id, team_id, date_of_birth, age, age_group, gender,
+      specialty_events, parent_link_status, approved_by_admin
+    ) values (
+      v_unattached_id, null, date '2004-09-12',
+      public.age_turning_this_year(date '2004-09-12', current_date),
+      public.age_group_for_age(public.age_turning_this_year(date '2004-09-12', current_date)),
+      'male', array['Freestyle'], 'none', true
+    )
+    on conflict (user_id) do update
+      set team_id = null,
+          approved_by_admin = true,
+          parent_link_status = 'none';
+  end;
 end $$;
 
 -- ---------------------------------------------------------------------------

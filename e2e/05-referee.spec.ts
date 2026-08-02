@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { CREDENTIALS, login } from "./helpers";
+import { CREDENTIALS, login, requireFixture } from "./helpers";
 
 test.describe("Consolidated Referee deck", () => {
   test("loads with session/event/heat picker, attendance board, and time entry — no console errors", async ({ page }) => {
@@ -24,7 +24,7 @@ test.describe("Consolidated Referee deck", () => {
     await page.waitForTimeout(1500);
 
     const presentButtons = page.getByRole("button", { name: "Present" });
-    test.skip(!(await presentButtons.count()), "No lanes seeded for the default heat.");
+    requireFixture((await presentButtons.count()) > 0, "seeded lanes for the default heat");
 
     // This suite runs repeatedly against the same live, persistent
     // heat_lanes rows (no reset between runs), so lane 1's starting
@@ -112,7 +112,7 @@ test.describe("Consolidated Referee deck", () => {
       await pageB.waitForTimeout(1500);
 
       const validButtonsA = pageA.getByRole("button", { name: "Valid Time" });
-      test.skip(!(await validButtonsA.count()), "No lanes seeded for the default heat.");
+      requireFixture((await validButtonsA.count()) > 0, "seeded lanes for the default heat");
       await validButtonsA.first().click();
       await pageA.locator('input[id^="time-"]').first().fill("00:31.42");
       await pageA.getByRole("button", { name: /Save Progress|Submit Heat Card to Admin/ }).click();

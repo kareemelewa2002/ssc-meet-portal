@@ -56,14 +56,17 @@ const ROUND_SEQUENCE: SkinsRound[] = [6, 4, 2];
 const REST_SECONDS = 3 * 60;
 const DQ_CODES = Object.keys(DQ_REASON_LABELS) as DqReason[];
 
-const DEMO_SWIMMERS: SkinsSwimmer[] = [
-  { entryId: "demo-1", athleteId: "a1", athleteName: "Mia Reyes", teamName: "Blue Marlins", laneNumber: 1, outcome: null, finishPlace: null },
-  { entryId: "demo-2", athleteId: "a2", athleteName: "Noah Alvi", teamName: "Riptide", laneNumber: 2, outcome: null, finishPlace: null },
-  { entryId: "demo-3", athleteId: "a3", athleteName: "Zara Khan", teamName: "Blue Marlins", laneNumber: 3, outcome: null, finishPlace: null },
-  { entryId: "demo-4", athleteId: "a4", athleteName: "Leo Fontaine", teamName: "Tidal Wave", laneNumber: 4, outcome: null, finishPlace: null },
-  { entryId: "demo-5", athleteId: "a5", athleteName: "Ava Thompson", teamName: "Riptide", laneNumber: 5, outcome: null, finishPlace: null },
-  { entryId: "demo-6", athleteId: "a6", athleteName: "Kian Osei", teamName: "Tidal Wave", laneNumber: 6, outcome: null, finishPlace: null },
-];
+/**
+ * Skins has NO placeholder roster.
+ *
+ * This component previously defaulted to a hard-coded six-swimmer demo field,
+ * which meant an admin looking at a meet with zero published results saw a
+ * fully-populated bracket of people who were never entered — and, because
+ * their entryId values were slugs rather than UUIDs, every publish attempt
+ * against them silently no-opped. Skins qualifiers are derived from published
+ * Session 3 results, so until those exist the honest answer is "nothing yet".
+ */
+const NO_SWIMMERS: SkinsSwimmer[] = [];
 
 function nextRound(round: SkinsRound): SkinsRound | null {
   const idx = ROUND_SEQUENCE.indexOf(round);
@@ -103,9 +106,9 @@ export function SkinsKnockout({
   className,
 }: SkinsKnockoutProps) {
   const [round, setRound] = useState<SkinsRound>(6);
-  const [swimmers, setSwimmers] = useState<SkinsSwimmer[]>(initialSwimmers ?? DEMO_SWIMMERS);
+  const [swimmers, setSwimmers] = useState<SkinsSwimmer[]>(initialSwimmers ?? NO_SWIMMERS);
   const [bracket, setBracket] = useState<Partial<Record<SkinsRound, SkinsSwimmer[]>>>({
-    6: initialSwimmers ?? DEMO_SWIMMERS,
+    6: initialSwimmers ?? NO_SWIMMERS,
   });
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -271,6 +274,25 @@ export function SkinsKnockout({
 
   const isFinal = round === 2;
   const restProgressPct = ((REST_SECONDS - restSeconds) / REST_SECONDS) * 100;
+
+  // No field yet: Skins qualifiers come from published Session 3 results, so
+  // rendering a bracket here would mean inventing swimmers. Say so instead.
+  if (swimmers.length === 0) {
+    return (
+      <Card className={className}>
+        <CardHeader>
+          <CardTitle>{eventName}</CardTitle>
+          <CardDescription>Event {eventId}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Awaiting published results to populate Skins Round of 6. The top six finishers in the
+            Session 3 qualifying event are seeded automatically once an admin publishes that heat.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div

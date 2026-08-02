@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { CREDENTIALS, login } from "./helpers";
+import { CREDENTIALS, login, requireFixture } from "./helpers";
 
 test.describe("Admin dashboard", () => {
   test.beforeEach(async ({ page }) => {
@@ -31,11 +31,7 @@ test.describe("Admin dashboard", () => {
     await page.waitForTimeout(800);
 
     const row = page.locator("tr", { hasText: "Sunburst Aquatics" });
-    test.skip(
-      (await row.count()) === 0,
-      "Sunburst Aquatics (the seeded pending team fixture) isn't in the live database yet — " +
-        "re-apply the updated supabase/seed-demo.sql to exercise this test.",
-    );
+    requireFixture((await row.count()) > 0, "the pending team fixture 'Sunburst Aquatics'");
 
     await row.getByRole("button", { name: "Approve Team" }).click();
     await page.waitForTimeout(1000);
@@ -60,7 +56,7 @@ test.describe("Admin dashboard", () => {
     await page.waitForTimeout(1200);
 
     const publishButtons = page.getByRole("button", { name: "Publish Heat Card" });
-    test.skip(!(await publishButtons.count()), "No referee-submitted draft heat cards waiting for review.");
+    requireFixture((await publishButtons.count()) > 0, "a referee-submitted draft heat card");
 
     // Scoped to the specific heat-card container class — an unscoped
     // "div" + hasText locator matches every ancestor div up the tree too.
@@ -68,7 +64,7 @@ test.describe("Admin dashboard", () => {
       .locator(".space-y-3.rounded-lg.border.p-3", { hasText: "Draft Heat Card — Ready" })
       .first();
     const readyPublish = readyCard.getByRole("button", { name: "Publish Heat Card" });
-    test.skip(!(await readyPublish.count()), "No fully-complete draft heat cards ready to publish.");
+    requireFixture((await readyPublish.count()) > 0, "a fully-complete draft heat card ready to publish");
 
     await readyPublish.click();
     await page.waitForTimeout(1500);
@@ -82,7 +78,7 @@ test.describe("Admin dashboard", () => {
     const row = page.locator("tr", { hasText: "athlete02" });
     const anyRow = page.locator("tbody tr").first();
     const hasAnyRow = (await page.locator("tbody tr").count()) > 0;
-    test.skip(!hasAnyRow, "No cash payments pending — seed-demo.sql needs re-applying for athlete02's fixture.");
+    requireFixture(hasAnyRow, "a pending cash payment (athlete02's fixture)");
 
     const target = (await row.count()) ? row : anyRow;
     await expect(target.getByText(/Cash Payment Pending on Deck/)).toBeVisible();

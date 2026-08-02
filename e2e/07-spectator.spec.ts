@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { CREDENTIALS, login } from "./helpers";
+import { CREDENTIALS, login, requireFixture } from "./helpers";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -19,7 +19,7 @@ async function fetchFirstEvent(request: APIRequestContext) {
 test.describe("Spectator, leaderboards & navigation", () => {
   test("single-event deep link (?event=) scopes the live page to just that event", async ({ page, request }) => {
     const event = await fetchFirstEvent(request);
-    test.skip(!event, "No events found in the live database.");
+    requireFixture(!!event, "at least one seeded event");
 
     await login(page, CREDENTIALS.approvedU17);
     await page.goto(`/events/1/live?event=${event.id}`);
@@ -86,11 +86,7 @@ test.describe("Spectator, leaderboards & navigation", () => {
         // exists in ROLE_LABELS) until schema.sql/seed-demo.sql are
         // re-applied — the badge renders blank rather than showing a
         // stale/wrong label, which is correct, but leaves nothing to assert.
-        test.skip(
-          !(await badge.count()),
-          `Role badge "${roleLabel}" not found for ${credEmail} — the live database likely still has a ` +
-            "pre-scope-lock role value; re-apply supabase/schema.sql to migrate it.",
-        );
+        requireFixture((await badge.count()) > 0, `the "${roleLabel}" role badge for ${credEmail}`);
 
         await expect(badge).toBeVisible();
         await expect(page.getByText("Profile", { exact: true })).toBeVisible();

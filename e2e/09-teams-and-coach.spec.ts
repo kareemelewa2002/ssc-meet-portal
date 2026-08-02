@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { CREDENTIALS, login } from "./helpers";
+import { CREDENTIALS, login, requireFixture, tryLogin } from "./helpers";
 
 test.describe("/coach route", () => {
   test("coach.riptide reaches the Coach Dashboard, not a 404", async ({ page }) => {
@@ -60,46 +60,75 @@ test.describe("Team creation restriction (Open 18+ / Coach / Admin only)", () =>
 });
 
 test.describe("Team join-request workflow", () => {
-  test("an athlete can request to join a team they're not on, then cancel it", async ({ page }) => {
-    await login(page, CREDENTIALS.approvedU17); // athlete13, Riptide Swim Club
-    await page.goto("/teams");
-    await page.waitForTimeout(1500);
+  test("transfer lock: an athlete already on a team cannot request a move mid-meet", async ({ page }) => {
+    // athlete13 is on Riptide, and SSC Vol. 1 is 'scheduled', so
+    // enforce_team_membership_request_rules() must refuse the request. This
+    // used to be written as a happy-path join test, which only passed while
+    // the trigger was missing from the live database — the app was right and
+    // the test was wrong. The DB-level proof lives in DB-04/DB-05.
+    await login(page, CREDENTIALS.approvedU17);
+    await page.goto("/teams", { waitUntil: "networkidle" });
+    await page.waitForTimeout(2000);
 
-    // Find a team card that is NOT "Your Team" and has an active "Request
-    // to Join Team" button (not already pending elsewhere from a prior run).
     const requestButtons = page.getByRole("button", { name: "Request to Join Team" });
-    test.skip(!(await requestButtons.count()), "No other-team join button available (already pending or every team is this athlete's own).");
+    requireFixture((await requestButtons.count()) > 0, "another team for athlete13 to attempt joining");
 
     await requestButtons.first().click();
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
+
+    // The failure must be surfaced, not swallowed.
+    await expect(page.getByText(/Couldn.t send join request/i)).toBeVisible();
+    await expect(page.getByText(/transfers are locked/i)).toBeVisible();
+    // ...and no pending state may be created.
+    await expect(page.getByRole("button", { name: /Cancel Request \(Pending\)/ })).toHaveCount(0);
+  });
+
+  test("an unattached athlete can request to join a team, then cancel it", async ({ page }) => {
+    const signedIn = await tryLogin(page, CREDENTIALS.unattached);
+    requireFixture(signedIn, `the unattached athlete account ${CREDENTIALS.unattached}`);
+    await page.goto("/teams", { waitUntil: "networkidle" });
+    await page.waitForTimeout(2000);
+
+    const requestButtons = page.getByRole("button", { name: "Request to Join Team" });
+    requireFixture(
+      (await requestButtons.count()) > 0,
+      "the unattached athlete fixture (athlete39, team_id NULL) with no pending request",
+    );
+
+    await requestButtons.first().click();
+    await page.waitForTimeout(1500);
 
     const cancelButton = page.getByRole("button", { name: /Cancel Request \(Pending\)/ });
     await expect(cancelButton).toBeVisible();
 
-    // Single-pending-request rule: every OTHER "Request to Join Team"
-    // button must now be disabled while this one is pending.
-    const otherRequestButtons = page.getByRole("button", { name: "Request to Join Team" });
-    const otherCount = await otherRequestButtons.count();
-    for (let i = 0; i < otherCount; i++) {
-      await expect(otherRequestButtons.nth(i)).toBeDisabled();
+    // Single-pending-request rule: every OTHER request button is now disabled.
+    const others = page.getByRole("button", { name: "Request to Join Team" });
+    for (let i = 0; i < (await others.count()); i++) {
+      await expect(others.nth(i)).toBeDisabled();
     }
 
-    // Clean up — cancel so this test is safely repeatable.
+    // Cancel so the test is repeatable.
     await cancelButton.click();
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(1200);
     await expect(page.getByRole("button", { name: "Request to Join Team" }).first()).toBeEnabled();
   });
 
   test("a team's captain sees a pending join request and can accept or reject it in the roster modal", async ({ page, context }) => {
     // Requester (athlete13) files a request to Blue Marlins.
     const requesterPage = await context.newPage();
-    await login(requesterPage, CREDENTIALS.approvedU17);
-    await requesterPage.goto("/teams");
-    await requesterPage.waitForTimeout(1500);
+    // Must be the unattached athlete — anyone already on a team is blocked by
+    // the transfer lock while the volume is 'scheduled'.
+    const signedIn = await tryLogin(requesterPage, CREDENTIALS.unattached);
+    requireFixture(signedIn, `the unattached athlete account ${CREDENTIALS.unattached}`);
+    await requesterPage.goto("/teams", { waitUntil: "networkidle" });
+    await requesterPage.waitForTimeout(2000);
 
     const blueMarlinsCard = requesterPage.locator('[data-slot="card"]', { hasText: "Blue Marlins" });
     const requestBtn = blueMarlinsCard.getByRole("button", { name: "Request to Join Team" });
-    test.skip(!(await requestBtn.count()), "athlete13 already has a pending/accepted relationship with Blue Marlins.");
+    requireFixture(
+      (await requestBtn.count()) > 0,
+      "the unattached athlete fixture (athlete39) able to request Blue Marlins",
+    );
     await requestBtn.click();
     await requesterPage.waitForTimeout(1200);
 
@@ -116,8 +145,8 @@ test.describe("Team join-request workflow", () => {
     await expect(joinRequestsHeading).toBeVisible();
     const rejectBtn = page.getByRole("button", { name: "Reject" }).first();
     await expect(rejectBtn).toBeVisible();
-    // Reject rather than accept, so this test doesn't permanently move
-    // athlete13 onto Blue Marlins' roster on every run.
+    // Reject rather than accept, so this test doesn't permanently move the
+    // unattached fixture onto Blue Marlins' roster on every run.
     await rejectBtn.click();
     await page.waitForTimeout(1000);
 

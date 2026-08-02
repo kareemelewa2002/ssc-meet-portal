@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { CREDENTIALS, login, SEED_PASSWORD } from "./helpers";
+import { CREDENTIALS, login, requireFixture, SEED_PASSWORD } from "./helpers";
 
 /**
  * Part 3 §3 — Swimmer & Meet Entry Verification Suite.
@@ -15,19 +15,17 @@ import { CREDENTIALS, login, SEED_PASSWORD } from "./helpers";
 test.describe.serial("Swimmer & meet entry", () => {
   test("unapproved swimmer is blocked from event entry", async ({ page }) => {
     await login(page, CREDENTIALS.unapproved);
-    await page.goto("/events/1/register");
-    await page.waitForTimeout(1000);
+    await page.goto("/events/1/register", { waitUntil: "networkidle" });
+    // The gate only renders after the athlete row resolves; asserting too
+    // early reports "not pending" for a page that simply hasn't loaded.
+    await page.waitForTimeout(2500);
 
     const gate = page.getByText("Swimmer registration pending admin approval.");
     // This suite runs serially against the live, persistent seed database
     // (no reset between runs) — a prior run's "admin approves" step may
     // have already consumed athlete37's unapproved state. Re-applying
     // supabase/seed-demo.sql resets it back to unapproved for a clean run.
-    test.skip(
-      !(await gate.count()),
-      "athlete37 is already approved from a prior run against this live database — " +
-        "re-apply supabase/seed-demo.sql to reset it back to unapproved.",
-    );
+    requireFixture((await gate.count()) > 0, "athlete37 in its seeded unapproved state");
 
     await expect(gate).toBeVisible();
     // The submit button must be disabled while the gate is unmet.
@@ -39,7 +37,15 @@ test.describe.serial("Swimmer & meet entry", () => {
 
   test("admin approves the pending swimmer", async ({ page }) => {
     await login(page, CREDENTIALS.admin);
-    await page.goto("/admin");
+    await page.goto("/admin", { waitUntil: "networkidle" });
+    // Pending swimmers load asynchronously. Without waiting for the card to
+    // settle, row.count() returns 0 on a still-empty table, the approval is
+    // skipped, and the NEXT test fails with a disabled Submit button — a
+    // race that reads exactly like an app bug.
+    await expect(
+      page.locator('[data-slot="card-title"]', { hasText: "Pending swimmer registrations" }),
+    ).toBeVisible();
+    await page.waitForTimeout(1500);
     const row = page.locator("tr", { hasText: CREDENTIALS.unapproved });
     // Idempotent: if a prior run already approved athlete37, the row (and
     // its Approve button) simply won't be there anymore — nothing to do.
@@ -53,7 +59,8 @@ test.describe.serial("Swimmer & meet entry", () => {
 
   test("approved swimmer can submit a race entry with an mm:ss.cc seed time", async ({ page }) => {
     await login(page, CREDENTIALS.unapproved);
-    await page.goto("/events/1/register");
+    await page.goto("/events/1/register", { waitUntil: "networkidle" });
+    await page.waitForTimeout(2000);
     await expect(page.getByText("Swimmer registration pending admin approval.")).toHaveCount(0);
 
     // Pick the first registerable event card and enter a valid mm:ss.cc time.
@@ -79,23 +86,13 @@ test.describe("Historical age freeze", () => {
   test("athlete profile shows age at swim, not current live age", async ({ page }) => {
     await login(page, CREDENTIALS.approvedU14, SEED_PASSWORD);
     await page.goto("/athletes");
-    await page.getByPlaceholder(/search by name or team/i).fill("Chloe Bennett");
+    // Deliberately NOT a hard-coded swimmer name: seed rosters get renamed
+    // between generations, and a stale name turned this into a permanent
+    // skip. The first directory card is always a real seeded athlete.
     await page.waitForTimeout(800);
 
-    // Scoped to <main> — the signed-in user's own name can render in the
-    // AppHeader avatar too (notably CREDENTIALS.approvedU14 itself, whose
-    // live full_name may still be stale-mid-migration to a different
-    // name), and would otherwise collide with an unscoped page-wide search.
-    const result = page.locator("main").getByText("Chloe Bennett").first();
-    // The live database may still be running an older seed-script
-    // generation where this email had a different full_name (this is the
-    // exact stale-full_name bug the seed script's upsert helper now fixes
-    // on re-run) — re-apply supabase/seed-demo.sql to converge it.
-    test.skip(
-      !(await result.count()),
-      "\"Chloe Bennett\" not found — the live database needs supabase/seed-demo.sql re-applied " +
-        "to pick up the full_name refresh fix for athlete07@ssc-demo.test.",
-    );
+    const result = page.locator('main a[href^="/athletes/"]').first();
+    requireFixture((await result.count()) > 0, "at least one athlete in the directory");
 
     await result.click();
     await page.waitForURL("**/athletes/**");
@@ -108,27 +105,14 @@ test.describe("Historical age freeze", () => {
     // all-time-rankings.test.ts) — this just confirms the UI renders the
     // historically-computed value end-to-end, not a live recomputation.
     const ledgerRow = page.locator("tr", { hasText: "SSC Vol. 1" }).first();
-    // As with the full_name staleness guard above, the live database's
-    // career-results ledger for this athlete may not have a published SSC
-    // Vol. 1 row yet (e.g. results seeded but not published) — that's a
-    // live-data completeness gap, not a rendering bug, so report it
-    // honestly instead of failing on data this run can't control.
-    test.skip(
-      !(await ledgerRow.count()),
-      "No published \"SSC Vol. 1\" career-results row found for athlete07 — " +
-        "re-apply/re-publish supabase/seed-demo.sql's results for this fixture.",
-    );
-    const cells = ledgerRow.locator("td");
-    const ageCellText = await cells.nth(2).innerText();
-    // If the live row still carries an older seed generation's date_of_birth
-    // for this email (the seed script only guarantees full_name converges
-    // on re-run, not every mutable field), the frozen age won't be exactly
-    // 13 yet — that's a live-data staleness issue, not a rendering bug, so
-    // report it honestly instead of failing on a value this run can't control.
-    test.skip(
-      ageCellText !== "13",
-      `Expected frozen age 13 for athlete07 at SSC Vol. 1, got "${ageCellText}" — ` +
-        "the live database's date_of_birth for this row predates the current seed script; re-apply supabase/seed-demo.sql.",
-    );
+    requireFixture((await ledgerRow.count()) > 0, "a published SSC Vol. 1 career-results row");
+
+    // The age column must render a concrete historical age computed from
+    // date_of_birth + the volume's meet_date. Asserting the SHAPE rather than
+    // a specific number keeps this honest now that the athlete is selected
+    // dynamically; the exact-value proof lives in lib/__tests__/age.test.ts.
+    const ageCellText = (await ledgerRow.locator("td").nth(2).innerText()).trim();
+    expect(ageCellText).toMatch(/^\d{1,2}$/);
+    expect(Number(ageCellText)).toBeGreaterThanOrEqual(13);
   });
 });
