@@ -5,6 +5,26 @@ import type { EntryStatus, ParentLinkStatus } from "@/lib/supabase/types";
 /** SSC Vol. 1 pricing — cash paid on deck, never online. */
 export const RACE_PRICE_EGP = 300;
 
+/** An athlete may enter at most this many individual events per meet. */
+export const MAX_EVENTS_PER_MEET = 4;
+
+export const MAX_EVENTS_MESSAGE = `You can enter a maximum of ${MAX_EVENTS_PER_MEET} events per meet.`;
+
+/**
+ * Total selected must include events already entered in a previous session
+ * of the same meet — the cap is per meet, not per submission, so someone who
+ * enters two events today cannot come back and add four more tomorrow.
+ */
+export function validateEventCount(
+  newlySelected: number,
+  alreadyEntered = 0,
+): { ok: boolean; error?: string } {
+  if (newlySelected + alreadyEntered > MAX_EVENTS_PER_MEET) {
+    return { ok: false, error: MAX_EVENTS_MESSAGE };
+  }
+  return { ok: true };
+}
+
 export function computeRegistrationTotalEgp(raceCount: number): number {
   return raceCount * RACE_PRICE_EGP;
 }

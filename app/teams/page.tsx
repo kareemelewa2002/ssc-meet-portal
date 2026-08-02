@@ -342,11 +342,20 @@ export default function TeamsPage() {
               <div>
                 <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Captain</p>
                 {rosterDetail?.captain ? (
-                  <div className="rounded-lg border p-3 text-sm">
+                  <div className="rounded-lg border-2 border-black p-3 text-sm">
                     <p className="font-medium">{rosterDetail.captain.fullName}</p>
-                    <p className="text-muted-foreground">{rosterDetail.captain.email}</p>
-                    {rosterDetail.captain.phone && (
-                      <p className="text-muted-foreground">{rosterDetail.captain.phone}</p>
+                    {rosterDetail.captain.email || rosterDetail.captain.phone ? (
+                      <div className="mt-1 space-y-0.5 text-muted-foreground">
+                        {rosterDetail.captain.email && <p>{rosterDetail.captain.email}</p>}
+                        {rosterDetail.captain.phone && <p>{rosterDetail.captain.phone}</p>}
+                      </div>
+                    ) : (
+                      // Deliberately explains the absence — a blank space
+                      // reads as missing data rather than a privacy rule.
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Contact details are shared once you join this team, or while a join request
+                        is pending between you.
+                      </p>
                     )}
                   </div>
                 ) : (

@@ -19,7 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import {
   fetchPendingCashPayments,
-  markCashPaymentReceived,
+  approveAndConfirmPayment,
   type PendingPaymentAthlete,
 } from "@/lib/admin-cash-payments";
 
@@ -50,10 +50,13 @@ export function CashPayments({ className }: { className?: string }) {
     setBusyAthleteId(row.athleteId);
     setError(null);
     try {
-      const res = await markCashPaymentReceived(row.entryIds);
+      const res = await approveAndConfirmPayment(row.athleteId, row.entryIds);
       if (!res.success) throw new Error(res.error ?? "Failed to confirm cash payment.");
       setRows((prev) => prev.filter((r) => r.athleteId !== row.athleteId));
-      toast.success("Cash payment confirmed", `${row.athleteName} — ${row.totalEgp} EGP received.`);
+      toast.success(
+        "Swimmer approved & payment confirmed",
+        `${row.athleteName} — ${row.totalEgp} EGP received.`,
+      );
     } catch (err) {
       const message = getErrorMessage(err, "Failed to confirm cash payment.");
       setError(message);
@@ -67,7 +70,7 @@ export function CashPayments({ className }: { className?: string }) {
     <Card className={className}>
       <CardHeader className="flex flex-row items-start justify-between gap-3">
         <div>
-          <CardTitle>Cash payments on deck</CardTitle>
+          <CardTitle>Approvals & cash on deck</CardTitle>
           <CardDescription>
             Verify each swimmer&rsquo;s cash payment (300 EGP / race) at the meet desk, then confirm here.
           </CardDescription>
@@ -129,7 +132,7 @@ export function CashPayments({ className }: { className?: string }) {
                         ) : (
                           <CheckCircle2 className="size-4" />
                         )}
-                        Cash Payment Received
+                        Approve & Confirm Payment
                       </Button>
                     </TableCell>
                   </TableRow>

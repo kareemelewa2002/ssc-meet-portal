@@ -165,7 +165,23 @@ function HeatCard({ heat, outdoorMode }: { heat: LiveHeatView; outdoorMode: bool
   );
 }
 
-export function LiveEventsClient({ volId }: { volId: string }) {
+/**
+ * Drives BOTH per-meet views:
+ *   mode="heats"   — the heat sheet: every seeded lane, by session.
+ *   mode="results" — only lanes with a published result, plus an event filter.
+ *
+ * They share sessions, filters, realtime and the lane renderer, so splitting
+ * them into two components would have meant maintaining two copies of the
+ * same subscription and filter logic.
+ */
+export function LiveEventsClient({
+  volId,
+  mode = "heats",
+}: {
+  volId: string;
+  mode?: "heats" | "results";
+}) {
+  const isResults = mode === "results";
   const { outdoorMode } = useOutdoorMode();
   const searchParams = useSearchParams();
 
@@ -189,6 +205,7 @@ export function LiveEventsClient({ volId }: { volId: string }) {
   const [genderFilter, setGenderFilter] = useState<Gender | null>(null);
   const [ageFilter, setAgeFilter] = useState<AgeGroup | null>(null);
   const [strokeFilter, setStrokeFilter] = useState<string | null>(null);
+  const [eventNameFilter, setEventNameFilter] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -272,6 +289,7 @@ export function LiveEventsClient({ volId }: { volId: string }) {
     return events
       .filter((ev) => !eventFilterId || ev.eventId === eventFilterId)
       .filter((ev) => !strokeFilter || ev.stroke === strokeFilter)
+      .filter((ev) => !eventNameFilter || ev.name === eventNameFilter)
       .map((ev) => ({
         ...ev,
         heats: ev.heats
@@ -280,13 +298,18 @@ export function LiveEventsClient({ volId }: { volId: string }) {
             lanes: heat.lanes.filter(
               (lane) =>
                 (!genderFilter || lane.gender === genderFilter) &&
-                (!ageFilter || lane.ageGroup === ageFilter),
+                (!ageFilter || lane.ageGroup === ageFilter) &&
+                // Results view shows only swum lanes; the heat sheet shows
+                // every seeded lane whether or not it has been scored.
+                (!isResults || lane.result != null),
             ),
           }))
           .filter((heat) => heat.lanes.length > 0),
       }))
       .filter((ev) => ev.heats.length > 0);
-  }, [events, eventFilterId, strokeFilter, genderFilter, ageFilter]);
+  }, [events, eventFilterId, strokeFilter, eventNameFilter, genderFilter, ageFilter, isResults]);
+
+  const eventNames = useMemo(() => Array.from(new Set(events.map((e) => e.name))), [events]);
 
   return (
     <div className={cn("min-h-screen", outdoorMode ? "bg-black text-yellow-300" : "bg-background")}>
@@ -322,10 +345,12 @@ export function LiveEventsClient({ volId }: { volId: string }) {
 
         <header>
           <h1 className={cn("text-xl font-bold sm:text-2xl", outdoorMode && "text-yellow-300")}>
-            {volume?.name ?? "Meet"} — Heat Sheets & Results
+            {volume?.name ?? "Meet"} — {isResults ? "Results" : "Heat Sheets"}
           </h1>
           <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
-            Results update automatically as they&apos;re published.
+            {isResults
+              ? "Official times, places, and DQ/NS codes. Filter by event, age group, or gender."
+              : "Lane assignments and seed times by session. Results update automatically as they publish."}
           </p>
         </header>
 
@@ -413,6 +438,15 @@ export function LiveEventsClient({ volId }: { volId: string }) {
               { value: "Open", label: "Open" },
             ]}
           />
+          {isResults && eventNames.length > 0 && (
+            <FilterPillGroup
+              label="Event"
+              value={eventNameFilter}
+              onChange={setEventNameFilter}
+              outdoorMode={outdoorMode}
+              options={eventNames.map((n) => ({ value: n, label: n }))}
+            />
+          )}
           {strokes.length > 0 && (
             <FilterPillGroup
               label="Stroke"
@@ -444,8 +478,12 @@ export function LiveEventsClient({ volId }: { volId: string }) {
                 {dataError
                   ? "Heat sheets couldn’t be loaded — see the error above."
                   : events.length === 0
-                    ? "No heat sheets published for this session yet — check back soon."
-                    : "No swimmers match the selected filters."}
+                    ? isResults
+                      ? "No results published for this session yet."
+                      : "No heat sheets published for this session yet — check back soon."
+                    : isResults
+                      ? "No published results match the selected filters."
+                      : "No swimmers match the selected filters."}
               </p>
             </CardContent>
           </Card>

@@ -1144,6 +1144,73 @@ create or replace trigger sync_athlete_team_on_membership_accept_trigger
   before update on public.team_memberships
   for each row execute function public.sync_athlete_team_on_membership_accept();
 
+-- ---------------------------------------------------------------------------
+-- CONTACT PRIVACY
+-- ---------------------------------------------------------------------------
+-- Phone and email are only shared where there is a real relationship:
+--   * yourself, and admins (operational necessity);
+--   * members of the SAME team see each other;
+--   * while a join request is pending, the requester and that team's
+--     captain see each other — and nobody else on that team.
+--
+-- This is enforced in a SECURITY DEFINER function rather than the UI because
+-- RLS is row-level: public.users rows must stay broadly readable for names
+-- and avatars, so filtering the contact COLUMNS client-side would still ship
+-- every phone number to every browser. Callers get contact details only
+-- through this function.
+create or replace function public.visible_contacts(p_user_ids uuid[])
+returns table (user_id uuid, email text, phone text)
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select u.id, u.email, u.phone
+  from public.users u
+  where u.id = any(p_user_ids)
+    and (
+      -- yourself
+      u.id = auth.uid()
+      -- admins run the meet desk and need to reach anyone
+      or public.is_admin()
+      -- same team (covers athlete<->athlete and athlete<->coach alike,
+      -- since a team's captain is a member of that team's roster view)
+      or exists (
+        select 1
+        from public.athletes me
+        join public.athletes them on them.team_id = me.team_id
+        where me.user_id = auth.uid()
+          and them.user_id = u.id
+          and me.team_id is not null
+      )
+      -- you captain a team this person has a pending request to
+      or exists (
+        select 1
+        from public.team_memberships tm
+        join public.teams t on t.id = tm.team_id
+        where tm.user_id = u.id
+          and tm.status = 'pending'
+          and t.captain_id = auth.uid()
+      )
+      -- ...and the mirror: this person captains a team YOU have a pending
+      -- request to
+      or exists (
+        select 1
+        from public.team_memberships tm
+        join public.teams t on t.id = tm.team_id
+        where tm.user_id = auth.uid()
+          and tm.status = 'pending'
+          and t.captain_id = u.id
+      )
+    );
+$$;
+
+comment on function public.visible_contacts(uuid[]) is
+  'Returns email/phone ONLY for users the caller may contact: self, admins, '
+  'same-team members, and pending join-request counterparties (requester <-> '
+  'that team''s captain). Everyone else is omitted from the result.';
+
+
 -- =============================================================================
 -- 5. LEADERBOARD MAINTENANCE
 -- =============================================================================

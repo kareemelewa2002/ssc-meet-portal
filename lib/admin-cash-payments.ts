@@ -71,13 +71,29 @@ export async function fetchPendingCashPayments(): Promise<PendingPaymentAthlete[
   }
 }
 
-/** Admin marks cash received for one swimmer's pending entries — flips them
- * all from 'pending_payment' to 'confirmed' in one write. */
-export async function markCashPaymentReceived(
+/**
+ * Approves the swimmer AND confirms their cash in one admin action.
+ *
+ * These used to be two separate queues: an athlete was approved at signup
+ * time, and payment was confirmed later. Registration no longer waits on
+ * approval, so the admin's single decision point is now "this swimmer turned
+ * up and paid" — approving them and confirming the entries together. Doing
+ * them as one call keeps the two from drifting apart (an approved swimmer
+ * with unpaid entries, or paid entries for an unapproved swimmer).
+ */
+export async function approveAndConfirmPayment(
+  athleteId: string,
   entryIds: string[],
 ): Promise<{ success: boolean; error?: string }> {
   if (entryIds.length === 0) return { success: false, error: "No entries to confirm." };
   const supabase = createClient();
+
+  const { error: approveError } = await supabase
+    .from("athletes")
+    .update({ approved_by_admin: true })
+    .eq("id", athleteId);
+  if (approveError) return { success: false, error: approveError.message };
+
   const { error } = await supabase
     .from("entries")
     .update({ status: "confirmed" })

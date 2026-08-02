@@ -152,7 +152,7 @@ test.describe("Part 5 checklist — Admin Flow", () => {
     // Mark a cash payment received (if any are currently pending).
     await page.getByRole("button", { name: "Cash Payments" }).click();
     await page.waitForTimeout(800);
-    const cashBtn = page.getByRole("button", { name: "Cash Payment Received" }).first();
+    const cashBtn = page.getByRole("button", { name: "Approve & Confirm Payment" }).first();
     if (await cashBtn.count()) {
       await cashBtn.click();
       await page.waitForTimeout(1000);

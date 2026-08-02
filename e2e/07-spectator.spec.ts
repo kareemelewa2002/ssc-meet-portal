@@ -22,7 +22,7 @@ test.describe("Spectator, leaderboards & navigation", () => {
     requireFixture(!!event, "at least one seeded event");
 
     await login(page, CREDENTIALS.approvedU17);
-    await page.goto(`/events/1/live?event=${event.id}`);
+    await page.goto(`/events/1/heats?event=${event.id}`);
     await page.waitForTimeout(1500);
 
     await expect(page.getByText(`Showing ${event.name} only.`)).toBeVisible();
@@ -118,10 +118,11 @@ test.describe("Spectator, leaderboards & navigation", () => {
     await page.goto("/");
     await page.waitForTimeout(1000);
 
-    const volumeCard = page.locator('a[href^="/events/"][href$="/live"]').first();
+    // Home now links straight to the current meet's heat sheet.
+    const volumeCard = page.locator('a[href^="/events/"][href$="/heats"]').first();
     await expect(volumeCard).toBeVisible();
     await volumeCard.click();
-    await page.waitForURL(/\/events\/\d+\/live/, { timeout: 10_000 });
+    await page.waitForURL(/\/events\/\d+\/heats/, { timeout: 10_000 });
     await page.waitForTimeout(1000);
 
     await page.goto("/leaderboards/all-time");

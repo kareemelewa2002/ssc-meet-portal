@@ -361,6 +361,10 @@ export type Database = {
         Args: Record<string, never>;
         Returns: boolean;
       };
+      visible_contacts: {
+        Args: { p_user_ids: string[] };
+        Returns: { user_id: string; email: string | null; phone: string | null }[];
+      };
     };
     Enums: {
       user_role: UserRole;

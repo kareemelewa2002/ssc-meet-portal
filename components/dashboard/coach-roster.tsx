@@ -115,18 +115,30 @@ export function CoachRoster({ className }: { className?: string }) {
                   </Badge>
                 </div>
               </div>
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                <a href={`mailto:${member.email}`} className="flex items-center gap-1 hover:text-foreground">
-                  <Mail className="size-3.5" />
-                  {member.email}
-                </a>
-                {member.phone && (
-                  <a href={`tel:${member.phone}`} className="flex items-center gap-1 hover:text-foreground">
-                    <Phone className="size-3.5" />
-                    {member.phone}
-                  </a>
-                )}
-              </div>
+              {/* Contact chips render only for viewers public.visible_contacts()
+                  cleared — same team, or a pending join-request counterparty. */}
+              {(member.email || member.phone) && (
+                <div className="flex flex-wrap gap-x-2 gap-y-1.5">
+                  {member.email && (
+                    <a
+                      href={`mailto:${member.email}`}
+                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border-2 border-black bg-background px-2.5 text-xs font-semibold shadow-brutal-sm transition-all hover:bg-muted active:translate-y-[2px] active:shadow-none"
+                    >
+                      <Mail className="size-3.5" />
+                      {member.email}
+                    </a>
+                  )}
+                  {member.phone && (
+                    <a
+                      href={`tel:${member.phone}`}
+                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border-2 border-black bg-background px-2.5 text-xs font-semibold shadow-brutal-sm transition-all hover:bg-muted active:translate-y-[2px] active:shadow-none"
+                    >
+                      <Phone className="size-3.5" />
+                      {member.phone}
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
           ))
         )}

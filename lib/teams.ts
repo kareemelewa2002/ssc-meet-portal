@@ -174,7 +174,8 @@ export async function createTeam(input: TeamCreateInput): Promise<{ success: boo
 
 export interface TeamCaptainContact {
   fullName: string;
-  email: string;
+  /** null when the viewer is not permitted to see it (see visible_contacts). */
+  email: string | null;
   phone: string | null;
 }
 
@@ -183,7 +184,8 @@ export interface TeamRosterMember {
   fullName: string;
   ageGroup: string;
   gender: string;
-  email: string;
+  /** null when the viewer is not permitted to see it (see visible_contacts). */
+  email: string | null;
   phone: string | null;
 }
 
@@ -203,12 +205,17 @@ export async function fetchTeamDetail(teamId: string): Promise<FetchResult<TeamD
       { data: team, error: teamError },
       { data: roster, error: rosterError },
     ] = await Promise.all([
-      supabase.from("teams").select("captain_id, users ( full_name, email, phone )").eq("id", teamId).maybeSingle(),
+      // NOTE: email/phone are deliberately NOT selected here. Contact
+      // details are privacy-gated and only ever come back through
+      // public.visible_contacts() below — embedding them in this query would
+      // ship every roster member's phone number to every viewer's browser
+      // regardless of who they are.
+      supabase.from("teams").select("captain_id, users ( id, full_name )").eq("id", teamId).maybeSingle(),
       supabase
         .from("athletes")
         // Qualify the FK — athletes has two (user_id and parent_id), so a
         // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-        .select("id, age_group, gender, users!athletes_user_id_fkey ( full_name, email, phone )")
+        .select("id, age_group, gender, users!athletes_user_id_fkey ( id, full_name )")
         .eq("team_id", teamId),
     ]);
 
@@ -221,33 +228,54 @@ export async function fetchTeamDetail(teamId: string): Promise<FetchResult<TeamD
       );
     }
 
+    type RawUserRef = { id: string; full_name: string };
     type RawTeam = {
       captain_id: string | null;
-      users: { full_name: string; email: string; phone: string | null } | { full_name: string; email: string; phone: string | null }[] | null;
+      users: RawUserRef | RawUserRef[] | null;
     };
     type RawMember = {
       id: string;
       age_group: string;
       gender: string;
-      users: { full_name: string; email: string; phone: string | null } | { full_name: string; email: string; phone: string | null }[] | null;
+      users: RawUserRef | RawUserRef[] | null;
     };
 
     const rawTeam = team as unknown as RawTeam | null;
     const captainUser = rawTeam ? firstOf(rawTeam.users) : null;
+    const rawMembers = (roster ?? []) as unknown as RawMember[];
+
+    // One round trip for every contact the viewer is actually allowed to see.
+    const userIds = [
+      ...(captainUser ? [captainUser.id] : []),
+      ...rawMembers.map((r) => firstOf(r.users)?.id).filter((id): id is string => !!id),
+    ];
+    const contacts = new Map<string, { email: string | null; phone: string | null }>();
+    if (userIds.length > 0) {
+      const { data: visible } = await supabase.rpc("visible_contacts", { p_user_ids: userIds });
+      for (const row of visible ?? []) {
+        contacts.set(row.user_id, { email: row.email, phone: row.phone });
+      }
+    }
+
     const captain =
       rawTeam?.captain_id && captainUser
-        ? { fullName: captainUser.full_name, email: captainUser.email, phone: captainUser.phone }
+        ? {
+            fullName: captainUser.full_name,
+            email: contacts.get(captainUser.id)?.email ?? null,
+            phone: contacts.get(captainUser.id)?.phone ?? null,
+          }
         : null;
 
-    const members = ((roster ?? []) as unknown as RawMember[]).map((row) => {
+    const members = rawMembers.map((row) => {
       const user = firstOf(row.users);
+      const contact = user ? contacts.get(user.id) : undefined;
       return {
         athleteId: row.id,
         fullName: user?.full_name ?? "Athlete",
         ageGroup: row.age_group,
         gender: row.gender,
-        email: user?.email ?? "—",
-        phone: user?.phone ?? null,
+        email: contact?.email ?? null,
+        phone: contact?.phone ?? null,
       };
     });
 

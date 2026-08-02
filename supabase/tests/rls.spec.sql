@@ -429,6 +429,64 @@ begin
 end $$;
 
 -- =============================================================================
+-- DB-12 — contact privacy: phone/email only within a team, or between a
+-- pending requester and that team's captain.
+-- =============================================================================
+do $$
+declare
+  v_same_team int; v_other_team int; v_self int; v_captain_sees int; v_member_sees int;
+  v_alice uuid; v_bob uuid; v_outsider uuid; v_captain uuid; v_requester uuid; v_team uuid;
+  v_member uuid;
+begin
+  -- Two Riptide athletes, and someone on a different team.
+  select u.id into v_alice from public.users u join public.athletes a on a.user_id=u.id
+   where u.email='athlete01@ssc-demo.test';
+  select u.id into v_bob from public.users u join public.athletes a on a.user_id=u.id
+   where a.team_id=(select team_id from public.athletes x join public.users y on y.id=x.user_id
+                    where y.email='athlete01@ssc-demo.test')
+     and u.email<>'athlete01@ssc-demo.test' limit 1;
+  select u.id into v_outsider from public.users u join public.athletes a on a.user_id=u.id
+   where a.team_id is distinct from (select team_id from public.athletes x join public.users y on y.id=x.user_id
+                                     where y.email='athlete01@ssc-demo.test')
+     and a.team_id is not null limit 1;
+
+  perform ssc_test.act_as(v_alice);
+  select count(*) into v_self from public.visible_contacts(array[v_alice]);
+  select count(*) into v_same_team from public.visible_contacts(array[v_bob]);
+  select count(*) into v_other_team from public.visible_contacts(array[v_outsider]);
+  perform set_config('role','postgres',true);
+
+  perform ssc_test.check('DB-12','a member sees their own contact', v_self = 1, format('rows=%s', v_self));
+  perform ssc_test.check('DB-12','same-team members see each other', v_same_team = 1, format('rows=%s', v_same_team));
+  perform ssc_test.check('DB-12','a different team is NOT visible', v_other_team = 0, format('rows=%s', v_other_team));
+
+  -- Pending request: unattached athlete39 -> Blue Marlins.
+  select u.id into v_requester from public.users u where u.email='athlete39@ssc-demo.test';
+  select id, captain_id into v_team, v_captain from public.teams where name='Blue Marlins';
+  update public.meet_volumes set status='completed' where volume_number=1;  -- lift transfer lock
+  delete from public.team_memberships where user_id=v_requester;
+  insert into public.team_memberships (team_id, user_id, status) values (v_team, v_requester, 'pending');
+
+  perform ssc_test.act_as(v_captain);
+  select count(*) into v_captain_sees from public.visible_contacts(array[v_requester]);
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-12','captain sees a pending requester', v_captain_sees = 1,
+    format('rows=%s', v_captain_sees));
+
+  -- ...but an ordinary member of that team must NOT.
+  select u.id into v_member from public.users u join public.athletes a on a.user_id=u.id
+   where a.team_id=v_team and u.id<>v_captain limit 1;
+  perform ssc_test.act_as(v_member);
+  select count(*) into v_member_sees from public.visible_contacts(array[v_requester]);
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-12','ordinary team member does NOT see a pending requester',
+    v_member_sees = 0, format('rows=%s', v_member_sees));
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-12','contact privacy', false, sqlerrm);
+end $$;
+
+-- =============================================================================
 -- Report
 -- =============================================================================
 \echo ''

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Building2, Calendar, Lock, Radio, Trophy, Users, Waves } from "lucide-react";
+import { LayoutDashboard, Lock, Radio, Trophy, Users, Waves } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -12,7 +12,15 @@ import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
 import { MeetSummaryStats } from "@/components/home/meet-summary-stats";
 import { AppHeader } from "@/components/layout/app-header";
 import { DEMO_VOLUMES, formatMeetDate } from "@/lib/volumes";
-import type { MeetVolumeRow } from "@/lib/supabase/types";
+import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
+import type { MeetVolumeRow, UserRole } from "@/lib/supabase/types";
+
+/** Only roles with a dedicated deck portal get the Dashboard button. */
+const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
+  admin: "/admin",
+  referee: "/referee",
+  coach: "/coach",
+};
 
 function statusBadge(volume: MeetVolumeRow) {
   if (volume.status === "planned") return { label: "Coming Soon", variant: "outline" as const };
@@ -22,6 +30,7 @@ function statusBadge(volume: MeetVolumeRow) {
 
 export default function HomePage() {
   const { outdoorMode } = useOutdoorMode();
+  const { user } = useCurrentUser();
   const [volumes, setVolumes] = useState<MeetVolumeRow[]>(DEMO_VOLUMES);
   const [loading, setLoading] = useState(true);
 
@@ -46,49 +55,34 @@ export default function HomePage() {
     };
   }, []);
 
-  // The current volume nav links (Live / Leaderboard / Schedule) point to the
-  // most recent non-"planned" volume — the one spectators actually care about.
+  // "Coming Soon" is gone: a volume with no confirmed date is simply not
+  // shown. The current meet is the most recent one that is actually running
+  // or already swum.
   const currentVolume = useMemo(
     () => [...volumes].reverse().find((v) => v.status !== "planned") ?? null,
     [volumes],
   );
 
+  const dashboardHref = ROLE_DASHBOARD_HREF[user?.role ?? "athlete"] ?? null;
+
   const navLinks = [
     {
-      href: currentVolume ? `/events/${currentVolume.volume_number}/live` : null,
-      label: "Live Heat Sheets & Results",
-      description: "Heat sheets, lane assignments, and results as they publish.",
+      href: "/meets",
+      label: "Meets",
+      description: "The live meet, plus every past volume's heats and results.",
       icon: Radio,
     },
     {
-      href: currentVolume ? `/events/${currentVolume.volume_number}/leaderboard` : null,
-      label: "Series Leaderboards",
-      description: "Champions (placement points) and Progress (time drops).",
-      icon: Trophy,
-    },
-    {
-      href: currentVolume ? `/events/${currentVolume.volume_number}/schedule` : null,
-      label: "Schedule / Info",
-      description: "Session times and meet-day details.",
-      icon: Calendar,
-    },
-    {
-      href: "/athletes",
-      label: "Athlete Directory",
-      description: "Search every SSC swimmer and open public profiles.",
-      icon: Users,
-    },
-    {
-      href: "/leaderboards/all-time",
-      label: "All-Time Records",
-      description: "Best performers and fastest race times in SSC history.",
+      href: currentVolume ? `/events/${currentVolume.volume_number}/leaderboard` : "/leaderboards/all-time",
+      label: "Leaderboards",
+      description: "Meet standings for athletes and teams, plus all-time records.",
       icon: Trophy,
     },
     {
       href: "/teams",
-      label: "Team Directory",
-      description: "Approved teams, captains, and rosters.",
-      icon: Building2,
+      label: "Teams & Athletes",
+      description: "Team rosters, captains, and every SSC swimmer's profile.",
+      icon: Users,
     },
   ];
 
@@ -202,78 +196,75 @@ export default function HomePage() {
           })}
         </section>
 
-        <section aria-label="Events and meet series" className="space-y-3">
-          <div>
-            <h2 className={cn("text-lg font-bold", outdoorMode && "text-yellow-300")}>
-              Events & Meet Series
-            </h2>
-            <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
-              Pick a volume to view its heat sheets, results, and leaderboards.
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {volumes.map((volume) => {
-              const badge = statusBadge(volume);
-              const isComingSoon = volume.status === "planned";
-
-              const card = (
-                <Card
-                  className={cn(
-                    "h-full transition-colors",
-                    isComingSoon && "opacity-50 grayscale",
-                    !isComingSoon && "hover:border-primary/50",
-                    outdoorMode && "border-yellow-300/40 bg-black",
-                  )}
-                >
-                  <CardHeader>
-                    <div className="flex items-center justify-between gap-2">
-                      <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>
-                        {volume.name}
-                      </CardTitle>
-                      <Badge variant={badge.variant}>{badge.label}</Badge>
-                    </div>
-                    <CardDescription className={outdoorMode ? "text-yellow-100/70" : undefined}>
-                      {formatMeetDate(volume.meet_date)}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
+        {dashboardHref && (
+          <section aria-label="Role dashboard">
+            <Link href={dashboardHref} className="block min-h-[48px]">
+              <Card
+                className={cn(
+                  "transition-all hover:-translate-y-1 hover:shadow-brutal-lg",
+                  outdoorMode && "border-yellow-300/60 bg-black",
+                )}
+              >
+                <CardContent className="flex items-center gap-3 py-4">
+                  <div
+                    className={cn(
+                      "flex size-11 shrink-0 items-center justify-center rounded-xl border-2 border-black",
+                      outdoorMode ? "bg-yellow-300 text-black" : "bg-primary text-primary-foreground",
+                    )}
+                  >
+                    <LayoutDashboard className="size-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className={cn("font-bold tracking-tight", outdoorMode && "text-yellow-300")}>
+                      {ROLE_LABELS[user!.role]} Dashboard
+                    </p>
                     <p
                       className={cn(
-                        "text-sm",
+                        "text-xs",
                         outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
                       )}
                     >
-                      {isComingSoon
-                        ? "Details will be announced soon."
-                        : "Tap to view heat sheets, live results, and leaderboards."}
+                      Your deck tools and management queues.
                     </p>
-                  </CardContent>
-                </Card>
-              );
+                  </div>
+                </CardContent>
+              </Card>
+            </Link>
+          </section>
+        )}
 
-              return isComingSoon ? (
-                <div key={volume.id} aria-disabled="true">
-                  {card}
-                </div>
-              ) : (
-                <Link
-                  key={volume.id}
-                  href={`/events/${volume.volume_number}/live`}
-                  className="block min-h-[48px]"
-                >
-                  {card}
-                </Link>
-              );
-            })}
-          </div>
+        {currentVolume && (
+          <section aria-label="Current meet">
+            <Link href={`/events/${currentVolume.volume_number}/heats`} className="block min-h-[48px]">
+              <Card
+                className={cn(
+                  "transition-all hover:-translate-y-1 hover:shadow-brutal-lg",
+                  outdoorMode && "border-yellow-300/40 bg-black",
+                )}
+              >
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>
+                      {currentVolume.name}
+                    </CardTitle>
+                    <Badge variant={statusBadge(currentVolume).variant}>
+                      {statusBadge(currentVolume).label}
+                    </Badge>
+                  </div>
+                  <CardDescription className={outdoorMode ? "text-yellow-100/70" : undefined}>
+                    {formatMeetDate(currentVolume.meet_date)} · heat sheets, results & standings
+                  </CardDescription>
+                </CardHeader>
+              </Card>
+            </Link>
+          </section>
+        )}
 
-          {loading && (
-            <p className={cn("text-xs", outdoorMode ? "text-yellow-100/60" : "text-muted-foreground")}>
-              Loading latest volumes…
-            </p>
-          )}
-        </section>
+        {loading && (
+          <p className={cn("text-xs", outdoorMode ? "text-yellow-100/60" : "text-muted-foreground")}>
+            Loading latest volumes…
+          </p>
+        )}
       </main>
     </div>
   );

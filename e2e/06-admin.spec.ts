@@ -82,7 +82,7 @@ test.describe("Admin dashboard", () => {
 
     const target = (await row.count()) ? row : anyRow;
     await expect(target.getByText(/Cash Payment Pending on Deck/)).toBeVisible();
-    await target.getByRole("button", { name: "Cash Payment Received" }).click();
+    await target.getByRole("button", { name: "Approve & Confirm Payment" }).click();
     await page.waitForTimeout(1500);
     await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
   });

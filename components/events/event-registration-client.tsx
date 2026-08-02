@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Banknote, CheckCircle2, Loader2 } from "lucide-react";
+import { ArrowLeft, Banknote, CheckCircle2, ListChecks, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,7 +12,10 @@ import { fetchVolumeByNumber } from "@/lib/volumes";
 import { fetchTeams } from "@/lib/teams";
 import { canSubmitEntries } from "@/lib/register";
 import {
+  MAX_EVENTS_MESSAGE,
+  MAX_EVENTS_PER_MEET,
   RACE_PRICE_EGP,
+  validateEventCount,
   computeRegistrationTotalEgp,
   fetchAthleteEnteredEventIds,
   fetchRegisterableEvents,
@@ -117,16 +120,20 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
     };
   }, [volId]);
 
+  // Admin approval deliberately does NOT gate registration any more: an
+  // athlete signs up, picks their races, and the admin then approves the
+  // swimmer and confirms the cash payment together in one action. Parent
+  // authorization for U14s is a separate, legal gate and still applies.
   const entryGate = useMemo(
     () =>
       athlete
-        ? canSubmitEntries({
-            parentLinkStatus: athlete.parentLinkStatus,
-            approvedByAdmin: athlete.approvedByAdmin,
-          })
+        ? canSubmitEntries({ parentLinkStatus: athlete.parentLinkStatus })
         : { ok: true as const },
     [athlete],
   );
+
+  const enteredCount = enteredEventIds.size;
+  const remainingSlots = Math.max(0, MAX_EVENTS_PER_MEET - enteredCount);
 
   const eventsBySession = useMemo(() => {
     const groups = new Map<number, RegisterableEvent[]>();
@@ -139,14 +146,25 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   }, [events]);
 
   const toggleEvent = (eventId: string) => {
-    if (enteredEventIds.has(eventId)) return;
     setDrafts((prev) => {
-      const existing = prev[eventId];
+      const current = prev[eventId];
+      const turningOn = !current?.selected;
+      if (turningOn) {
+        const selectedNow = Object.values(prev).filter((d) => d.selected).length;
+        // Cap is per MEET, so events already entered in an earlier session
+        // count against it too.
+        if (!validateEventCount(selectedNow + 1, enteredCount).ok) {
+          setError(MAX_EVENTS_MESSAGE);
+          return prev;
+        }
+      }
+      setError(null);
       return {
         ...prev,
-        [eventId]: existing?.selected
-          ? { ...existing, selected: false }
-          : { selected: true, isNt: existing?.isNt ?? false, timeInput: existing?.timeInput ?? "" },
+        [eventId]: {
+          ...(current ?? { timeInput: "", isNt: false, selected: false }),
+          selected: turningOn,
+        },
       };
     });
   };
@@ -240,6 +258,10 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         <p className="text-sm text-muted-foreground">
           Select your races, enter Long Course seed times, and choose your team representation.
         </p>
+        <Badge variant="outline" className="mt-2 gap-1.5 py-1">
+          <ListChecks className="size-3.5" />
+          {selectedCount + enteredCount} of {MAX_EVENTS_PER_MEET} events used
+        </Badge>
       </header>
 
       {loading ? (
@@ -321,6 +343,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
                               size="sm"
                               variant={draft?.selected ? "default" : "outline"}
                               className="min-h-[48px] px-4"
+                              disabled={!draft?.selected && selectedCount >= remainingSlots}
                               onClick={() => toggleEvent(ev.id)}
                             >
                               {draft?.selected ? "Selected" : "Select"}
