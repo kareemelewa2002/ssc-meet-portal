@@ -47,41 +47,20 @@ interface RefereeLane {
   attendanceStatus: AttendanceStatus;
 }
 
-const DEMO_SESSIONS: SessionRow[] = [
-  {
-    id: "00000000-0000-4000-8000-000000000001",
-    meet_volume_id: "00000000-0000-4000-8000-000000000000",
-    session_number: 1,
-    name: "Session 1",
-    meet_date: "2026-10-02",
-    start_time: "09:00",
-    end_time: "12:00",
-    created_at: "",
-  },
-];
-
-const DEMO_EVENTS: RefereeEventOption[] = [
-  { id: "00000000-0000-4000-8000-000000000002", name: "50 Freestyle", sessionId: "00000000-0000-4000-8000-000000000001" },
-];
-
-const DEMO_HEATS: RefereeHeatOption[] = [
-  { id: "00000000-0000-4000-8000-000000000003", heatNumber: 3, status: "draft" },
-];
-
-// Every id below is a real (if obviously fake) RFC4122-shaped UUID — never
-// a bare string like "hl-1". Postgres's uuid column type rejects anything
-// else outright ("invalid input syntax for type uuid"), and this exact
-// shape of placeholder used to be the demo fallback everywhere on this
-// page, including inside markAttendance's real Supabase write path, which
-// had no guard against ever sending one.
-const DEMO_LANES: RefereeLane[] = [
-  { heatLaneId: "00000000-0000-4000-8000-000000000101", laneNumber: 1, athleteName: "Mia Reyes", teamName: "Blue Marlins", seedTimeMs: 31000, athleteId: "00000000-0000-4000-8000-000000000201", attendanceStatus: "pending" },
-  { heatLaneId: "00000000-0000-4000-8000-000000000102", laneNumber: 2, athleteName: "Noah Alvi", teamName: "Riptide", seedTimeMs: 30500, athleteId: "00000000-0000-4000-8000-000000000202", attendanceStatus: "present" },
-  { heatLaneId: "00000000-0000-4000-8000-000000000103", laneNumber: 3, athleteName: "Zara Khan", teamName: "Blue Marlins", seedTimeMs: 29800, athleteId: "00000000-0000-4000-8000-000000000203", attendanceStatus: "pending" },
-  { heatLaneId: "00000000-0000-4000-8000-000000000104", laneNumber: 4, athleteName: "Leo Fontaine", teamName: "Tidal Wave", seedTimeMs: 29200, athleteId: "00000000-0000-4000-8000-000000000204", attendanceStatus: "present" },
-  { heatLaneId: "00000000-0000-4000-8000-000000000105", laneNumber: 5, athleteName: "Ava Thompson", teamName: "Riptide", seedTimeMs: 31500, athleteId: "00000000-0000-4000-8000-000000000205", attendanceStatus: "absent" },
-  { heatLaneId: "00000000-0000-4000-8000-000000000106", laneNumber: 6, athleteName: "Kian Osei", teamName: "Tidal Wave", seedTimeMs: 32000, athleteId: "00000000-0000-4000-8000-000000000206", attendanceStatus: "pending" },
-];
+/**
+ * NO DEMO FALLBACK.
+ *
+ * This page used to seed itself with six hard-coded swimmers so it looked
+ * populated before any real data loaded. Those placeholders were given
+ * RFC4122-shaped ids to get past the uuid column type — which meant they also
+ * sailed past isValidUuid() and reached the database, where they failed the
+ * foreign key instead ("results_heat_lane_id_fkey"). A referee could enter
+ * times against swimmers who did not exist and only find out on submit.
+ *
+ * Validity is not existence. The deck now starts empty and says so, matching
+ * the fail-loud policy in lib/fetch-policy.ts: never render something
+ * scoreable that isn't real.
+ */
 
 /**
  * The consolidated Referee role's deck page: one screen covers call-room
@@ -94,18 +73,27 @@ const DEMO_LANES: RefereeLane[] = [
 export default function RefereePage() {
   const [outdoorMode, setOutdoorMode] = useState(false);
 
-  const [sessions, setSessions] = useState<SessionRow[]>(DEMO_SESSIONS);
-  const [events, setEvents] = useState<RefereeEventOption[]>(DEMO_EVENTS);
-  const [heats, setHeats] = useState<RefereeHeatOption[]>(DEMO_HEATS);
-  const [sessionId, setSessionId] = useState(DEMO_SESSIONS[0].id);
-  const [eventId, setEventId] = useState(DEMO_EVENTS[0].id);
-  const [heatId, setHeatId] = useState(DEMO_HEATS[0].id);
-  const [lanes, setLanes] = useState<RefereeLane[]>(DEMO_LANES);
+  const [sessions, setSessions] = useState<SessionRow[]>([]);
+  const [events, setEvents] = useState<RefereeEventOption[]>([]);
+  const [heats, setHeats] = useState<RefereeHeatOption[]>([]);
+  const [sessionId, setSessionId] = useState("");
+  const [eventId, setEventId] = useState("");
+  const [heatId, setHeatId] = useState("");
+  const [lanes, setLanes] = useState<RefereeLane[]>([]);
 
   const sessionEvents = useMemo(
     () => events.filter((e) => e.sessionId === sessionId),
     [events, sessionId],
   );
+
+  // Keep the event picker consistent with the chosen session — otherwise a
+  // session switch leaves a stale event selected and the deck renders empty.
+  useEffect(() => {
+    if (sessionEvents.length === 0) return;
+    if (!sessionEvents.some((e) => e.id === eventId)) {
+      setEventId(sessionEvents[0].id);
+    }
+  }, [sessionEvents, eventId]);
 
   const loadSchedule = useCallback(async () => {
     try {
@@ -114,9 +102,13 @@ export default function RefereePage() {
         .from("sessions")
         .select("*")
         .order("session_number", { ascending: true });
+      let activeSessionId = "";
       if (sess?.length) {
         setSessions(sess);
-        setSessionId((prev) => (sess.some((s) => s.id === prev) ? prev : sess[0].id));
+        setSessionId((prev) => {
+          activeSessionId = sess.some((s) => s.id === prev) ? prev : sess[0].id;
+          return activeSessionId;
+        });
       }
 
       const { data: ev } = await supabase
@@ -126,10 +118,17 @@ export default function RefereePage() {
       if (ev?.length) {
         const mapped = ev.map((e) => ({ id: e.id, name: e.name, sessionId: e.session_id }));
         setEvents(mapped);
-        setEventId((prev) => (mapped.some((e) => e.id === prev) ? prev : mapped[0].id));
+        setEventId((prev) => {
+          if (mapped.some((e) => e.id === prev)) return prev;
+          // Must be an event IN the selected session: the global first event
+          // often belongs to another session, which left the picker showing
+          // "Select event" and the deck empty.
+          const inSession = mapped.filter((e) => e.sessionId === activeSessionId);
+          return (inSession[0] ?? mapped[0]).id;
+        });
       }
     } catch {
-      // Keep demo schedule.
+      // Fail closed: an empty deck is honest, a fabricated one is not.
     }
   }, []);
 
@@ -141,9 +140,9 @@ export default function RefereePage() {
   const loadHeatsForEvent = useCallback(async (selectedEventId: string) => {
     latestHeatsRequestRef.current = selectedEventId;
 
-    if (DEMO_EVENTS.some((e) => e.id === selectedEventId)) {
-      setHeats(DEMO_HEATS);
-      setHeatId(DEMO_HEATS[0].id);
+    if (!selectedEventId) {
+      setHeats([]);
+      setHeatId("");
       return;
     }
 
@@ -158,6 +157,7 @@ export default function RefereePage() {
       if (latestHeatsRequestRef.current !== selectedEventId) return;
       if (error || !data?.length) {
         setHeats([]);
+        setHeatId("");
         return;
       }
 
@@ -182,8 +182,8 @@ export default function RefereePage() {
   const loadLanesForHeat = useCallback(async (selectedHeatId: string) => {
     latestLanesRequestRef.current = selectedHeatId;
 
-    if (DEMO_HEATS.some((h) => h.id === selectedHeatId)) {
-      setLanes(DEMO_LANES);
+    if (!selectedHeatId) {
+      setLanes([]);
       return;
     }
 
@@ -396,18 +396,40 @@ export default function RefereePage() {
         </CardContent>
       </Card>
 
-      <AttendanceBoard outdoorMode={outdoorMode} lanes={lanes} />
+      {lanes.length === 0 ? (
+        <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
+          <CardContent className="space-y-2 py-8 text-center">
+            <p className={cn("font-bold", outdoorMode && "text-yellow-300")}>
+              {heats.length === 0 ? "No heats seeded for this event yet" : "No lanes in this heat"}
+            </p>
+            <p
+              className={cn(
+                "mx-auto max-w-md text-sm",
+                outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
+              )}
+            >
+              {heats.length === 0
+                ? "Heats are generated once an admin approves the swimmers and confirms their entries. Nothing can be scored until then."
+                : "This heat has no lane assignments."}
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <AttendanceBoard outdoorMode={outdoorMode} lanes={lanes} />
 
-      <HeatResultEntry
-        heatId={heatId}
-        heatLabel={
-          selectedHeat
-            ? `${sessionEvents.find((e) => e.id === eventId)?.name ?? "Event"} — Heat ${selectedHeat.heatNumber}`
-            : "Session 1 — 50 Free Heat 3"
-        }
-        lanes={lanes}
-        outdoorMode={outdoorMode}
-      />
+          <HeatResultEntry
+            heatId={heatId}
+            heatLabel={
+              selectedHeat
+                ? `${sessionEvents.find((e) => e.id === eventId)?.name ?? "Event"} — Heat ${selectedHeat.heatNumber}`
+                : "Heat"
+            }
+            lanes={lanes}
+            outdoorMode={outdoorMode}
+          />
+        </>
+      )}
       </main>
     </div>
   );

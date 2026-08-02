@@ -13,9 +13,17 @@ test.describe("Consolidated Referee deck", () => {
     await page.goto("/referee");
     await page.waitForTimeout(1500);
 
+    // The picker always renders. The attendance board only renders once a
+    // heat has lanes — heats are generated when an admin approves entries,
+    // so on a freshly-seeded database there are legitimately none yet.
     await expect(page.getByText("Session, event & heat")).toBeVisible();
-    await expect(page.getByText("Call-room attendance")).toBeVisible();
     expect(errors.filter((e) => !/favicon/i.test(e))).toEqual([]);
+
+    requireFixture(
+      (await page.getByText("Call-room attendance").count()) > 0,
+      "a seeded heat with lanes (approve swimmers in /admin to generate them)",
+    );
+    await expect(page.getByText("Call-room attendance")).toBeVisible();
   });
 
   test("referee can mark a lane Present, then Absent (call-room attendance, no separate usher role)", async ({ page }) => {
@@ -53,6 +61,7 @@ test.describe("Consolidated Referee deck", () => {
     await page.waitForTimeout(1500);
 
     const validButtons = page.getByRole("button", { name: "Valid Time" });
+    requireFixture((await validButtons.count()) > 0, "a seeded heat with lanes to score");
     await expect(validButtons.first()).toBeVisible();
     await validButtons.first().click();
 
@@ -78,7 +87,9 @@ test.describe("Consolidated Referee deck", () => {
     await page.goto("/referee");
     await page.waitForTimeout(1500);
 
-    await page.getByRole("button", { name: "Valid Time" }).first().click();
+    const valid = page.getByRole("button", { name: "Valid Time" });
+    requireFixture((await valid.count()) > 0, "a seeded heat with lanes to score");
+    await valid.first().click();
     const timeInput = page.locator('input[id^="time-"]').first();
     await timeInput.fill("garbage");
     await expect(timeInput).toHaveAttribute("aria-invalid", "true");

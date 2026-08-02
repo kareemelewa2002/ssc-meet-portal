@@ -358,6 +358,25 @@ create table if not exists public.athletes (
 alter table public.athletes
   add column if not exists approved_by_admin boolean not null default false;
 
+-- ---------------------------------------------------------------------------
+-- SAFETY & PRIVACY ACKNOWLEDGEMENT
+-- ---------------------------------------------------------------------------
+-- Every swimmer must accept that they are responsible for their own safety
+-- and personal belongings on event days. For a U14 that acceptance is not
+-- theirs to give: a minor cannot waive their own liability, so it must be
+-- recorded against the linked parent's account instead. accepted_by stores
+-- WHO actually clicked it, which is the part that matters if it is ever
+-- disputed — a boolean alone would not tell you whether the child or the
+-- guardian agreed.
+alter table public.athletes
+  add column if not exists safety_accepted_at timestamptz,
+  add column if not exists safety_accepted_by uuid references public.users (id);
+
+comment on column public.athletes.safety_accepted_at is
+  'When the safety & privacy acknowledgement was accepted. NULL = outstanding.';
+comment on column public.athletes.safety_accepted_by is
+  'WHO accepted: the swimmer themselves (15+), or the linked parent for a U14.';
+
 comment on column public.athletes.parent_id is
   'Optional. Grants that parent RLS management rights over this athlete''s '
   'entries when age < 15 (see entries RLS policies).';
@@ -1209,6 +1228,75 @@ comment on function public.visible_contacts(uuid[]) is
   'Returns email/phone ONLY for users the caller may contact: self, admins, '
   'same-team members, and pending join-request counterparties (requester <-> '
   'that team''s captain). Everyone else is omitted from the result.';
+
+-- ---------------------------------------------------------------------------
+-- Accepting the safety & privacy acknowledgement.
+-- ---------------------------------------------------------------------------
+-- Enforced in the database, not the form: the whole point of the U14 rule is
+-- that the swimmer cannot give this consent themselves, and a client-side
+-- check would be trivially bypassable on exactly the population it exists to
+-- protect.
+create or replace function public.accept_safety_acknowledgement(p_athlete_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_age_group public.age_group;
+  v_user_id uuid;
+  v_parent_id uuid;
+begin
+  select a.age_group, a.user_id, a.parent_id
+    into v_age_group, v_user_id, v_parent_id
+  from public.athletes a
+  where a.id = p_athlete_id;
+
+  if v_user_id is null then
+    raise exception 'No such swimmer.';
+  end if;
+
+  if v_age_group = 'U14' then
+    -- A minor's acknowledgement must come from the linked guardian.
+    if v_parent_id is null then
+      raise exception 'This swimmer is under 15 and has no linked parent yet. A parent must be linked before the safety acknowledgement can be accepted.';
+    end if;
+    if auth.uid() <> v_parent_id then
+      raise exception 'Only the linked parent may accept the safety acknowledgement for a swimmer under 15.';
+    end if;
+  else
+    if auth.uid() <> v_user_id then
+      raise exception 'You can only accept the safety acknowledgement for your own account.';
+    end if;
+  end if;
+
+  update public.athletes
+     set safety_accepted_at = now(),
+         safety_accepted_by = auth.uid()
+   where id = p_athlete_id;
+end;
+$$;
+
+comment on function public.accept_safety_acknowledgement(uuid) is
+  'Records the safety & privacy acknowledgement. A U14 swimmer cannot accept '
+  'for themselves — only their linked parent may, from that parent''s own '
+  'account. Everyone 15+ accepts for themselves.';
+
+/** Outstanding acknowledgements a signed-in PARENT must action. */
+create or replace function public.my_pending_safety_acceptances()
+returns table (athlete_id uuid, full_name text, age_group public.age_group)
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select a.id, u.full_name, a.age_group
+  from public.athletes a
+  join public.users u on u.id = a.user_id
+  where a.parent_id = auth.uid()
+    and a.age_group = 'U14'
+    and a.safety_accepted_at is null;
+$$;
 
 
 -- =============================================================================

@@ -508,6 +508,46 @@ where mv.volume_number = 1
 on conflict (athlete_id, meet_volume_id) do update set team_id = excluded.team_id;
 
 -- ---------------------------------------------------------------------------
+-- 7a. Teardown — clear anything an earlier generation of this script left.
+--
+-- This MUST run before the entry insert below. An upsert alone is not enough:
+-- earlier revisions entered every athlete in every event, so without an
+-- explicit delete those rows survive as 'confirmed' alongside the new pending
+-- ones. The result is an athlete holding far more than the 4-event cap, half
+-- of them already confirmed — which is neither a fresh state nor a legal one.
+--
+-- Order matters: results reference heat_lanes, heat_lanes reference entries.
+-- ---------------------------------------------------------------------------
+delete from public.results
+where heat_lane_id in (
+  select hl.id from public.heat_lanes hl
+  join public.heats h on h.id = hl.heat_id
+  join public.events ev on ev.id = h.event_id
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  where mv.volume_number = 1
+);
+
+delete from public.heats
+where event_id in (
+  select ev.id from public.events ev
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  where mv.volume_number = 1
+);
+
+delete from public.entries
+where event_id in (
+  select ev.id from public.events ev
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  where mv.volume_number = 1
+);
+
+delete from public.leaderboards
+where meet_volume_id in (select id from public.meet_volumes where volume_number = 1);
+
+-- ---------------------------------------------------------------------------
 -- 7. Entries — a FRESH, pre-meet state.
 --
 -- Every athlete has registered for a varied 2-4 individual events (the cap is
@@ -556,42 +596,17 @@ join lateral (
 ) ev on true
 where u.email like 'athlete%@ssc-demo.test'
   and a.parent_link_status <> 'pending'
-on conflict (event_id, athlete_id) do update
-  set seed_time_ms = excluded.seed_time_ms,
-      is_nt = excluded.is_nt,
-      status = excluded.status;
+on conflict (event_id, athlete_id) do nothing;
 
 -- ---------------------------------------------------------------------------
--- 8. Heats, lanes, results and standings are intentionally NOT seeded.
---
--- They are produced by the live workflow:
+-- 8. Heats, lanes, results and standings are intentionally NOT seeded — they
+-- are produced by the live workflow:
 --   approve a swimmer  -> generate_heats_on_confirm  -> heats + lanes
---   referee enters times, admin publishes            -> results
+--   referee times, admin publishes                   -> results
 --   apply_result_points / event_results              -> standings
---
--- Any rows left behind by an earlier generation of this script are cleared so
--- a re-run always lands back on a genuinely fresh pre-meet state.
+-- (The teardown that guarantees this clean slate runs in 7a above, before the
+-- entries are written.)
 -- ---------------------------------------------------------------------------
-delete from public.results
-where heat_lane_id in (
-  select hl.id from public.heat_lanes hl
-  join public.heats h on h.id = hl.heat_id
-  join public.events ev on ev.id = h.event_id
-  join public.sessions s on s.id = ev.session_id
-  join public.meet_volumes mv on mv.id = s.meet_volume_id
-  where mv.volume_number = 1
-);
-
-delete from public.heats
-where event_id in (
-  select ev.id from public.events ev
-  join public.sessions s on s.id = ev.session_id
-  join public.meet_volumes mv on mv.id = s.meet_volume_id
-  where mv.volume_number = 1
-);
-
-delete from public.leaderboards
-where meet_volume_id in (select id from public.meet_volumes where volume_number = 1);
 
 -- Everyone starts unapproved: approving them is the first step of the demo.
 update public.athletes a
