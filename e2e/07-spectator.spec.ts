@@ -118,10 +118,17 @@ test.describe("Spectator, leaderboards & navigation", () => {
     await page.goto("/");
     await page.waitForTimeout(1000);
 
-    // Home now links straight to the current meet's heat sheet.
-    const volumeCard = page.locator('a[href^="/events/"][href$="/heats"]').first();
-    await expect(volumeCard).toBeVisible();
-    await volumeCard.click();
+    // Home no longer surfaces a specific meet — picking one happens on
+    // /meets, so the spectator path is Home -> Meets -> that meet's heats.
+    const meetsLink = page.locator('main a[href="/meets"]').first();
+    await expect(meetsLink).toBeVisible();
+    await meetsLink.click();
+    await page.waitForURL("**/meets", { timeout: 10_000 });
+    await page.waitForTimeout(1500);
+
+    const heatSheetLink = page.locator('a[href^="/events/"][href$="/heats"]').first();
+    await expect(heatSheetLink).toBeVisible();
+    await heatSheetLink.click();
     await page.waitForURL(/\/events\/\d+\/heats/, { timeout: 10_000 });
     await page.waitForTimeout(1000);
 

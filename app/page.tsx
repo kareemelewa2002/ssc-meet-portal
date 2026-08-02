@@ -3,15 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { LayoutDashboard, Lock, Radio, Trophy, Users, Waves } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
 import { MeetSummaryStats } from "@/components/home/meet-summary-stats";
 import { AppHeader } from "@/components/layout/app-header";
-import { DEMO_VOLUMES, formatMeetDate } from "@/lib/volumes";
+import { DEMO_VOLUMES } from "@/lib/volumes";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
 import type { MeetVolumeRow, UserRole } from "@/lib/supabase/types";
 
@@ -22,17 +21,10 @@ const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
   coach: "/coach",
 };
 
-function statusBadge(volume: MeetVolumeRow) {
-  if (volume.status === "planned") return { label: "Coming Soon", variant: "outline" as const };
-  if (volume.status === "completed") return { label: "Completed", variant: "secondary" as const };
-  return { label: "Live Volume", variant: "default" as const };
-}
-
 export default function HomePage() {
   const { outdoorMode } = useOutdoorMode();
   const { user } = useCurrentUser();
   const [volumes, setVolumes] = useState<MeetVolumeRow[]>(DEMO_VOLUMES);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,8 +38,9 @@ export default function HomePage() {
         if (!cancelled && !error && data && data.length > 0) {
           setVolumes(data);
         }
-      } finally {
-        if (!cancelled) setLoading(false);
+      } catch {
+        // Non-fatal: the only thing volumes drive here is the Leaderboards
+        // href, which falls back to the all-time board.
       }
     })();
     return () => {
@@ -233,38 +226,6 @@ export default function HomePage() {
           </section>
         )}
 
-        {currentVolume && (
-          <section aria-label="Current meet">
-            <Link href={`/events/${currentVolume.volume_number}/heats`} className="block min-h-[48px]">
-              <Card
-                className={cn(
-                  "transition-all hover:-translate-y-1 hover:shadow-brutal-lg",
-                  outdoorMode && "border-yellow-300/40 bg-black",
-                )}
-              >
-                <CardHeader>
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>
-                      {currentVolume.name}
-                    </CardTitle>
-                    <Badge variant={statusBadge(currentVolume).variant}>
-                      {statusBadge(currentVolume).label}
-                    </Badge>
-                  </div>
-                  <CardDescription className={outdoorMode ? "text-yellow-100/70" : undefined}>
-                    {formatMeetDate(currentVolume.meet_date)} · heat sheets, results & standings
-                  </CardDescription>
-                </CardHeader>
-              </Card>
-            </Link>
-          </section>
-        )}
-
-        {loading && (
-          <p className={cn("text-xs", outdoorMode ? "text-yellow-100/60" : "text-muted-foreground")}>
-            Loading latest volumes…
-          </p>
-        )}
       </main>
     </div>
   );
