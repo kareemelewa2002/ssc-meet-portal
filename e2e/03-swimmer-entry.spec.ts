@@ -63,13 +63,25 @@ test.describe.serial("Swimmer & meet entry", () => {
     await page.waitForTimeout(2000);
     await expect(page.getByText("Swimmer registration pending admin approval.")).toHaveCount(0);
 
+    // A 15+ swimmer who predates the safety acknowledgement accepts it here.
+    const acceptSafety = page.getByRole("button", { name: /I accept the safety/i });
+    if (await acceptSafety.count()) {
+      await acceptSafety.click();
+      await page.waitForTimeout(1500);
+    }
+
     // Pick the first registerable event card and enter a valid mm:ss.cc time.
     // This fixture is self-consuming: every run enters one more event for
     // athlete37, so eventually there is nothing left to select.
+    // The buttons can be present but DISABLED once the 4-event-per-meet cap
+    // is reached, so presence alone is not a usable fixture.
     const selectButtons = page.getByRole("button", { name: "Select" });
+    const enabledCount = await selectButtons.evaluateAll(
+      (nodes) => nodes.filter((n) => !(n as HTMLButtonElement).disabled).length,
+    );
     requireFixture(
-      (await selectButtons.count()) > 0,
-      "an unentered event for athlete37 to register for",
+      enabledCount > 0,
+      "a free event slot for athlete37 (they are at the 4-event cap for this meet)",
     );
     const firstSelect = selectButtons.first();
     await expect(firstSelect).toBeVisible({ timeout: 10_000 });

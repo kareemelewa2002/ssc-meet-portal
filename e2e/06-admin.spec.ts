@@ -119,9 +119,19 @@ test.describe("Seeding dashboard", () => {
   test("Seed Entire Session is disabled once every non-relay/non-skins event is already seeded", async ({ page }) => {
     const seedAllButton = page.getByRole("button", { name: "Seed Entire Session" });
     await expect(seedAllButton).toBeVisible();
-    // Session 1's individual events are fully published in the seed data —
-    // nothing left to bulk-seed, so the button must reflect that.
-    await expect(seedAllButton).toBeDisabled();
+    // Heats are no longer pre-seeded: they are generated when an admin
+    // approves entries. So the button is enabled while work remains and
+    // disabled once every individual event has heats — assert the invariant
+    // (it matches the actual seeded state) rather than one fixed outcome.
+    // Relay events show "Unseeded" permanently by design, so that text says
+    // nothing about whether bulk seeding has work to do. The per-event
+    // "Seed Single Event" button is the real signal.
+    const seedableEvents = await page.getByRole("button", { name: "Seed Single Event" }).count();
+    if (seedableEvents > 0) {
+      await expect(seedAllButton).toBeEnabled();
+    } else {
+      await expect(seedAllButton).toBeDisabled();
+    }
   });
 
   test("Session 3 (Skins) tab is reachable without console errors", async ({ page }) => {

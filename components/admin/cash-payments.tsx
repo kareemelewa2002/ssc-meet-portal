@@ -101,7 +101,7 @@ export function CashPayments({ className }: { className?: string }) {
                 <TableRow>
                   <TableHead>Swimmer</TableHead>
                   <TableHead>Team</TableHead>
-                  <TableHead>Races</TableHead>
+                  <TableHead>Races entered</TableHead>
                   <TableHead>Amount due</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -113,7 +113,19 @@ export function CashPayments({ className }: { className?: string }) {
                       <AthleteLink athleteId={row.athleteId} name={row.athleteName} />
                     </TableCell>
                     <TableCell className="text-muted-foreground">{row.teamName ?? "Unaffiliated"}</TableCell>
-                    <TableCell>{row.raceCount}</TableCell>
+                    <TableCell>
+                      <div className="flex max-w-[22rem] flex-wrap gap-1">
+                        {row.raceNames.length === 0 ? (
+                          <span className="text-muted-foreground">{row.raceCount}</span>
+                        ) : (
+                          row.raceNames.map((name) => (
+                            <Badge key={name} variant="outline" className="max-w-full truncate text-[10px]">
+                              {name}
+                            </Badge>
+                          ))
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="gap-1.5">
                         <Banknote className="size-3.5" />

@@ -25,6 +25,10 @@ test.describe("Spectator, leaderboards & navigation", () => {
     await page.goto(`/events/1/heats?event=${event.id}`);
     await page.waitForTimeout(1500);
 
+    requireFixture(
+      (await page.getByText(`Showing ${event.name} only.`).count()) > 0,
+      "a seeded heat for the first event (approve swimmers in /admin to generate heats)",
+    );
     await expect(page.getByText(`Showing ${event.name} only.`)).toBeVisible();
     const mainText = await page.locator("main").innerText();
     // Every event card heading on the page must be this one event — a
@@ -40,6 +44,13 @@ test.describe("Spectator, leaderboards & navigation", () => {
 
     await expect(page.getByRole("tab", { name: "Best Performers" })).toBeVisible();
     const performersText = await page.locator("main").innerText();
+    // All-time records are derived from PUBLISHED results. On a freshly
+    // seeded, pre-meet database there are none yet — that is correct, not a
+    // rendering failure.
+    requireFixture(
+      /\d{2}\.\d{2}/.test(performersText),
+      "published results to rank (score and publish a heat first)",
+    );
     expect(performersText).toMatch(/\d{2}\.\d{2}/); // a formatted race time
 
     await page.getByRole("tab", { name: "Best Performances" }).click();

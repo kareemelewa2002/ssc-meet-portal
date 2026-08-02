@@ -21,6 +21,10 @@ export interface AccountFormInput {
 
 export interface AthleteBioInput {
   dateOfBirth: string;
+  /** Safety & privacy acknowledgement ticked at signup. Only honoured for
+   * 15+; a U14's acceptance must come from their parent's own account (see
+   * public.accept_safety_acknowledgement). */
+  safetyAccepted?: boolean;
   gender: Gender;
   heightCm?: number | null;
   weightKg?: number | null;
@@ -112,11 +116,19 @@ export function buildParentInviteLink(pendingParentEmail: string, origin: string
   return url.toString();
 }
 
-/** Athletes may only submit meet entries once parent linkage is resolved
- * and an admin has approved their registration. */
+export const SAFETY_NOT_ACCEPTED_MESSAGE =
+  "The safety & privacy acknowledgement must be accepted before entering a meet. For swimmers under 15 this must be done by their parent, from the parent's own account.";
+
+/**
+ * Gates meet entry. Approval is deliberately NOT checked here any more — it
+ * now happens after registration, together with payment. What still blocks a
+ * swimmer is anything that would be unlawful or unsafe to swim without:
+ * parent linkage for a U14, and the safety acknowledgement.
+ */
 export function canSubmitEntries(athlete: {
   parentLinkStatus: ParentLinkStatus;
   approvedByAdmin?: boolean;
+  safetyAcceptedAt?: string | null;
 }): ValidationResult {
   if (athlete.approvedByAdmin === false) {
     return { ok: false, error: SWIMMER_PENDING_APPROVAL_MESSAGE };
@@ -127,6 +139,9 @@ export function canSubmitEntries(athlete: {
       error:
         "Parent/guardian authorization is required before this athlete can enter a meet volume.",
     };
+  }
+  if (athlete.safetyAcceptedAt === null) {
+    return { ok: false, error: SAFETY_NOT_ACCEPTED_MESSAGE };
   }
   return { ok: true };
 }
@@ -179,6 +194,7 @@ export async function registerAccount(
               specialty_events: athleteBio.specialtyEvents,
               parent_email: athleteBio.parentEmail?.trim() || null,
               profile_image_url: athleteBio.profileImageUrl || null,
+              safety_accepted: athleteBio.safetyAccepted === true,
             }
           : {}),
       },

@@ -22,9 +22,17 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
     // Register for 2 races, assert the itemized 300 EGP/race cash total.
     await page.goto("/events/1/register");
     await page.waitForTimeout(1500);
+    // athlete01 is U14: their safety acknowledgement must have been accepted
+    // by their parent before they can enter anything.
+    requireFixture(
+      (await page.getByText(/safety & privacy acknowledgement must be accepted/i).count()) === 0,
+      "athlete01's safety acknowledgement accepted by their parent",
+    );
     const selectButtons = page.getByRole("button", { name: "Select" });
-    const available = await selectButtons.count();
-    requireFixture(available >= 2, "at least 2 unentered events for athlete01");
+    const available = await selectButtons.evaluateAll(
+      (nodes) => nodes.filter((n) => !(n as HTMLButtonElement).disabled).length,
+    );
+    requireFixture(available >= 2, "at least 2 free event slots for athlete01");
 
     await selectButtons.nth(0).click();
     await page.waitForTimeout(300);
@@ -111,6 +119,7 @@ test.describe("Part 5 checklist — Referee Flow", () => {
     }
 
     const validButtons = page.getByRole("button", { name: "Valid Time" });
+    requireFixture((await validButtons.count()) > 0, "a seeded heat with lanes to score");
     await expect(validButtons.first()).toBeVisible();
     await validButtons.first().click();
     await page.locator('input[id^="time-"]').first().fill("28.50");

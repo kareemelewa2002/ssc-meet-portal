@@ -116,6 +116,10 @@ export type AthleteRow = {
   age: number;
   age_group: AgeGroup;
   gender: Gender;
+  /** Safety & privacy acknowledgement. NULL = outstanding. For a U14 this can
+   * only be set by their linked parent (public.accept_safety_acknowledgement). */
+  safety_accepted_at: string | null;
+  safety_accepted_by: string | null;
   height_cm: number | null;
   weight_kg: number | null;
   specialty_events: string[];
@@ -382,6 +386,14 @@ export type Database = {
         Returns: boolean;
       };
       // NOTE: event_results is a VIEW, exposed read-only through Tables below.
+      accept_safety_acknowledgement: {
+        Args: { p_athlete_id: string };
+        Returns: undefined;
+      };
+      my_pending_safety_acceptances: {
+        Args: Record<string, never>;
+        Returns: { athlete_id: string; full_name: string; age_group: AgeGroup }[];
+      };
       visible_contacts: {
         Args: { p_user_ids: string[] };
         Returns: { user_id: string; email: string | null; phone: string | null }[];

@@ -44,6 +44,9 @@ function RegisterPageInner() {
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [acceptSafety, setAcceptSafety] = useState(false);
+  const [acceptPrivacy, setAcceptPrivacy] = useState(false);
 
   // Athlete bio fields
   const [dateOfBirth, setDateOfBirth] = useState("");
@@ -101,6 +104,15 @@ function RegisterPageInner() {
   const handleSubmit = async () => {
     setError(null);
 
+    if (password !== confirmPassword) {
+      setError("Passwords don't match.");
+      return;
+    }
+    if (!acceptPrivacy || !acceptSafety) {
+      setError("Please accept the privacy and safety terms to continue.");
+      return;
+    }
+
     if (role === "athlete") {
       const ageCheck = validateAthleteAge(dateOfBirth);
       if (!ageCheck.ok) {
@@ -127,6 +139,7 @@ function RegisterPageInner() {
               specialtyEvents,
               profileImageUrl: profileImageUrl || null,
               parentEmail: parentEmail || null,
+              safetyAccepted: acceptSafety,
             }
           : undefined,
       );
@@ -228,6 +241,20 @@ function RegisterPageInner() {
           <div className="space-y-1.5">
             <Label htmlFor="password">Password</Label>
             <Input id="password" type="password" className="min-h-[48px]" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="confirmPassword">Confirm password</Label>
+            <Input
+              id="confirmPassword"
+              type="password"
+              className="min-h-[48px]"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              aria-invalid={confirmPassword.length > 0 && confirmPassword !== password}
+            />
+            {confirmPassword.length > 0 && confirmPassword !== password && (
+              <p className="text-sm text-destructive">Passwords don&rsquo;t match.</p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -356,10 +383,68 @@ function RegisterPageInner() {
         </Card>
       )}
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Privacy & safety</CardTitle>
+          <CardDescription>Both are required to create an account.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border-2 border-black p-3">
+            <input
+              type="checkbox"
+              id="acceptPrivacy"
+              checked={acceptPrivacy}
+              onChange={(e) => setAcceptPrivacy(e.target.checked)}
+              className="mt-0.5 size-5 shrink-0 accent-black"
+            />
+            <span className="text-sm">
+              <strong className="font-bold">Privacy.</strong> I agree that my name, age group, team
+              and race results are shown publicly on SSC. My phone and email stay private and are
+              only shared with my own team, or with a team captain while I have a join request
+              pending with them.
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border-2 border-black p-3">
+            <input
+              type="checkbox"
+              id="acceptSafety"
+              checked={acceptSafety}
+              onChange={(e) => setAcceptSafety(e.target.checked)}
+              className="mt-0.5 size-5 shrink-0 accent-black"
+            />
+            <span className="text-sm">
+              <strong className="font-bold">Safety & belongings.</strong> I understand that
+              swimmers are fully responsible for their own safety and for their personal
+              belongings on event days, and that SSC accepts no liability for loss, damage or
+              injury at the venue.
+            </span>
+          </label>
+
+          {role === "athlete" && needsParentEmail && (
+            <Alert>
+              <AlertDescription className="text-sm">
+                Because this swimmer is under 15, this acknowledgement is not theirs to give. Their
+                parent or guardian must accept it from their own SSC account before the swimmer can
+                register for a meet.
+              </AlertDescription>
+            </Alert>
+          )}
+        </CardContent>
+      </Card>
+
       <Button
         type="button"
         className="min-h-[48px] w-full text-base font-semibold"
-        disabled={submitting || uploadingPhoto || (role === "athlete" && age != null && !ageRejection.ok)}
+        disabled={
+          submitting ||
+          uploadingPhoto ||
+          !acceptPrivacy ||
+          !acceptSafety ||
+          password.length === 0 ||
+          password !== confirmPassword ||
+          (role === "athlete" && age != null && !ageRejection.ok)
+        }
         onClick={() => void handleSubmit()}
       >
         {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}

@@ -608,6 +608,24 @@ on conflict (event_id, athlete_id) do nothing;
 -- entries are written.)
 -- ---------------------------------------------------------------------------
 
+-- Safety & privacy acknowledgement: 15+ swimmers accepted it at signup, so
+-- they are ready to register. U14s are deliberately left outstanding — their
+-- parent must accept from their own account, which is the flow worth
+-- demonstrating.
+update public.athletes a
+set safety_accepted_at = now(), safety_accepted_by = a.user_id
+from public.users u
+where u.id = a.user_id
+  and u.email like 'athlete%@ssc-demo.test'
+  and a.age_group <> 'U14';
+
+update public.athletes a
+set safety_accepted_at = null, safety_accepted_by = null
+from public.users u
+where u.id = a.user_id
+  and u.email like 'athlete%@ssc-demo.test'
+  and a.age_group = 'U14';
+
 -- Everyone starts unapproved: approving them is the first step of the demo.
 update public.athletes a
 set approved_by_admin = false

@@ -991,7 +991,7 @@ begin
     insert into public.athletes (
       user_id, date_of_birth, age, age_group, gender, height_cm, weight_kg,
       specialty_events, parent_id, parent_link_status, pending_parent_email,
-      approved_by_admin
+      approved_by_admin, safety_accepted_at, safety_accepted_by
     ) values (
       new.id,
       v_dob,
@@ -1009,7 +1009,19 @@ begin
         else 'none'
       end::public.parent_link_status,
       case when v_needs_parent and v_parent_id is null then v_parent_email else null end,
-      false
+      false,
+      -- A U14 cannot accept for themselves no matter what the form sent;
+      -- their guardian must do it from their own account afterwards.
+      case
+        when v_needs_parent then null
+        when (new.raw_user_meta_data ->> 'safety_accepted') = 'true' then now()
+        else null
+      end,
+      case
+        when v_needs_parent then null
+        when (new.raw_user_meta_data ->> 'safety_accepted') = 'true' then new.id
+        else null
+      end
     );
   end if;
 

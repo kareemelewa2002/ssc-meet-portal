@@ -11,6 +11,7 @@ import { createClient } from "@/lib/supabase/client";
 import { fetchVolumeByNumber } from "@/lib/volumes";
 import { fetchTeams } from "@/lib/teams";
 import { canSubmitEntries } from "@/lib/register";
+import { acceptSafetyAcknowledgement } from "@/lib/safety";
 import {
   MAX_EVENTS_MESSAGE,
   MAX_EVENTS_PER_MEET,
@@ -25,7 +26,7 @@ import {
 } from "@/lib/event-registration";
 import { CLOCK_TIME_ERROR, parseTimeToMs } from "@/lib/format";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
-import type { MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
+import type { AgeGroup, MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 interface EventDraft {
@@ -38,6 +39,8 @@ interface CurrentAthlete {
   id: string;
   parentLinkStatus: ParentLinkStatus;
   approvedByAdmin: boolean;
+  ageGroup: AgeGroup | null;
+  safetyAcceptedAt: string | null | undefined;
 }
 
 export function EventRegistrationClient({ volId }: { volId: string }) {
@@ -47,6 +50,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   const [athlete, setAthlete] = useState<CurrentAthlete | null>(null);
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [acceptingSafety, setAcceptingSafety] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [enteredEventIds, setEnteredEventIds] = useState<Set<string>>(new Set());
 
@@ -89,18 +93,33 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         }
         const { data: athleteRow } = await supabase
           .from("athletes")
-          .select("id, parent_link_status, approved_by_admin")
+          .select("id, parent_link_status, approved_by_admin, age_group")
           .eq("user_id", user.id)
           .maybeSingle();
         if (!athleteRow) {
           if (!cancelled) setAuthError("Only athlete accounts can register for meet events.");
           return;
         }
+
+        // Queried separately, and tolerant of the column being absent: a
+        // database that has not yet had the latest schema.sql applied would
+        // otherwise 400 this whole query and lock every athlete out of
+        // registration. `undefined` means "unknown", which does not gate —
+        // only a known-NULL (column present, nothing accepted) does.
+        let safetyAcceptedAt: string | null | undefined;
+        const { data: safetyRow } = await supabase
+          .from("athletes")
+          .select("safety_accepted_at")
+          .eq("id", athleteRow.id)
+          .maybeSingle();
+        if (safetyRow) safetyAcceptedAt = safetyRow.safety_accepted_at;
         if (!cancelled) {
           setAthlete({
             id: athleteRow.id,
             parentLinkStatus: athleteRow.parent_link_status,
             approvedByAdmin: athleteRow.approved_by_admin,
+            ageGroup: athleteRow.age_group,
+            safetyAcceptedAt: safetyAcceptedAt,
           });
         }
         // Lock out events already entered — otherwise re-selecting one and
@@ -127,10 +146,32 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   const entryGate = useMemo(
     () =>
       athlete
-        ? canSubmitEntries({ parentLinkStatus: athlete.parentLinkStatus })
+        ? canSubmitEntries({
+            parentLinkStatus: athlete.parentLinkStatus,
+            safetyAcceptedAt: athlete.safetyAcceptedAt,
+          })
         : { ok: true as const },
     [athlete],
   );
+
+  // U14s are routed to their parent; everyone else can self-accept here.
+  const needsParentAcceptance = athlete?.ageGroup === "U14";
+
+  const handleAcceptSafety = async () => {
+    if (!athlete) return;
+    setAcceptingSafety(true);
+    try {
+      const res = await acceptSafetyAcknowledgement(athlete.id);
+      if (!res.success) {
+        setError(res.error ?? "Couldn't record the acknowledgement.");
+        return;
+      }
+      setAthlete((prev) => (prev ? { ...prev, safetyAcceptedAt: new Date().toISOString() } : prev));
+      setError(null);
+    } finally {
+      setAcceptingSafety(false);
+    }
+  };
 
   const enteredCount = enteredEventIds.size;
   const remainingSlots = Math.max(0, MAX_EVENTS_PER_MEET - enteredCount);
@@ -274,7 +315,23 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         <>
           {!entryGate.ok && (
             <Alert variant="destructive">
-              <AlertDescription>{entryGate.error}</AlertDescription>
+              <AlertDescription className="space-y-2">
+                <p>{entryGate.error}</p>
+                {/* A 15+ swimmer accepts for themselves. U14s cannot — the
+                    RPC refuses, so no button is offered to them. */}
+                {athlete && athlete.safetyAcceptedAt === null && !needsParentAcceptance && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-[44px] gap-2"
+                    disabled={acceptingSafety}
+                    onClick={() => void handleAcceptSafety()}
+                  >
+                    {acceptingSafety && <Loader2 className="size-4 animate-spin" />}
+                    I accept the safety &amp; privacy terms
+                  </Button>
+                )}
+              </AlertDescription>
             </Alert>
           )}
           {error && (

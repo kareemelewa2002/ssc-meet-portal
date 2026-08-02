@@ -22,6 +22,8 @@ import { AppHeader } from "@/components/layout/app-header";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { TeamJoinRequests } from "@/components/teams/team-join-requests";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AthleteDirectory } from "@/components/athletes/athlete-directory";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { firstError } from "@/lib/fetch-policy";
@@ -66,6 +68,7 @@ export default function TeamsPage() {
   const [joinBusyTeamId, setJoinBusyTeamId] = useState<string | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
   const [transfersLocked, setTransfersLocked] = useState(false);
+  const [view, setView] = useState<"teams" | "athletes">("teams");
 
   const canCaptainTeam =
     user?.role === "coach" || user?.role === "admin" || (user?.role === "athlete" && myAthlete?.ageGroup === "Open");
@@ -216,6 +219,21 @@ export default function TeamsPage() {
         </div>
       )}
 
+      <Tabs value={view} onValueChange={(v) => setView(v as "teams" | "athletes")}>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 group-data-horizontal/tabs:h-auto">
+          <TabsTrigger value="teams" className="h-auto min-h-[48px] border-2 text-sm font-bold">
+            Teams
+          </TabsTrigger>
+          <TabsTrigger value="athletes" className="h-auto min-h-[48px] border-2 text-sm font-bold">
+            Athletes
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {view === "athletes" ? (
+        <AthleteDirectory />
+      ) : (
+      <>
       <header>
         <h1 className="text-2xl font-bold tracking-tight">Teams</h1>
         <p className="text-sm text-muted-foreground">
@@ -324,6 +342,9 @@ export default function TeamsPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      </>
       )}
 
       <Dialog open={rosterTeam != null} onOpenChange={(open) => !open && setRosterTeam(null)}>

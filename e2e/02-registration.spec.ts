@@ -19,11 +19,15 @@ test.describe("Registration & validation", () => {
     await page.locator("#email").fill(`e2e.u14.noparent.${Date.now()}@gmail.com`);
     await page.locator("#phone").fill("+10000000001");
     await page.locator("#password").fill("Password123!");
+    await page.locator("#confirmPassword").fill("Password123!");
     await page.locator("#dob").fill("2012-05-01"); // turns 14 this year (U14)
     await expect(page.getByText(/Turns 14 this year.*U14/i)).toBeVisible();
     // Parent email field must appear for this age.
     await expect(page.locator("#parentEmail")).toBeVisible();
 
+    // Privacy + safety acknowledgement are required to enable the button.
+    await page.locator("#acceptPrivacy").check();
+    await page.locator("#acceptSafety").check();
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(
       page.getByText("Swimmers under 15 must provide a parent or guardian email before signing up."),
@@ -82,9 +86,13 @@ test.describe("Registration & validation", () => {
     await page.locator("#email").fill(email);
     await page.locator("#phone").fill("+10000000002");
     await page.locator("#password").fill("Password123!");
+    await page.locator("#confirmPassword").fill("Password123!");
     await page.locator("#dob").fill("2009-06-15"); // age 17, U17
     await page.getByRole("button", { name: "male", exact: true }).click();
 
+    // Privacy + safety acknowledgement are required to enable the button.
+    await page.locator("#acceptPrivacy").check();
+    await page.locator("#acceptSafety").check();
     await page.getByRole("button", { name: "Create account" }).click();
 
     const rateLimited = page.getByText(/rate limit/i);
@@ -107,10 +115,14 @@ test.describe("Registration & validation", () => {
     await page.locator("#email").fill(email);
     await page.locator("#phone").fill("+10000000003");
     await page.locator("#password").fill("Password123!");
+    await page.locator("#confirmPassword").fill("Password123!");
     await page.locator("#dob").fill("2012-05-01"); // age 14
     await page.getByRole("button", { name: "female", exact: true }).click();
     await page.locator("#parentEmail").fill(`e2e.parent.${Date.now()}@gmail.com`);
 
+    // Privacy + safety acknowledgement are required to enable the button.
+    await page.locator("#acceptPrivacy").check();
+    await page.locator("#acceptSafety").check();
     await page.getByRole("button", { name: "Create account" }).click();
 
     const rateLimited = page.getByText(/rate limit/i);
