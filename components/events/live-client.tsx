@@ -314,11 +314,8 @@ export function LiveEventsClient({ volId }: { volId: string }) {
           >
             <TabsList className="grid h-auto w-full grid-cols-3">
               {[1, 2, 3].map((n) => (
-                <TabsTrigger key={n} value={String(n)} className="min-h-[48px] flex-col gap-0 text-xs">
-                  <span className="font-semibold">Session {n}</span>
-                  <span className="text-[10px] opacity-70">
-                    {n === 1 ? "9AM–12PM" : n === 2 ? "2PM–4PM" : "5PM–7PM · Skins"}
-                  </span>
+                <TabsTrigger key={n} value={String(n)} className="min-h-[48px] text-xs font-semibold">
+                  Session {n}
                 </TabsTrigger>
               ))}
             </TabsList>
