@@ -12,6 +12,7 @@ import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals"
 import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
 import { CashPayments } from "@/components/admin/cash-payments";
 import { AppHeader } from "@/components/layout/app-header";
+import { AdminKpiStrip } from "@/components/admin/admin-kpi-strip";
 
 const TABS = [
   { id: "pending", label: "Pending Swimmer Registrations", shortLabel: "Swimmers" },
@@ -55,7 +56,16 @@ export default function AdminPage() {
     <div className="min-h-screen">
       <AppHeader title="Admin Dashboard" />
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 p-3 pb-24 sm:p-6">
-      <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-1 sm:flex sm:flex-wrap sm:grid-cols-none">
+      <header className="space-y-1">
+        <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">Command Center</h1>
+        <p className="text-sm text-muted-foreground">
+          Live approval queues, cash on deck, and referee heat cards awaiting review.
+        </p>
+      </header>
+
+      <AdminKpiStrip />
+
+      <div className="grid grid-cols-2 gap-2 rounded-xl border-2 border-black bg-muted/30 p-1 sm:flex sm:flex-wrap sm:grid-cols-none">
         {TABS.map((t) => (
           <Button
             key={t.id}

@@ -3,6 +3,7 @@
 import { AppHeader } from "@/components/layout/app-header";
 import { CoachRoster } from "@/components/dashboard/coach-roster";
 import { useCurrentUser } from "@/hooks/use-current-user";
+import { SkeletonRow } from "@/components/ui/skeleton";
 
 export default function CoachPage() {
   const { user, loading } = useCurrentUser();
@@ -20,7 +21,7 @@ export default function CoachPage() {
         </header>
 
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => (<SkeletonRow key={i} />))}</div>
         ) : isCoach ? (
           <CoachRoster />
         ) : (

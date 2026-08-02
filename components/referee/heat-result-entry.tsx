@@ -21,7 +21,7 @@ import {
   scoreHeatResult,
 } from "@/lib/results";
 import { createClient } from "@/lib/supabase/client";
-import { CLOCK_TIME_ERROR, formatTimeMs } from "@/lib/format";
+import { CLOCK_TIME_ERROR, formatTimeMs, timeDropSeconds } from "@/lib/format";
 import { ATTENDANCE_LABELS } from "@/lib/attendance";
 import { useToast } from "@/hooks/use-toast";
 import type { AttendanceStatus, DqReason, ResultOutcome } from "@/lib/supabase/types";
@@ -361,7 +361,7 @@ export function HeatResultEntry({
                     type="button"
                     variant={draft.outcome === outcome ? "default" : "outline"}
                     className={cn(
-                      "min-h-[48px]",
+                      "min-h-[54px] text-base font-bold",
                       outcome === "dq" && draft.outcome === "dq" && "bg-destructive text-white",
                       outcome === "no_show" &&
                         draft.outcome === "no_show" &&
@@ -398,13 +398,34 @@ export function HeatResultEntry({
                     <Label>Finish place</Label>
                     <div
                       className={cn(
-                        "flex min-h-[48px] items-center rounded-md border px-3 text-sm",
+                        "flex min-h-[54px] items-center gap-2 rounded-lg border-2 px-3 font-telemetry text-base",
                         outdoorMode ? "border-yellow-300/40 text-yellow-100/70" : "text-muted-foreground",
                       )}
                     >
-                      {draft.finishPlace != null
-                        ? `#${draft.finishPlace} — auto-ranked by time`
-                        : "Auto-ranked once all times are in"}
+                      <span className="min-w-0 flex-1 truncate">
+                        {draft.finishPlace != null
+                          ? `#${draft.finishPlace} — auto-ranked by time`
+                          : "Auto-ranked once all times are in"}
+                      </span>
+                      {/* Instant seed -> official delta. A referee entering a
+                          time should see immediately whether the swimmer
+                          dropped, because a surprising delta is usually a
+                          mis-keyed digit rather than a real swim. */}
+                      {(() => {
+                        const delta = timeDropSeconds(lane.seedTimeMs ?? null, draft.officialTimeMs);
+                        if (delta == null) return null;
+                        return (
+                          <span
+                            className={cn(
+                              "shrink-0 rounded-full border-2 border-black px-2 py-0.5 text-xs font-extrabold",
+                              delta > 0 ? "bg-neon-lime text-black" : "bg-neon-orange text-black",
+                            )}
+                          >
+                            {delta > 0 ? "-" : "+"}
+                            {Math.abs(delta).toFixed(2)}s
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -428,7 +449,7 @@ export function HeatResultEntry({
                       setSaved(false);
                     }}
                   >
-                    <SelectTrigger className="min-h-[48px] w-full">
+                    <SelectTrigger className="min-h-[54px] w-full">
                       {/* Select.Value renders the raw value by default — a
                           render function is required to show the label. */}
                       <SelectValue>
@@ -468,7 +489,7 @@ export function HeatResultEntry({
 
         <Button
           type="button"
-          className="min-h-[48px] w-full sm:w-auto"
+          className="min-h-[54px] w-full text-base font-bold sm:w-auto"
           disabled={saving || readyLanes.length === 0}
           onClick={() => void handleSave()}
         >

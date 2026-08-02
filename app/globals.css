@@ -44,6 +44,83 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+
+  /* ---------------------------------------------------------------------
+   * SSC telemetry palette — neon accents on a light, high-contrast base.
+   * Exposed through @theme so they're usable as bg-neon-lime, text-neon-cyan,
+   * border-neon-violet, etc. rather than scattered hex literals.
+   * ------------------------------------------------------------------- */
+  --color-neon-lime: #10b981; /* time DROP / success / present */
+  --color-neon-cyan: #06b6d4; /* live / in-progress / informational */
+  --color-neon-orange: #f97316; /* cash owed / attention, not failure */
+  --color-neon-violet: #8b5cf6; /* skins / bracket / special events */
+
+  --font-telemetry: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* -----------------------------------------------------------------------
+ * Cyber-brutalist primitives.
+ *
+ * These were hard-coded as shadow-[4px_4px_0px_#000] across nine component
+ * files, which made retuning the brand a find-and-replace. Everything now
+ * reads from here, so the whole surface is one edit away.
+ * --------------------------------------------------------------------- */
+:root {
+  --border-brutal: 2px solid #000;
+
+  --shadow-brutal-sm: 2px 2px 0px #000;
+  --shadow-brutal: 4px 4px 0px #000;
+  --shadow-brutal-lg: 6px 6px 0px #000;
+  --shadow-brutal-xl: 8px 8px 0px #000;
+
+  /* Hard offset + a low-opacity neon bloom. The bloom is what separates this
+     from flat neo-brutalism: it reads as backlit instrumentation rather than
+     a sticker. */
+  --shadow-brutal-lime: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-lime) 55%, transparent);
+  --shadow-brutal-cyan: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-cyan) 55%, transparent);
+  --shadow-brutal-orange: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-orange) 55%, transparent);
+  --shadow-brutal-violet: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-violet) 55%, transparent);
+}
+
+@utility shadow-brutal {
+  box-shadow: var(--shadow-brutal);
+}
+@utility shadow-brutal-sm {
+  box-shadow: var(--shadow-brutal-sm);
+}
+@utility shadow-brutal-lg {
+  box-shadow: var(--shadow-brutal-lg);
+}
+@utility shadow-brutal-xl {
+  box-shadow: var(--shadow-brutal-xl);
+}
+@utility border-brutal {
+  border: var(--border-brutal);
+}
+
+/** Frosted instrument panel: blurred translucent fill behind a hard black
+ * edge. Used for sticky headers and overlay surfaces. */
+@utility glass-hud {
+  backdrop-filter: blur(24px);
+  background-color: color-mix(in oklch, var(--card) 75%, transparent);
+  border: var(--border-brutal);
+  box-shadow: var(--shadow-brutal);
+}
+
+/** Times, splits, seed gaps, lane numbers — anything a referee reads at a
+ * glance must be tabular so digits don't shift between rows. */
+@utility font-telemetry {
+  font-family: var(--font-telemetry);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.025em;
+}
+
+/** Tactile press physics shared by every interactive control. */
+@utility press {
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+@utility press-active {
+  transform: translateY(2px) scale(0.98);
 }
 
 :root {
@@ -95,6 +172,58 @@
   h2,
   h3 {
     @apply font-extrabold tracking-tight;
+  }
+}
+
+/* -----------------------------------------------------------------------
+ * Telemetry motion
+ * --------------------------------------------------------------------- */
+
+/** Scan-line sweep for skeletons — a bright band travelling across a dim
+ * plate, like an instrument redrawing itself. Reads as "acquiring data"
+ * rather than the generic pulse every other app uses. */
+@keyframes ssc-scan {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
+
+/** Live-status heartbeat: a soft expanding halo, distinct from Tailwind's
+ * animate-ping (which fully fades and can read as a rendering glitch on the
+ * poolside projector). */
+@keyframes ssc-pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--color-neon-cyan) 70%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 10px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.animate-scan {
+  animation: ssc-scan 1.6s ease-in-out infinite;
+}
+.animate-pulse-ring {
+  animation: ssc-pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Respect the OS setting — deck officials running iOS Reduce Motion must not
+   get a strobing pool-deck UI. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-scan,
+  .animate-pulse-ring {
+    animation: none;
+  }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
   }
 }
 

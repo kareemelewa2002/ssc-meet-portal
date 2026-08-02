@@ -120,7 +120,12 @@ export function AttendanceBoard({
               )}
             >
               <div className="flex items-center gap-3">
-                <div className="flex min-h-[48px] min-w-[48px] items-center justify-center rounded-md bg-muted text-sm font-bold">
+                <div
+                  className={cn(
+                    "flex min-h-[54px] min-w-[54px] items-center justify-center rounded-xl border-2 border-black font-telemetry text-base font-extrabold",
+                    outdoorMode ? "bg-yellow-300 text-black" : "bg-muted",
+                  )}
+                >
                   L{lane.laneNumber}
                 </div>
                 <div className="min-w-0 flex-1">
@@ -140,8 +145,11 @@ export function AttendanceBoard({
                 <Button
                   type="button"
                   className={cn(
-                    "min-h-[48px] text-base font-semibold",
-                    lane.attendanceStatus === "present" && "bg-emerald-600 hover:bg-emerald-600",
+                    // 54px+ — wet fingers, sun glare, and a referee who is
+                    // not looking directly at the screen while a heat loads.
+                    "min-h-[54px] text-base font-bold",
+                    lane.attendanceStatus === "present" &&
+                      "bg-neon-lime text-black shadow-[var(--shadow-brutal-lime)] hover:bg-neon-lime",
                   )}
                   variant={lane.attendanceStatus === "present" ? "default" : "outline"}
                   disabled={savingLaneId === lane.heatLaneId}
@@ -157,7 +165,10 @@ export function AttendanceBoard({
                 <Button
                   type="button"
                   variant={lane.attendanceStatus === "absent" ? "destructive" : "outline"}
-                  className="min-h-[48px] text-base font-semibold"
+                  className={cn(
+                    "min-h-[54px] text-base font-bold",
+                    lane.attendanceStatus === "absent" && "shadow-[var(--shadow-brutal-orange)]",
+                  )}
                   disabled={savingLaneId === lane.heatLaneId}
                   onClick={() => void markAttendance(lane.heatLaneId, "absent")}
                 >

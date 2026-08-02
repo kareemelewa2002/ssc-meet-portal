@@ -352,6 +352,15 @@ export type Database = {
         Args: Record<string, never>;
         Returns: number;
       };
+      // Team/join-request domain guards (supabase/schema.sql section 4).
+      meet_in_progress: {
+        Args: Record<string, never>;
+        Returns: boolean;
+      };
+      can_captain_team: {
+        Args: Record<string, never>;
+        Returns: boolean;
+      };
     };
     Enums: {
       user_role: UserRole;

@@ -13,6 +13,7 @@ import { updateMyPassword, updateMyProfile } from "@/lib/account";
 import { uploadAvatar } from "@/lib/storage";
 import { useCurrentUser, ROLE_LABELS } from "@/hooks/use-current-user";
 import { useToast } from "@/hooks/use-toast";
+import { SkeletonStat } from "@/components/ui/skeleton";
 
 export default function SettingsPage() {
   const { user, loading } = useCurrentUser();
@@ -102,7 +103,7 @@ export default function SettingsPage() {
         </header>
 
         {loading || !user ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
+          <div className="space-y-3"><SkeletonStat /><SkeletonStat /></div>
         ) : (
           <>
             <Card>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Building2, Loader2, Plus, ShieldCheck, UserPlus, Users, XCircle } from "lucide-react";
+import { Building2, Loader2, Lock, Plus, ShieldCheck, UserPlus, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals"
 import { TeamJoinRequests } from "@/components/teams/team-join-requests";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { SkeletonRow } from "@/components/ui/skeleton";
 import { firstError } from "@/lib/fetch-policy";
 import {
   createTeam,
@@ -32,7 +33,13 @@ import {
   type MyAthleteSummary,
   type TeamDetail,
 } from "@/lib/teams";
-import { cancelJoinRequest, fetchMyJoinRequest, requestToJoinTeam, type MyJoinRequest } from "@/lib/team-memberships";
+import {
+  cancelJoinRequest,
+  fetchMyJoinRequest,
+  fetchTransfersLocked,
+  requestToJoinTeam,
+  type MyJoinRequest,
+} from "@/lib/team-memberships";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useToast } from "@/hooks/use-toast";
@@ -58,6 +65,7 @@ export default function TeamsPage() {
   const [myJoinRequest, setMyJoinRequest] = useState<MyJoinRequest | null>(null);
   const [joinBusyTeamId, setJoinBusyTeamId] = useState<string | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
+  const [transfersLocked, setTransfersLocked] = useState(false);
 
   const canCaptainTeam =
     user?.role === "coach" || user?.role === "admin" || (user?.role === "athlete" && myAthlete?.ageGroup === "Open");
@@ -73,11 +81,13 @@ export default function TeamsPage() {
 
   const load = async () => {
     setLoading(true);
-    const [teamsList, athleteSummary, joinRequest] = await Promise.all([
+    const [teamsList, athleteSummary, joinRequest, locked] = await Promise.all([
       fetchTeams(),
       fetchMyAthleteSummary(),
       fetchMyJoinRequest(),
+      fetchTransfersLocked(),
     ]);
+    setTransfersLocked(locked);
     setTeams(teamsList.data);
     setMyAthlete(athleteSummary.data);
     setMyJoinRequest(joinRequest);
@@ -224,7 +234,7 @@ export default function TeamsPage() {
       {user?.role === "admin" && <PendingTeamApprovals />}
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading teams…</p>
+        <div className="grid gap-3 sm:grid-cols-2">{Array.from({ length: 4 }).map((_, i) => (<SkeletonRow key={i} className="h-28 items-start" />))}</div>
       ) : teams.length === 0 ? (
         <Card>
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
@@ -285,6 +295,17 @@ export default function TeamsPage() {
                       )}
                       Cancel Request (Pending)
                     </Button>
+                  ) : transfersLocked && myAthlete?.teamId ? (
+                    // The server refuses this outright while a meet is
+                    // scheduled — say so instead of offering a button whose
+                    // only outcome is an error toast.
+                    <Badge
+                      variant="outline"
+                      className="w-full justify-center gap-1.5 border-2 border-black bg-neon-orange/15 py-2 text-[11px]"
+                    >
+                      <Lock className="size-3.5" />
+                      Transfers Locked Until Meet Ends
+                    </Badge>
                   ) : (
                     <Button
                       className="min-h-[44px] w-full gap-2"
@@ -312,7 +333,7 @@ export default function TeamsPage() {
             <DialogDescription>Captain contact and current member roster.</DialogDescription>
           </DialogHeader>
           {rosterLoading ? (
-            <p className="py-4 text-center text-sm text-muted-foreground">Loading roster…</p>
+            <div className="space-y-2 py-2">{Array.from({ length: 4 }).map((_, i) => (<SkeletonRow key={i} />))}</div>
           ) : (
             <div className="space-y-4 py-2">
               {user && rosterTeam && user.id === rosterTeam.captain_id && (

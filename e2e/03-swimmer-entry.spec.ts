@@ -64,7 +64,14 @@ test.describe.serial("Swimmer & meet entry", () => {
     await expect(page.getByText("Swimmer registration pending admin approval.")).toHaveCount(0);
 
     // Pick the first registerable event card and enter a valid mm:ss.cc time.
-    const firstSelect = page.getByRole("button", { name: "Select" }).first();
+    // This fixture is self-consuming: every run enters one more event for
+    // athlete37, so eventually there is nothing left to select.
+    const selectButtons = page.getByRole("button", { name: "Select" });
+    requireFixture(
+      (await selectButtons.count()) > 0,
+      "an unentered event for athlete37 to register for",
+    );
+    const firstSelect = selectButtons.first();
     await expect(firstSelect).toBeVisible({ timeout: 10_000 });
     await firstSelect.click();
 

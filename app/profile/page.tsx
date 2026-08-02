@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Mail, Settings, ShieldCheck } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
+import { SkeletonRow, SkeletonStat } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -62,7 +63,7 @@ export default function ProfilePage() {
       <div className="min-h-screen">
         <AppHeader title="Profile" />
         <main className="mx-auto flex w-full max-w-lg flex-col gap-4 p-3 pb-24 sm:p-6">
-          <p className="text-sm text-muted-foreground">Loading profile…</p>
+          <div className="space-y-3"><SkeletonRow /><SkeletonStat /></div>
         </main>
       </div>
     );

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchTeamLeaderboard, type TeamLeaderboardEntry } from "@/lib/leaderboard";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { SkeletonRow } from "@/components/ui/skeleton";
 
 const MEDAL_VARIANT = ["default", "secondary", "outline"] as const;
 
@@ -43,7 +44,7 @@ export function TeamLeaderboard({ className }: { className?: string }) {
       <CardContent className="space-y-2">
         <DataErrorBanner error={dataError} subject="team standings" />
         {loading ? (
-          <p className="text-sm text-muted-foreground">Loading team standings…</p>
+          <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => (<SkeletonRow key={i} />))}</div>
         ) : entries.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {dataError ? "Standings unavailable." : "No published results yet."}

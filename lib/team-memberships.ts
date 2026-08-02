@@ -133,3 +133,23 @@ export async function respondToJoinRequest(
   if (error) return { success: false, error: error.message };
   return { success: true };
 }
+
+/**
+ * True while any meet volume is 'scheduled' — the window in which
+ * public.enforce_team_membership_request_rules() refuses transfers for an
+ * athlete who already has a team.
+ *
+ * Surfacing this in the UI turns a confusing failure ("Request to Join" →
+ * error toast) into an explained state ("Transfers Locked"), which is the
+ * difference between the rule feeling like a bug and feeling like a rule.
+ */
+export async function fetchTransfersLocked(): Promise<boolean> {
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase.rpc("meet_in_progress");
+    if (error) return false;
+    return data === true;
+  } catch {
+    return false;
+  }
+}

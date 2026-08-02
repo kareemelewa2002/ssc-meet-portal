@@ -25,6 +25,7 @@ import { DQ_REASON_LABELS } from "@/lib/results";
 import type { AgeGroup, Gender, MeetVolumeRow, SessionRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { SkeletonLane } from "@/components/ui/skeleton";
 
 const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
   U14: "U14",
@@ -47,7 +48,7 @@ function LaneRow({ lane, outdoorMode }: { lane: LiveLaneView; outdoorMode: boole
     >
       <div
         className={cn(
-          "flex min-w-[44px] items-center justify-center rounded-md px-2 py-1 text-sm font-bold",
+          "flex min-w-[48px] items-center justify-center rounded-lg border-2 border-black px-2 py-1.5 font-telemetry text-sm font-extrabold",
           outdoorMode ? "bg-yellow-300 text-black" : "bg-muted",
         )}
       >
@@ -86,7 +87,7 @@ function LaneRow({ lane, outdoorMode }: { lane: LiveLaneView; outdoorMode: boole
       <div className="shrink-0 text-right">
         <p
           className={cn(
-            "font-mono text-xs",
+            "font-telemetry text-xs",
             outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
           )}
         >
@@ -105,14 +106,38 @@ function LaneRow({ lane, outdoorMode }: { lane: LiveLaneView; outdoorMode: boole
             ) : (
               <div className="flex items-center justify-end gap-1.5">
                 {lane.result.finishPlace && (
-                  <Badge className="h-5 px-1.5 text-[10px]">#{lane.result.finishPlace}</Badge>
+                  <Badge
+                    className={cn(
+                      "h-5 px-1.5 font-telemetry text-[10px]",
+                      // Podium places get their own accent so the top three
+                      // read at a glance from the far side of the pool.
+                      lane.result.finishPlace === 1 && "bg-neon-lime text-black",
+                      lane.result.finishPlace === 2 && "bg-neon-cyan text-black",
+                      lane.result.finishPlace === 3 && "bg-neon-violet text-white",
+                    )}
+                  >
+                    #{lane.result.finishPlace}
+                  </Badge>
                 )}
-                <span className={cn("font-mono text-sm font-bold", outdoorMode && "text-yellow-300")}>
+                <span
+                  className={cn(
+                    "font-telemetry text-sm font-bold",
+                    outdoorMode && "text-yellow-300",
+                  )}
+                >
                   {formatTimeMs(lane.result.officialTimeMs)}
                 </span>
                 {drop != null && (
-                  <span className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
-                    -{drop.toFixed(2)}s
+                  // Seed -> official delta. A drop is the whole point of the
+                  // series' Progress scoring, so it gets the lime glow.
+                  <span
+                    className={cn(
+                      "rounded-full border-2 border-black px-1.5 font-telemetry text-[10px] font-bold",
+                      drop > 0 ? "bg-neon-lime text-black" : "bg-neon-orange text-black",
+                    )}
+                  >
+                    {drop > 0 ? "-" : "+"}
+                    {Math.abs(drop).toFixed(2)}s
                   </span>
                 )}
               </div>
@@ -279,11 +304,15 @@ export function LiveEventsClient({ volId }: { volId: string }) {
           </Link>
           <div className="flex items-center gap-2">
             {live && (
-              <Badge variant="outline" className="gap-1.5 border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
-                <span className="relative flex size-2">
-                  <span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-75" />
-                  <span className="relative inline-flex size-2 rounded-full bg-emerald-500" />
-                </span>
+              <Badge
+                className={cn(
+                  "gap-1.5 font-telemetry tracking-widest uppercase",
+                  outdoorMode
+                    ? "border-yellow-300 bg-yellow-300 text-black"
+                    : "border-black bg-neon-cyan text-black",
+                )}
+              >
+                <span className="animate-pulse-ring inline-flex size-2 rounded-full bg-black" />
                 Live
               </Badge>
             )}
@@ -332,9 +361,29 @@ export function LiveEventsClient({ volId }: { volId: string }) {
             value={String(sessionNumber)}
             onValueChange={(v) => setSessionNumber(Number(v) as 1 | 2 | 3)}
           >
-            <TabsList className="grid h-auto w-full grid-cols-3">
+            <TabsList
+              className={cn(
+                // The list variant hard-codes group-data-horizontal/tabs:h-9;
+                // override at the same specificity or 48px triggers overflow it.
+                "grid h-auto w-full grid-cols-3 gap-1 p-1 group-data-horizontal/tabs:h-auto",
+                outdoorMode ? "border-yellow-300/60 bg-black" : "bg-muted",
+              )}
+            >
               {[1, 2, 3].map((n) => (
-                <TabsTrigger key={n} value={String(n)} className="min-h-[48px] text-xs font-semibold">
+                <TabsTrigger
+                  key={n}
+                  value={String(n)}
+                  className={cn(
+                    // h-auto defeats the primitive's h-[calc(100%-1px)],
+                    // which overflowed the padded pill container.
+                    "h-auto min-h-[48px] rounded-lg border-2 text-sm font-bold tracking-tight",
+                    // Inactive pills need real contrast on the pool deck —
+                    // the default 60% foreground washed out under glare.
+                    outdoorMode
+                      ? "text-yellow-100/70 data-active:border-yellow-300 data-active:bg-yellow-300 data-active:text-black"
+                      : "text-foreground/70 data-active:bg-background data-active:text-foreground",
+                  )}
+                >
                   Session {n}
                 </TabsTrigger>
               ))}
@@ -376,9 +425,12 @@ export function LiveEventsClient({ volId }: { volId: string }) {
         </div>
 
         {loadingEvents ? (
-          <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
-            Loading heat sheets…
-          </p>
+          <div className="space-y-3" role="status" aria-busy="true">
+            <span className="sr-only">Loading heat sheets</span>
+            {Array.from({ length: 4 }).map((_, i) => (
+              <SkeletonLane key={i} />
+            ))}
+          </div>
         ) : filteredEvents.length === 0 ? (
           <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
             <CardContent className="py-8 text-center">

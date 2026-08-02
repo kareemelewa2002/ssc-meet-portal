@@ -70,16 +70,11 @@ test.describe("Team join-request workflow", () => {
     await page.goto("/teams", { waitUntil: "networkidle" });
     await page.waitForTimeout(2000);
 
-    const requestButtons = page.getByRole("button", { name: "Request to Join Team" });
-    requireFixture((await requestButtons.count()) > 0, "another team for athlete13 to attempt joining");
-
-    await requestButtons.first().click();
-    await page.waitForTimeout(1500);
-
-    // The failure must be surfaced, not swallowed.
-    await expect(page.getByText(/Couldn.t send join request/i)).toBeVisible();
-    await expect(page.getByText(/transfers are locked/i)).toBeVisible();
-    // ...and no pending state may be created.
+    // The UI now explains the lock up-front rather than offering a button
+    // whose only outcome is a server-side rejection, so the assertion is
+    // that the locked state is VISIBLE and no request affordance exists.
+    await expect(page.getByText(/Transfers Locked Until Meet Ends/i).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: "Request to Join Team" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /Cancel Request \(Pending\)/ })).toHaveCount(0);
   });
 

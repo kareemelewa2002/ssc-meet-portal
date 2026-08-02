@@ -17,6 +17,7 @@ import {
   type AthleteDirectoryCard,
 } from "@/lib/athletes";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { SkeletonRow } from "@/components/ui/skeleton";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
 export default function AthletesDirectoryPage() {
@@ -104,7 +105,7 @@ export default function AthletesDirectoryPage() {
       />
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading athletes…</p>
+        <div className="grid gap-3 sm:grid-cols-2">{Array.from({ length: 6 }).map((_, i) => (<SkeletonRow key={i} />))}</div>
       ) : filtered.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-10 text-center">

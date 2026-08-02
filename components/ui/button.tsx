@@ -9,15 +9,15 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "border-2 border-black bg-primary text-primary-foreground shadow-[3px_3px_0px_#000] hover:-translate-y-0.5 hover:shadow-[4px_4px_0px_#000] active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none",
+          "border-2 border-black bg-primary text-primary-foreground shadow-brutal-sm hover:-translate-y-0.5 hover:shadow-brutal active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none",
         outline:
-          "border-2 border-black bg-background shadow-[3px_3px_0px_#000] hover:-translate-y-0.5 hover:bg-muted hover:text-foreground hover:shadow-[4px_4px_0px_#000] aria-expanded:bg-muted aria-expanded:text-foreground active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none",
+          "border-2 border-black bg-background shadow-brutal-sm hover:-translate-y-0.5 hover:bg-muted hover:text-foreground hover:shadow-brutal aria-expanded:bg-muted aria-expanded:text-foreground active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none",
         secondary:
-          "border-2 border-black bg-secondary text-secondary-foreground shadow-[3px_3px_0px_#000] hover:-translate-y-0.5 hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] hover:shadow-[4px_4px_0px_#000] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none",
+          "border-2 border-black bg-secondary text-secondary-foreground shadow-brutal-sm hover:-translate-y-0.5 hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] hover:shadow-brutal aria-expanded:bg-secondary aria-expanded:text-secondary-foreground active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none",
         ghost:
           "hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground active:not-aria-[haspopup]:translate-y-px dark:hover:bg-muted/50",
         destructive:
-          "border-2 border-black bg-destructive/10 text-destructive shadow-[3px_3px_0px_#000] hover:-translate-y-0.5 hover:bg-destructive/20 hover:shadow-[4px_4px_0px_#000] focus-visible:border-destructive/40 focus-visible:ring-destructive/20 active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
+          "border-2 border-black bg-destructive/10 text-destructive shadow-brutal-sm hover:-translate-y-0.5 hover:bg-destructive/20 hover:shadow-brutal focus-visible:border-destructive/40 focus-visible:ring-destructive/20 active:not-aria-[haspopup]:translate-x-[3px] active:not-aria-[haspopup]:translate-y-[3px] active:not-aria-[haspopup]:shadow-none dark:bg-destructive/20 dark:hover:bg-destructive/30 dark:focus-visible:ring-destructive/40",
         link: "text-primary underline-offset-4 hover:underline active:not-aria-[haspopup]:translate-y-px",
       },
       size: {
