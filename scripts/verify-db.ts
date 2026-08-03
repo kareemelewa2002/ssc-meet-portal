@@ -97,6 +97,69 @@ const SMOKE_TABLES = [
 ] as const;
 
 // ---------------------------------------------------------------------------
+// Trigger inventory — must stay in sync with every `create trigger` in
+// supabase/schema.sql.
+//
+// WHY: column drift and policy drift were already covered; trigger drift was
+// the blind spot. A retired trigger left behind on the live database is not
+// inert — enforce_athlete_approval_change_trigger silently rewrote every new
+// signup back to approved_by_admin = false and made schema.sql un-rerunnable,
+// while all 33 checks here passed. An unexpected trigger is therefore treated
+// as a failure, not a curiosity.
+// ---------------------------------------------------------------------------
+
+interface TriggerSpec {
+  schema: "public" | "auth";
+  table: string;
+  trigger: string;
+}
+
+/** Exactly the triggers supabase/schema.sql creates. */
+const APPROVED_TRIGGERS: TriggerSpec[] = [
+  { schema: "auth", table: "users", trigger: "on_auth_user_created" },
+  { schema: "public", table: "athletes", trigger: "athletes_set_updated_at" },
+  { schema: "public", table: "entries", trigger: "enforce_entry_status_change_trigger" },
+  { schema: "public", table: "entries", trigger: "enforce_no_direct_skins_entry_trigger" },
+  { schema: "public", table: "entries", trigger: "generate_heats_on_confirm_insert" },
+  { schema: "public", table: "entries", trigger: "generate_heats_on_confirm_update" },
+  { schema: "public", table: "entries", trigger: "set_entry_age_group_trigger" },
+  { schema: "public", table: "heat_lanes", trigger: "stamp_attendance_marked_trigger" },
+  { schema: "public", table: "heats", trigger: "heats_set_updated_at" },
+  { schema: "public", table: "meet_volumes", trigger: "meet_volumes_set_updated_at" },
+  { schema: "public", table: "results", trigger: "enforce_result_publish_trigger" },
+  { schema: "public", table: "results", trigger: "enforce_result_scoring_trigger" },
+  { schema: "public", table: "results", trigger: "recompute_heat_finish_places_trigger" },
+  { schema: "public", table: "results", trigger: "results_apply_points" },
+  { schema: "public", table: "results", trigger: "results_set_updated_at" },
+  { schema: "public", table: "skins_qualifications", trigger: "enforce_skins_qualification_columns_trigger" },
+  { schema: "public", table: "skins_qualifications", trigger: "skins_qualifications_set_updated_at" },
+  { schema: "public", table: "team_memberships", trigger: "enforce_team_membership_request_rules_trigger" },
+  { schema: "public", table: "team_memberships", trigger: "sync_athlete_team_on_membership_accept_trigger" },
+  { schema: "public", table: "teams", trigger: "enforce_team_approval_change_trigger" },
+  { schema: "public", table: "teams", trigger: "teams_set_updated_at" },
+  { schema: "public", table: "users", trigger: "enforce_role_change_trigger" },
+  { schema: "public", table: "users", trigger: "users_set_updated_at" },
+];
+
+/** Retired triggers, with what each one actually breaks if it survives. Any
+ * unexpected trigger fails the run; these get a specific diagnosis instead of
+ * the generic one. Names include the variants that appeared in cleanup
+ * scripts but never actually existed, so a partial manual cleanup that
+ * dropped the wrong name still gets caught. */
+const LEGACY_TRIGGERS: Record<string, string> = {
+  enforce_athlete_approval_change_trigger:
+    "Silently rewrites every self-service signup back to approved_by_admin = false " +
+    "(SECURITY DEFINER does not change auth.uid(), so handle_new_auth_user is not exempt), " +
+    "and raises 'Only an admin may approve or reject a swimmer registration.' when schema.sql " +
+    "re-runs. Account approval no longer exists.",
+  tr_enforce_athlete_approval: "Retired account-approval guard — account approval no longer exists.",
+  enforce_athlete_approval_trigger: "Retired account-approval guard — account approval no longer exists.",
+  enforce_athlete_approved_for_entry_trigger:
+    "Blocked unapproved swimmers from INSERTing entries, so they could never reach the payment " +
+    "desk that was supposed to approve them. Retired with account approval.",
+};
+
+// ---------------------------------------------------------------------------
 // Env + HTTP plumbing (dependency-free: no dotenv, no supabase-js)
 // ---------------------------------------------------------------------------
 
@@ -161,6 +224,8 @@ interface Failure {
   detail: string;
 }
 
+const LEGACY_TRIGGERS_COUNT = Object.keys(LEGACY_TRIGGERS).length;
+
 const failures: Failure[] = [];
 let passed = 0;
 
@@ -172,6 +237,99 @@ function pass(label: string, note = "") {
 function fail(check: string, detail: string) {
   failures.push({ check, detail });
   console.log(`  [31m✗[0m ${check}\n      [31m${detail}[0m`);
+}
+
+interface LiveTrigger {
+  schema_name: string;
+  table_name: string;
+  trigger_name: string;
+}
+
+/**
+ * Compares the live trigger set against APPROVED_TRIGGERS in both directions:
+ * a missing trigger means schema.sql was never fully applied, an extra one
+ * means something retired survived. Both are drift.
+ *
+ * auth.users is asymmetric on purpose — Supabase manages its own triggers
+ * there (confirmation, identity linking), so an unrecognized auth trigger is
+ * not ours to flag. Only the public schema gets the unexpected-trigger sweep.
+ */
+async function verifyTriggers(url: string, key: string) {
+  const r = await rest(`${url}/rest/v1/rpc/trigger_inventory`, { method: "POST", body: "{}" }, key);
+
+  if (r.status === 404 || pgCode(r.json) === "PGRST202") {
+    fail(
+      "missing function public.trigger_inventory()",
+      "the trigger inventory cannot be read, so trigger drift is UNVERIFIED — re-apply " +
+        "supabase/schema.sql. This is the check that would have caught " +
+        "enforce_athlete_approval_change_trigger.",
+    );
+    return;
+  }
+  if (r.status !== 200 || !Array.isArray(r.json)) {
+    fail("public.trigger_inventory() errored", `HTTP ${r.status}: ${r.body.slice(0, 160)}`);
+    return;
+  }
+
+  const live = r.json as LiveTrigger[];
+  const liveKeys = new Set(live.map((t) => `${t.schema_name}.${t.table_name}.${t.trigger_name}`));
+
+  // 4a. Every approved trigger is present, grouped by table so the output
+  //     stays readable while a failure still names the exact trigger.
+  const byTable = new Map<string, TriggerSpec[]>();
+  for (const spec of APPROVED_TRIGGERS) {
+    const k = `${spec.schema}.${spec.table}`;
+    byTable.set(k, [...(byTable.get(k) ?? []), spec]);
+  }
+  for (const [table, specs] of byTable) {
+    const missing = specs.filter((s) => !liveKeys.has(`${s.schema}.${s.table}.${s.trigger}`));
+    if (missing.length === 0) {
+      pass(`${table}`, `${specs.length} expected trigger${specs.length === 1 ? "" : "s"} present`);
+    } else {
+      fail(
+        `${table} is missing ${missing.length} of ${specs.length} expected triggers`,
+        `absent: ${missing.map((m) => m.trigger).join(", ")}\n` +
+          "      re-apply supabase/schema.sql — the rule this trigger enforces is currently NOT enforced.",
+      );
+    }
+  }
+
+  // 4b. Nothing unapproved survives on a public table.
+  const approvedPublic = new Set(
+    APPROVED_TRIGGERS.filter((t) => t.schema === "public").map((t) => `${t.table}.${t.trigger}`),
+  );
+  const unexpected = live.filter(
+    (t) => t.schema_name === "public" && !approvedPublic.has(`${t.table_name}.${t.trigger_name}`),
+  );
+
+  const legacy = unexpected.filter((t) => t.trigger_name in LEGACY_TRIGGERS);
+  const unknown = unexpected.filter((t) => !(t.trigger_name in LEGACY_TRIGGERS));
+
+  if (legacy.length === 0) {
+    pass("no retired triggers survive", `${LEGACY_TRIGGERS_COUNT} known-legacy names checked`);
+  } else {
+    for (const t of legacy) {
+      fail(
+        `LEGACY TRIGGER STILL ACTIVE: ${t.table_name}.${t.trigger_name}`,
+        `${LEGACY_TRIGGERS[t.trigger_name]}\n` +
+          `      Drop it:  drop trigger if exists ${t.trigger_name} on public.${t.table_name};\n` +
+          "      Then re-apply supabase/schema.sql, which drops the backing function too.",
+      );
+    }
+  }
+
+  if (unknown.length === 0) {
+    pass("no unrecognized triggers on public tables", `${live.length} live triggers inspected`);
+  } else {
+    for (const t of unknown) {
+      fail(
+        `unrecognized trigger: ${t.table_name}.${t.trigger_name}`,
+        "not created by supabase/schema.sql. Either it is a leftover from a hand-run migration " +
+          "(drop it), or schema.sql gained a trigger without APPROVED_TRIGGERS in this file being " +
+          "updated to match (add it).",
+      );
+    }
+  }
 }
 
 async function main() {
@@ -269,6 +427,10 @@ async function main() {
       fail(`${table} unreadable`, `HTTP ${r.status}: ${r.body.slice(0, 160)}`);
     }
   }
+
+  // -- 4. Trigger inventory -------------------------------------------------
+  console.log("\n[1m4. Trigger inventory (legacy/orphaned trigger detector)[0m");
+  await verifyTriggers(url, key);
 
   // -- Summary --------------------------------------------------------------
   console.log("");

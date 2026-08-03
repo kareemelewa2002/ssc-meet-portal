@@ -2557,6 +2557,40 @@ grant select, insert, update, delete on all tables in schema public
 grant usage, select on all sequences in schema public
   to anon, authenticated, service_role;
 
+-- ---------------------------------------------------------------------------
+-- TRIGGER INVENTORY (schema drift guard support)
+-- ---------------------------------------------------------------------------
+-- scripts/verify-db.ts checks the live database through the ordinary anon
+-- PostgREST surface, which exposes no pg_catalog access. That blind spot let
+-- a retired trigger (enforce_athlete_approval_change_trigger) survive on the
+-- live database while every drift check passed: it silently rewrote each new
+-- signup back to approved_by_admin = false, and made schema.sql itself
+-- un-rerunnable. Column and policy drift were caught; trigger drift was not.
+--
+-- This function is the narrow window that closes it. It returns only object
+-- NAMES — never row data — and those names are already public in this file,
+-- so exposing it to anon leaks nothing while letting the guard run in CI and
+-- on Vercel without a service-role key.
+--
+-- Scope: every non-internal trigger on a public table, plus auth.users (which
+-- carries on_auth_user_created, the entire signup path). tgisinternal filters
+-- out the constraint-backing triggers Postgres creates for foreign keys.
+create or replace function public.trigger_inventory()
+returns table (schema_name text, table_name text, trigger_name text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select n.nspname::text, c.relname::text, t.tgname::text
+  from pg_trigger t
+  join pg_class c on c.oid = t.tgrelid
+  join pg_namespace n on n.oid = c.relnamespace
+  where not t.tgisinternal
+    and (n.nspname = 'public' or (n.nspname = 'auth' and c.relname = 'users'))
+  order by 1, 2, 3;
+$$;
+
 -- RPCs used by the app (get_skins_qualifiers, sync_skins_invitations,
 -- claim_pending_parent_links, helper predicates, etc.).
 grant execute on all functions in schema public
