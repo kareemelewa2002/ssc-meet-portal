@@ -37,7 +37,7 @@ test.describe("Spectator, leaderboards & navigation", () => {
     expect(eventHeadingMatches.length).toBeGreaterThan(0);
   });
 
-  test("All-Time Records: Best Performers and Best Performances tabs both render real ranked data", async ({ page }) => {
+  test("All-Time Records: Best Performers and per-event Performances tabs both render real ranked data", async ({ page }) => {
     await login(page, CREDENTIALS.parent1);
     await page.goto("/leaderboards/all-time");
     await page.waitForTimeout(1500);
@@ -53,10 +53,10 @@ test.describe("Spectator, leaderboards & navigation", () => {
     );
     expect(performersText).toMatch(/\d{2}\.\d{2}/); // a formatted race time
 
-    await page.getByRole("tab", { name: "Best Performances" }).click();
+    await page.getByRole("tab", { name: "Best Performances in Each Event" }).click();
     await page.waitForTimeout(800);
     const performancesText = await page.locator("main").innerText();
-    expect(performancesText).toContain("Best Performances");
+    expect(performancesText).toContain("Best performances in");
     expect(performancesText).toMatch(/\d{2}\.\d{2}/);
 
     // Switching filters (e.g. age group) must actually change the ranking,
@@ -162,12 +162,13 @@ test.describe("Leaderboards page carries every board", () => {
     await page.waitForTimeout(1500);
 
     // Meet standings plus the cross-volume boards, all on one screen.
-    await expect(page.getByRole("tab", { name: "Champions" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "All-Time" })).toBeVisible();
+    // The index offers both kinds of board rather than redirecting to one.
+    await expect(page.getByRole("heading", { name: "Leaderboards" })).toBeVisible();
+    await expect(page.getByText("All-Time Records")).toBeVisible();
 
-    await page.getByRole("tab", { name: "All-Time" }).click();
-    await page.waitForTimeout(800);
-    await expect(page.getByRole("tab", { name: "Best Performance", exact: true })).toBeVisible();
+    await page.getByText("All-Time Records").click();
+    await page.waitForURL("**/leaderboards/all-time", { timeout: 10_000 });
+    await expect(page.getByRole("tab", { name: "Best Performance (Points)" })).toBeVisible();
   });
 
   test("the points board has no event filter — comparing across events is its purpose", async ({ page }) => {
@@ -178,7 +179,7 @@ test.describe("Leaderboards page carries every board", () => {
     // Present on the time-ranked boards...
     await expect(page.getByLabel("Event")).toBeVisible();
 
-    await page.getByRole("tab", { name: "Best Performance", exact: true }).click();
+    await page.getByRole("tab", { name: "Best Performance (Points)" }).click();
     await page.waitForTimeout(600);
     // ...and gone on the points board, while age/gender stay.
     await expect(page.getByLabel("Event")).toHaveCount(0);

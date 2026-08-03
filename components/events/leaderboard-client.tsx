@@ -6,7 +6,6 @@ import { ArrowLeft, TrendingUp, Trophy } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { TeamLeaderboard } from "@/components/leaderboards/team-leaderboard";
-import { AllTimeBoards } from "@/components/leaderboards/all-time-boards";
 import { cn } from "@/lib/utils";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
@@ -22,7 +21,7 @@ import { AthleteLink } from "@/components/athletes/athlete-link";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 type Scope = "volume" | "series";
-type LeaderboardTab = "champions" | "progress" | "teams" | "alltime";
+type LeaderboardTab = "champions" | "progress" | "teams";
 
 function LeaderboardRow({
   rank,
@@ -183,8 +182,8 @@ export function LeaderboardClient({ volId }: { volId: string }) {
             {volume?.name ?? "Meet"} — Leaderboards
           </h1>
           <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
-            Each volume keeps its own standings while feeding the overall series total. The
-            All-Time tab ranks across every volume.
+            These standings are this meet only — every board here is scored from this volume&apos;s
+            races. Cross-volume records live on the All-Time boards.
           </p>
         </header>
 
@@ -226,7 +225,7 @@ export function LeaderboardClient({ volId }: { volId: string }) {
         </div>
 
         <Tabs value={tab} onValueChange={(v) => setTab(v as LeaderboardTab)}>
-          <TabsList className="grid h-auto w-full grid-cols-2 group-data-horizontal/tabs:h-auto sm:grid-cols-4">
+          <TabsList className="grid h-auto w-full grid-cols-3 group-data-horizontal/tabs:h-auto">
             <TabsTrigger value="champions" className="h-auto min-h-[48px] text-sm">
               Champions
             </TabsTrigger>
@@ -235,9 +234,6 @@ export function LeaderboardClient({ volId }: { volId: string }) {
             </TabsTrigger>
             <TabsTrigger value="teams" className="h-auto min-h-[48px] text-sm">
               Teams
-            </TabsTrigger>
-            <TabsTrigger value="alltime" className="h-auto min-h-[48px] text-sm">
-              All-Time
             </TabsTrigger>
           </TabsList>
 
@@ -302,13 +298,6 @@ export function LeaderboardClient({ volId }: { volId: string }) {
                 club-level view of the same standings the athlete tabs show. */}
             <TeamLeaderboard className={cn(outdoorMode && "border-yellow-300/40 bg-black")} />
           </TabsContent>
-          <TabsContent value="alltime" className="mt-3 space-y-3">
-            {/* Cross-volume boards: best performers, best performances, and
-                best performance by World Aquatics points. Previously only
-                reachable through a text link on the Athletes page. */}
-            <AllTimeBoards />
-          </TabsContent>
-
         </Tabs>
       </main>
     </div>

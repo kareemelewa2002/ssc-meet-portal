@@ -149,15 +149,19 @@ export function AllTimeBoards() {
       )}
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as BoardTab)}>
-        <TabsList className="grid h-auto w-full grid-cols-3">
-          <TabsTrigger value="performers" className="min-h-[48px]">
+        {/* Stacked on phones: three near-identical labels squeezed into three
+            columns wrapped to unreadable slivers, which is what made choosing
+            between them hard. Also h-auto — the primitive hard-codes h-9 on
+            the list, which clips 48px triggers. */}
+        <TabsList className="grid h-auto w-full grid-cols-1 gap-1 p-1 group-data-horizontal/tabs:h-auto sm:grid-cols-3">
+          <TabsTrigger value="performers" className="h-auto min-h-[48px] text-sm whitespace-normal">
             Best Performers
           </TabsTrigger>
-          <TabsTrigger value="performances" className="min-h-[48px]">
-            Best Performances
+          <TabsTrigger value="performances" className="h-auto min-h-[48px] text-sm whitespace-normal">
+            Best Performances in Each Event
           </TabsTrigger>
-          <TabsTrigger value="points" className="min-h-[48px]">
-            Best Performance
+          <TabsTrigger value="points" className="h-auto min-h-[48px] text-sm whitespace-normal">
+            Best Performance (Points)
           </TabsTrigger>
         </TabsList>
 
@@ -202,10 +206,12 @@ export function AllTimeBoards() {
           <Card>
             <CardHeader>
               <CardTitle>
-                Top 10 race times — {distanceM}m {stroke} · {AGE_GROUP_LABELS[ageGroup]} · {gender}
+                Best performances in {distanceM}m {stroke} — {AGE_GROUP_LABELS[ageGroup]} · {gender}
               </CardTitle>
               <CardDescription>
-                Individual race performances; the same swimmer may appear more than once.
+                Every race time ever swum in this event, ranked — the same swimmer may appear
+                more than once. All-time only: scoped to a single meet this would just be that
+                event&apos;s result sheet again.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
@@ -240,7 +246,7 @@ export function AllTimeBoards() {
           <Card>
             <CardHeader>
               <CardTitle>
-                Best Performance — {AGE_GROUP_LABELS[ageGroup]} · {gender}
+                Best Performance (World Aquatics points) — {AGE_GROUP_LABELS[ageGroup]} · {gender}
               </CardTitle>
               <CardDescription>
                 Ranked by World Aquatics points (short course), so swims in different events
