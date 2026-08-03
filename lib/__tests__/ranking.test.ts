@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assignCompetitionRanks, withCompetitionRanks } from "@/lib/ranking";
+import { assignCompetitionRanks, resolveCutoff, withCompetitionRanks } from "@/lib/ranking";
 import { rankBestPerformances, rankBestPerformers, type RacePerformance } from "@/lib/all-time-rankings";
 
 const ranksOf = (times: number[]) =>
@@ -101,5 +101,56 @@ describe("all-time rankings apply the tie rule", () => {
     );
     expect(ranked.map((r) => r.rank)).toEqual([1, 2, 2, 2]);
     expect(ranked.some((r) => r.athleteName === "Fifth")).toBe(false);
+  });
+});
+
+describe("resolveCutoff — a tie on the cutoff is never split by sort order", () => {
+  const field = (times: number[]) => times.map((t, i) => ({ id: `s${i}`, t }));
+  const run = (times: number[], cutoff: number) => resolveCutoff(field(times), cutoff, (x) => x.t);
+
+  it("holds two swimmers tied for the last advancing place", () => {
+    const r = run([100, 200, 300, 300], 3);
+    expect(r.advancing.map((a) => a.t)).toEqual([100, 200]);
+    expect(r.swimOff.map((a) => a.t)).toEqual([300, 300]);
+    expect(r.slotsRemaining).toBe(1);
+  });
+
+  it("a tie wholly inside the cutoff advances untouched", () => {
+    const r = run([100, 100, 300, 400], 3);
+    expect(r.advancing).toHaveLength(3);
+    expect(r.swimOff).toHaveLength(0);
+  });
+
+  it("a tie wholly outside the cutoff is irrelevant", () => {
+    const r = run([100, 200, 300, 400, 400], 3);
+    expect(r.advancing.map((a) => a.t)).toEqual([100, 200, 300]);
+    expect(r.swimOff).toHaveLength(0);
+  });
+
+  it("three level for two remaining places contest both", () => {
+    const r = run([100, 200, 200, 200], 3);
+    expect(r.advancing.map((a) => a.t)).toEqual([100]);
+    expect(r.swimOff).toHaveLength(3);
+    expect(r.slotsRemaining).toBe(2);
+  });
+
+  it("a field no larger than the cutoff never needs a swim-off", () => {
+    const r = run([100, 100], 4);
+    expect(r.advancing).toHaveLength(2);
+    expect(r.swimOff).toHaveLength(0);
+  });
+
+  it("every swimmer level at the very top still contests the cutoff", () => {
+    const r = run([100, 100, 100, 100], 2);
+    expect(r.advancing).toHaveLength(0);
+    expect(r.swimOff).toHaveLength(4);
+    expect(r.slotsRemaining).toBe(2);
+  });
+
+  it("a clean cutoff advances exactly the cutoff count", () => {
+    const r = run([100, 200, 300, 400, 500], 3);
+    expect(r.advancing).toHaveLength(3);
+    expect(r.swimOff).toHaveLength(0);
+    expect(r.slotsRemaining).toBe(0);
   });
 });

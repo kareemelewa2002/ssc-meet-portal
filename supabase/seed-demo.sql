@@ -252,7 +252,7 @@ select * from (values
   (1, '4x50m Freestyle Relay (Female)', 'Freestyle Relay', 200, 6, true, false, false),
   (1, '4x50m Freestyle Relay (Mixed)', 'Freestyle Relay', 200, 7, true, false, false),
   -- Session 2
-  (2, '100m Individual Medley (IM)', 'Individual Medley', 100, 1, false, false, false),
+  (2, '100m Individual Medley (IM)', 'Individual Medley', 100, 1, false, false, true),
   (2, '50m Backstroke', 'Backstroke', 50, 2, false, false, false),
   (2, '50m Fly-to-Back Switch (25m Fly + 25m Back)', 'Fly-to-Back Switch', 50, 3, false, false, true),
   (2, '50m Breaststroke', 'Breaststroke', 50, 4, false, false, false),
@@ -583,8 +583,14 @@ select
 from public.athletes a
 join public.users u on u.id = a.user_id
 join lateral (
-  -- 2-4 events per athlete, chosen deterministically from the individual
-  -- (non-relay, non-skins) programme.
+  -- 2-4 events per athlete (the per-meet cap is 4), chosen deterministically
+  -- from the individual (non-relay, non-skins) programme.
+  --
+  -- The 50m Freestyle is always first in that ordering, so EVERY swimmer is
+  -- entered in it. Skins qualification is derived from published results of
+  -- the matching non-skins event, so a thin 50 Free field would leave the
+  -- six slots per category x gender only half filled and the accept/decline
+  -- rollover and cutoff swim-off would never be exercised at all.
   select ev.id, ev.distance_m
   from public.events ev
   join public.sessions s on s.id = ev.session_id
@@ -592,7 +598,9 @@ join lateral (
   where mv.volume_number = 1
     and ev.is_relay = false
     and ev.is_skins = false
-  order by abs(hashtext(a.id::text || ev.id::text))
+  order by
+    (case when ev.name = '50m Freestyle' then 0 else 1 end),
+    abs(hashtext(a.id::text || ev.id::text))
   limit 2 + (abs(hashtext(a.id::text)) % 3)
 ) ev on true
 where u.email like 'athlete%@ssc-demo.test'

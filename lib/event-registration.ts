@@ -83,6 +83,64 @@ export interface RegisterableEvent {
   seedsAsNt: boolean;
 }
 
+/** What the swimmer's seed time for one event will be, and why.
+ *
+ * From volume 2 the seed time is not a claim the swimmer makes, so the form
+ * shows what the database is going to use rather than an input box:
+ *   - "declared"   volume 1 only, the swimmer types their own time
+ *   - "historical" their best official time for that stroke/distance
+ *   - "nt"         either an event with no declarable time (switch, 100 IM)
+ *                  or, from volume 2, an event they have never swum
+ */
+export type SeedSource = "declared" | "historical" | "nt";
+
+export interface ResolvedSeed {
+  source: SeedSource;
+  seedTimeMs: number | null;
+}
+
+/** Mirrors public.apply_historical_seed_time() / force_nt_for_switch_events().
+ * Display only — the database decides what is actually stored. */
+export function resolveSeedSource(
+  event: Pick<RegisterableEvent, "seedsAsNt">,
+  volumeNumber: number,
+  previousBestMs: number | null | undefined,
+): ResolvedSeed {
+  if (event.seedsAsNt) return { source: "nt", seedTimeMs: null };
+  if (volumeNumber <= 1) return { source: "declared", seedTimeMs: null };
+  if (previousBestMs == null) return { source: "nt", seedTimeMs: null };
+  return { source: "historical", seedTimeMs: previousBestMs };
+}
+
+/** Best previous official time per event for one athlete, keyed by event id.
+ * Empty for volume 1, where there is no history to look up. */
+export async function fetchPreviousBestTimes(
+  athleteId: string,
+  eventIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!athleteId || eventIds.length === 0) return out;
+  try {
+    const supabase = createClient();
+    const results = await Promise.all(
+      eventIds.map(async (eventId) => {
+        const { data } = await supabase.rpc("best_previous_official_time", {
+          p_athlete_id: athleteId,
+          p_event_id: eventId,
+        });
+        return [eventId, data as number | null] as const;
+      }),
+    );
+    for (const [eventId, ms] of results) {
+      if (typeof ms === "number") out.set(eventId, ms);
+    }
+  } catch {
+    // A failed lookup must not block registration — the database applies the
+    // same rule on insert regardless of what the form managed to display.
+  }
+  return out;
+}
+
 /** Skins events are excluded — public.enforce_no_direct_skins_entry blocks
  * non-admin inserts into them entirely; slots are assigned automatically
  * from official results (see lib/skins-qualification.ts), never self-entered.

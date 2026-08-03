@@ -19,12 +19,14 @@ import {
   validateEventCount,
   computeRegistrationTotalEgp,
   fetchAthleteEnteredEventIds,
+  fetchPreviousBestTimes,
   fetchRegisterableEvents,
+  resolveSeedSource,
   submitEventRegistration,
   type EventSelection,
   type RegisterableEvent,
 } from "@/lib/event-registration";
-import { CLOCK_TIME_ERROR, parseTimeToMs } from "@/lib/format";
+import { CLOCK_TIME_ERROR, formatTimeMs, parseTimeToMs } from "@/lib/format";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
 import type { AgeGroup, MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
@@ -58,6 +60,7 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [previousBest, setPreviousBest] = useState<Map<string, number>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +131,16 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           loadedEvents.map((e) => e.id),
         );
         if (!cancelled) setEnteredEventIds(entered);
+
+        // From volume 2 the seed time comes from the swimmer's own history,
+        // so the form shows what will be used instead of asking for it.
+        if ((volResult.data?.volume_number ?? 1) > 1) {
+          const previous = await fetchPreviousBestTimes(
+            athleteRow.id,
+            loadedEvents.filter((e) => !e.seedsAsNt).map((e) => e.id),
+          );
+          if (!cancelled) setPreviousBest(previous);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -172,6 +185,10 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   };
 
   const enteredCount = enteredEventIds.size;
+
+  /** What this event's seed time will be, and why — mirrors the database. */
+  const seedFor = (ev: RegisterableEvent) =>
+    resolveSeedSource(ev, volume?.volume_number ?? 1, previousBest.get(ev.id));
   const remainingSlots = Math.max(0, MAX_EVENTS_PER_MEET - enteredCount);
 
   const eventsBySession = useMemo(() => {
@@ -231,17 +248,37 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
     const selections: EventSelection[] = Object.entries(drafts)
       .filter(([, d]) => d.selected)
       .map(([eventId, d]) => {
-        const seedsAsNt = events.find((e) => e.id === eventId)?.seedsAsNt === true;
+        const ev = events.find((e) => e.id === eventId);
+        const seed = resolveSeedSource(
+          { seedsAsNt: ev?.seedsAsNt === true },
+          volume?.volume_number ?? 1,
+          previousBest.get(eventId),
+        );
+        if (seed.source !== "declared") {
+          // The database recomputes this on insert; sending it keeps the
+          // optimistic UI honest rather than showing a time that then changes.
+          return { eventId, seedsAsNt: ev?.seedsAsNt === true, isNt: seed.seedTimeMs == null, seedTimeMs: seed.seedTimeMs };
+        }
         return {
           eventId,
-          seedsAsNt,
-          isNt: seedsAsNt || d.isNt,
-          seedTimeMs: seedsAsNt || d.isNt ? null : parseTimeToMs(d.timeInput),
+          seedsAsNt: false,
+          isNt: d.isNt,
+          seedTimeMs: d.isNt ? null : parseTimeToMs(d.timeInput),
         };
       });
 
-    // Switch events are NT by definition, so they can never be "missing" a time.
-    const invalidTime = selections.find((s) => !s.isNt && s.seedTimeMs == null);
+    // Only a volume-1 declared entry can be missing a time — everything else
+    // is either looked up or legitimately NT.
+    const invalidTime = selections.find(
+      (s) =>
+        !s.isNt &&
+        s.seedTimeMs == null &&
+        resolveSeedSource(
+          { seedsAsNt: s.seedsAsNt === true },
+          volume?.volume_number ?? 1,
+          previousBest.get(s.eventId),
+        ).source === "declared",
+    );
     if (invalidTime) {
       setError(CLOCK_TIME_ERROR);
       return;
@@ -411,15 +448,24 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
                           )}
                         </div>
                         {!alreadyEntered && draft?.selected && (
-                          ev.seedsAsNt ? (
-                            // No seed time is asked for: a 25m+25m switch has
-                            // no equivalent anywhere else, so any time entered
-                            // would be a guess. Seeding uses the swimmer's best
-                            // other event instead.
+                          seedFor(ev).source === "nt" ? (
+                            // Nothing to ask for: either the event has no
+                            // long course equivalent to declare a time from,
+                            // or (volume 2+) the swimmer has never swum it.
                             <p className="text-xs text-muted-foreground">
                               <span className="font-bold text-foreground">Entered as NT.</span>{" "}
-                              This event has no comparable seed time — swimmers are seeded by
-                              their best event&apos;s World Aquatics points.
+                              {ev.seedsAsNt
+                                ? "This event has no official long course equivalent, so there is no comparable time to declare."
+                                : "You haven't swum this event at a previous SSC volume."}{" "}
+                              Seeding uses your best event&apos;s World Aquatics points.
+                            </p>
+                          ) : seedFor(ev).source === "historical" ? (
+                            <p className="text-xs text-muted-foreground">
+                              <span className="font-bold text-foreground">
+                                Seeded at {formatTimeMs(seedFor(ev).seedTimeMs)}.
+                              </span>{" "}
+                              Your best official time for this event at a previous SSC volume —
+                              times are taken from what you swam, not declared.
                             </p>
                           ) : (
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-start">

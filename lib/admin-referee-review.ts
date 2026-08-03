@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
-import type { DqReason, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
+import type { DqReason, Gender, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
 
 export interface PendingReviewLane {
   heatLaneId: string;
@@ -18,6 +18,9 @@ export interface PendingReviewHeat {
   heatId: string;
   heatNumber: number;
   eventName: string;
+  /** For the dashboard's session filter — null if the embed came back thin. */
+  sessionNumber: number | null;
+  gender: Gender | null;
   lanes: PendingReviewLane[];
   /** True once every seeded lane has a submitted (draft) outcome — the
    * signal that the referee considers this heat card complete and ready
@@ -29,8 +32,8 @@ interface RawHeatLane {
   id: string;
   lane_number: number;
   heats:
-    | { id: string; heat_number: number; event_id: string; events: { name: string } | { name: string }[] | null }
-    | { id: string; heat_number: number; event_id: string; events: { name: string } | { name: string }[] | null }[]
+    | { id: string; heat_number: number; gender: Gender | null; event_id: string; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }
+    | { id: string; heat_number: number; gender: Gender | null; event_id: string; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }[]
     | null;
   entries:
     | {
@@ -64,7 +67,7 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
       .select(
         // Qualify the FK — athletes has two (user_id and parent_id), so a
         // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-        "id, lane_number, heats ( id, heat_number, event_id, events ( name ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
+        "id, lane_number, heats ( id, heat_number, gender, event_id, events ( name, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
       )
       .order("lane_number", { ascending: true });
     if (error || !data) return [];
@@ -86,6 +89,8 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
         heatId: heat.id,
         heatNumber: heat.heat_number,
         eventName: event?.name ?? "Event",
+        sessionNumber: firstOf(event?.sessions)?.session_number ?? null,
+        gender: heat.gender ?? null,
         lanes: [],
         complete: true,
       };

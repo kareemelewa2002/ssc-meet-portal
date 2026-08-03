@@ -7,13 +7,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { PerformanceBadges } from "@/components/results/performance-badges";
 import { TeamLeaderboard } from "@/components/leaderboards/team-leaderboard";
 import { AppHeader } from "@/components/layout/app-header";
 import {
   DEMO_ALL_TIME_RACES,
   fetchAllTimePerformances,
+  fetchPointsPerformances,
   rankBestPerformances,
   rankBestPerformers,
+  rankPointsPerformances,
+  type PointsPerformance,
   type RacePerformance,
 } from "@/lib/all-time-rankings";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
@@ -23,6 +27,7 @@ import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
 export function AllTimeClient() {
   const [races, setRaces] = useState<RacePerformance[]>(DEMO_ALL_TIME_RACES);
+  const [pointsRows, setPointsRows] = useState<PointsPerformance[]>([]);
   const [gender, setGender] = useState<Gender>("male");
   const [ageGroup, setAgeGroup] = useState<AgeGroup>("Open");
   const [stroke, setStroke] = useState<string>("Freestyle");
@@ -31,8 +36,13 @@ export function AllTimeClient() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const data = await fetchAllTimePerformances();
-      if (!cancelled) setRaces(data);
+      const [data, points] = await Promise.all([
+        fetchAllTimePerformances(),
+        fetchPointsPerformances(),
+      ]);
+      if (cancelled) return;
+      setRaces(data);
+      setPointsRows(points.data);
     })();
     return () => {
       cancelled = true;
@@ -56,6 +66,10 @@ export function AllTimeClient() {
         10,
       ),
     [races, gender, ageGroup, stroke, distanceM],
+  );
+  const pointsPerformances = useMemo(
+    () => rankPointsPerformances(pointsRows, { gender, ageGroup }, 25),
+    [pointsRows, gender, ageGroup],
   );
   const performances = useMemo(
     () =>
@@ -130,12 +144,15 @@ export function AllTimeClient() {
       />
 
       <Tabs defaultValue="performers">
-        <TabsList className="grid h-auto w-full grid-cols-2">
+        <TabsList className="grid h-auto w-full grid-cols-3">
           <TabsTrigger value="performers" className="min-h-[48px]">
             Best Performers
           </TabsTrigger>
           <TabsTrigger value="performances" className="min-h-[48px]">
             Best Performances
+          </TabsTrigger>
+          <TabsTrigger value="points" className="min-h-[48px]">
+            Best Performance
           </TabsTrigger>
         </TabsList>
 
@@ -207,6 +224,54 @@ export function AllTimeClient() {
                   </div>
                   <p className="font-mono text-lg font-semibold tabular-nums">
                     {formatTimeMs(row.officialTimeMs)}
+                  </p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+        <TabsContent value="points" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>
+                Best Performance — {AGE_GROUP_LABELS[ageGroup]} · {gender}
+              </CardTitle>
+              <CardDescription>
+                Ranked by World Aquatics points (short course), so swims in different events
+                compare directly — the higher the points, the better the swim. Stroke and
+                distance filters do not apply here; that is the whole point of the board. The
+                50m switch events have no points system and never appear.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {pointsPerformances.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No scored performances yet for this filter.
+                </p>
+              )}
+              {pointsPerformances.map((row) => (
+                <div key={row.resultId} className="flex items-center gap-3 rounded-lg border p-3">
+                  <div className="flex size-9 items-center justify-center rounded-full bg-muted text-sm font-bold">
+                    {row.rank}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <AthleteLink athleteId={row.athleteId} name={row.athleteName} />
+                      <PerformanceBadges
+                        isBestOverall={row.isBestOverall}
+                        isBestInEvent={row.isBestInEvent}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {row.eventName} · {formatTimeMs(row.officialTimeMs)}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {row.teamName ?? "Unaffiliated"} · {row.volumeName}
+                    </p>
+                  </div>
+                  <p className="font-mono text-lg font-semibold tabular-nums">
+                    {row.waPoints}
+                    <span className="ml-1 text-xs font-normal text-muted-foreground">pts</span>
                   </p>
                 </div>
               ))}

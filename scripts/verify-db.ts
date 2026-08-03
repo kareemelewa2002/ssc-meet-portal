@@ -118,6 +118,7 @@ interface TriggerSpec {
 const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "auth", table: "users", trigger: "on_auth_user_created" },
   { schema: "public", table: "athletes", trigger: "athletes_set_updated_at" },
+  { schema: "public", table: "entries", trigger: "apply_historical_seed_time_trigger" },
   { schema: "public", table: "entries", trigger: "enforce_entry_status_change_trigger" },
   { schema: "public", table: "entries", trigger: "force_nt_for_switch_events_trigger" },
   { schema: "public", table: "entries", trigger: "enforce_no_direct_skins_entry_trigger" },

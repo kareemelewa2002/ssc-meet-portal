@@ -28,6 +28,7 @@ import { cn, getErrorMessage, isValidUuid } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { LANE_SEQUENCE } from "@/lib/seeding";
 import { DQ_REASON_LABELS, scoreHeatResult } from "@/lib/results";
+import { resolveCutoff } from "@/lib/ranking";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import type { DqReason, ResultOutcome } from "@/lib/supabase/types";
 
@@ -113,6 +114,13 @@ export function SkinsKnockout({
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
   const [roundPublished, setRoundPublished] = useState(false);
+  /** Set when the advancing cutoff landed on a tie — the bracket is held
+   * until those swimmers race again. */
+  const [pendingSwimOff, setPendingSwimOff] = useState<{
+    athletes: SkinsSwimmer[];
+    slotsRemaining: number;
+    place: number;
+  } | null>(null);
   const [restSeconds, setRestSeconds] = useState(REST_SECONDS);
   const [timerRunning, setTimerRunning] = useState(false);
   const [outdoorMode, setOutdoorMode] = useState(false);
@@ -233,14 +241,30 @@ export function SkinsKnockout({
       }
 
       const cutoff = advanceCount(round);
-      const advancing = rankedSwimmers
-        .filter((s) => s.outcome === "valid")
-        .slice(0, cutoff || rankedSwimmers.length);
+      const finishers = rankedSwimmers
+        .filter((s) => s.outcome === "valid" && s.finishPlace !== null)
+        .sort((a, b) => (a.finishPlace ?? 0) - (b.finishPlace ?? 0));
+
+      // Slicing at the cutoff would decide a dead heat on array position.
+      // Swimmers tied ON the last advancing place swim off for it instead.
+      const { advancing, swimOff, slotsRemaining } = resolveCutoff(
+        finishers,
+        cutoff || finishers.length,
+        (s) => s.finishPlace ?? Number.MAX_SAFE_INTEGER,
+      );
 
       setBracket((prev) => ({ ...prev, [round]: rankedSwimmers }));
       setRoundPublished(true);
       setTimerRunning(true);
       setRestSeconds(REST_SECONDS);
+
+      if (swimOff.length > 0) {
+        // The round is published — the times stand — but the bracket cannot
+        // move on until the tied swimmers race again.
+        setPendingSwimOff({ athletes: swimOff, slotsRemaining, place: swimOff[0].finishPlace ?? cutoff });
+        return;
+      }
+      setPendingSwimOff(null);
       onRoundPublished?.(round, advancing);
     } catch (err) {
       setPublishError(getErrorMessage(err, "Failed to publish round results."));
@@ -475,6 +499,46 @@ export function SkinsKnockout({
         </div>
       )}
 
+      {pendingSwimOff && (
+        // The round's times stand; what is undecided is who goes through.
+        // The bracket deliberately does NOT advance until this is resolved.
+        <div className="space-y-2 rounded-md border-2 border-black bg-neon-orange/15 px-3 py-2 text-sm">
+          <p className="flex items-center gap-2 font-bold">
+            <AlertTriangle className="size-4 shrink-0" />
+            Swim-off required for place {pendingSwimOff.place}
+          </p>
+          <p>
+            {pendingSwimOff.athletes.map((a) => a.athleteName).join(" and ")} finished level on
+            place {pendingSwimOff.place}, contesting{" "}
+            {pendingSwimOff.slotsRemaining === 1
+              ? "the last advancing spot"
+              : `${pendingSwimOff.slotsRemaining} advancing spots`}
+            . They race again before the bracket moves on — the round is published, but who
+            progresses is not decided by lane order.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-[48px]"
+            onClick={() => {
+              // Re-race recorded on the deck: clear the tied swimmers' places
+              // so the referee re-enters them from the swim-off result.
+              setSwimmers((prev) =>
+                prev.map((sw) =>
+                  pendingSwimOff.athletes.some((a) => a.athleteId === sw.athleteId)
+                    ? { ...sw, finishPlace: null }
+                    : sw,
+                ),
+              );
+              setPendingSwimOff(null);
+              setRoundPublished(false);
+            }}
+          >
+            Record swim-off result
+          </Button>
+        </div>
+      )}
+
       <Separator className={outdoorMode ? "bg-yellow-300/30" : undefined} />
 
       <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
@@ -621,15 +685,22 @@ function LaneRow({
       <div className="flex flex-wrap gap-1">
         {Array.from({ length: maxPlace }, (_, i) => i + 1).map((place) => {
           const active = swimmer.finishPlace === place;
-          const taken = usedPlaces.has(place) && !active;
+          // A place another swimmer already holds is NOT blocked: two
+          // swimmers can touch together, and refusing to record that would
+          // force the referee to invent a separation that did not happen.
+          const shared = usedPlaces.has(place) && !active;
           return (
             <Button
               key={place}
               type="button"
               size="sm"
               variant={active ? "default" : "outline"}
-              disabled={eliminated || taken}
-              className="size-9 min-h-[36px] min-w-[36px] p-0"
+              disabled={eliminated}
+              title={shared ? "Another swimmer already has this place — selecting it records a tie" : undefined}
+              className={cn(
+                "size-9 min-h-[36px] min-w-[36px] p-0",
+                shared && "border-dashed opacity-70",
+              )}
               onClick={() => onSetPlace(place)}
             >
               {place}
@@ -693,14 +764,15 @@ function MobileSwimmerCard({
         <div className="grid grid-cols-3 gap-2">
           {Array.from({ length: maxPlace }, (_, i) => i + 1).map((place) => {
             const active = swimmer.finishPlace === place;
-            const taken = usedPlaces.has(place) && !active;
+            const shared = usedPlaces.has(place) && !active;
             return (
               <Button
                 key={place}
                 type="button"
                 variant={active ? "default" : "outline"}
-                disabled={eliminated || taken}
-                className="min-h-[48px] text-lg font-bold"
+                disabled={eliminated}
+                title={shared ? "Another swimmer already has this place — selecting it records a tie" : undefined}
+                className={cn("min-h-[48px] text-lg font-bold", shared && "border-dashed opacity-70")}
                 onClick={() => onSetPlace(place)}
               >
                 {place}

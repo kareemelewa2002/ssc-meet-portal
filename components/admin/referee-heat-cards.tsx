@@ -7,7 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getErrorMessage } from "@/lib/utils";
-import { formatTimeMs } from "@/lib/format";
+import { formatTimeMs, heatGenderLabel } from "@/lib/format";
+import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { RESULT_OUTCOME_LABELS, DQ_REASON_LABELS } from "@/lib/results";
 import { useToast } from "@/hooks/use-toast";
 import { AthleteLink } from "@/components/athletes/athlete-link";
@@ -23,6 +24,9 @@ export function RefereeHeatCards({ className }: { className?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyHeatId, setBusyHeatId] = useState<string | null>(null);
+  const [sessionFilter, setSessionFilter] = useState<string | null>(null);
+  const [eventFilter, setEventFilter] = useState<string | null>(null);
+  const [genderFilter, setGenderFilter] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -61,6 +65,21 @@ export function RefereeHeatCards({ className }: { className?: string }) {
     }
   };
 
+  // The queue lists every submitted card at once, so with a full session in
+  // flight it needs narrowing the same way the public heat sheets do.
+  const sessionNumbers = [...new Set(heats.map((h) => h.sessionNumber).filter((n): n is number => n != null))].sort();
+  const eventNames = [...new Set(heats.map((h) => h.eventName))].sort();
+  const visibleHeats = heats
+    .filter((h) => !sessionFilter || String(h.sessionNumber) === sessionFilter)
+    .filter((h) => !eventFilter || h.eventName === eventFilter)
+    .filter((h) => !genderFilter || h.gender === genderFilter)
+    .sort(
+      (a, b) =>
+        (a.sessionNumber ?? 0) - (b.sessionNumber ?? 0) ||
+        a.eventName.localeCompare(b.eventName) ||
+        a.heatNumber - b.heatNumber,
+    );
+
   return (
     <Card className={className}>
       <CardHeader className="flex flex-row items-start justify-between gap-3">
@@ -88,15 +107,54 @@ export function RefereeHeatCards({ className }: { className?: string }) {
           </Alert>
         )}
 
+        {heats.length > 1 && (
+          <div className="flex flex-wrap gap-4">
+            {sessionNumbers.length > 1 && (
+              <FilterPillGroup
+                label="Session"
+                value={sessionFilter}
+                onChange={setSessionFilter}
+                outdoorMode={false}
+                options={sessionNumbers.map((n) => ({ value: String(n), label: `S${n}` }))}
+              />
+            )}
+            {eventNames.length > 1 && (
+              <FilterPillGroup
+                label="Event"
+                value={eventFilter}
+                onChange={setEventFilter}
+                outdoorMode={false}
+                options={eventNames.map((n) => ({ value: n, label: n }))}
+              />
+            )}
+            <FilterPillGroup
+              label="Gender"
+              value={genderFilter}
+              onChange={setGenderFilter}
+              outdoorMode={false}
+              options={[
+                { value: "male", label: "Men" },
+                { value: "female", label: "Women" },
+              ]}
+            />
+          </div>
+        )}
+
         {heats.length === 0 ? (
           <p className="text-sm text-muted-foreground">No heat cards waiting for review.</p>
+        ) : visibleHeats.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No heat cards match this filter. {heats.length} waiting in total.
+          </p>
         ) : (
-          heats.map((heat) => (
+          visibleHeats.map((heat) => (
             <div key={heat.heatId} className="space-y-3 rounded-lg border p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-semibold">
-                    {heat.eventName} — Heat {heat.heatNumber}
+                    {heat.eventName} — {heatGenderLabel(heat.gender) ? `${heatGenderLabel(heat.gender)} ` : ""}
+                    Heat {heat.heatNumber}
+                    {heat.sessionNumber != null ? ` · Session ${heat.sessionNumber}` : ""}
                   </p>
                   <Badge variant={heat.complete ? "default" : "outline"} className="mt-1">
                     {heat.complete ? "Draft Heat Card — Ready" : "Draft Heat Card — In Progress"}

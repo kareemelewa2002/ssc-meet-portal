@@ -13,6 +13,7 @@ import { AppHeader } from "@/components/layout/app-header";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useSkinsQualifiers } from "@/hooks/use-skins-qualifiers";
 import type { SkinsCandidate } from "@/lib/skins-qualification";
+import { formatTimeMs } from "@/lib/format";
 import type { AgeGroup } from "@/lib/supabase/types";
 
 const CATEGORY_LABELS: Record<AgeGroup, string> = {
@@ -134,12 +135,17 @@ export default function DashboardPage() {
       <Card>
         <CardHeader>
           <CardTitle>Qualifier boards</CardTitle>
-          <CardDescription>Active slots after decline / rollover (up to 6 per category).</CardDescription>
+          <CardDescription>
+            Active slots after decline / rollover — up to 6 per category, and men and women fill
+            their own separately.
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3 sm:grid-cols-3">
           {boards.map((board) => (
-            <div key={board.category} className="rounded-lg border p-3">
-              <p className="mb-2 text-sm font-semibold">{CATEGORY_LABELS[board.category]}</p>
+            <div key={`${board.category}-${board.gender}`} className="rounded-lg border p-3">
+              <p className="mb-2 text-sm font-semibold">
+                {CATEGORY_LABELS[board.category]} · {board.gender === "male" ? "Men" : "Women"}
+              </p>
               <ul className="space-y-1 text-sm">
                 {board.active.length === 0 && (
                   <li className="text-muted-foreground">No active qualifiers yet</li>
@@ -151,6 +157,19 @@ export default function DashboardPage() {
                   </li>
                 ))}
               </ul>
+              {board.swimOff && (
+                // The last qualifying place is tied. Nobody is listed as
+                // holding it until they have raced for it.
+                <p className="mt-2 rounded-md border-2 border-black bg-neon-orange/15 p-2 text-xs">
+                  <span className="font-bold">Swim-off required.</span>{" "}
+                  {board.swimOff.athletes.map((a) => a.athleteName).join(" and ")} are level on{" "}
+                  {formatTimeMs(board.swimOff.contestedTimeMs)}, contesting{" "}
+                  {board.swimOff.slotsRemaining === 1
+                    ? "the last slot"
+                    : `${board.swimOff.slotsRemaining} slots`}
+                  .
+                </p>
+              )}
             </div>
           ))}
         </CardContent>

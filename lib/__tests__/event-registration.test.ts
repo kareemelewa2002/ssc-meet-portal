@@ -5,6 +5,7 @@ import {
   RACE_PRICE_EGP,
   buildEntryInserts,
   computeRegistrationTotalEgp,
+  resolveSeedSource,
   validateEventCount,
 } from "@/lib/event-registration";
 
@@ -57,5 +58,38 @@ describe("stroke-switch events are always entered NT", () => {
     ]);
     expect(payload.is_nt).toBe(true);
     expect(payload.seed_time_ms).toBeNull();
+  });
+});
+
+describe("resolveSeedSource — where a seed time comes from", () => {
+  const normal = { seedsAsNt: false };
+  const switchEvent = { seedsAsNt: true };
+
+  it("volume 1: the swimmer declares their own time", () => {
+    expect(resolveSeedSource(normal, 1, null).source).toBe("declared");
+  });
+
+  it("volume 2+: a previous official time is used instead of any declaration", () => {
+    const seed = resolveSeedSource(normal, 2, 27340);
+    expect(seed.source).toBe("historical");
+    expect(seed.seedTimeMs).toBe(27340);
+  });
+
+  it("volume 2+: never swum it before means NT", () => {
+    const seed = resolveSeedSource(normal, 2, null);
+    expect(seed.source).toBe("nt");
+    expect(seed.seedTimeMs).toBeNull();
+  });
+
+  it("an event with no long course equivalent is NT in every volume", () => {
+    expect(resolveSeedSource(switchEvent, 1, null).source).toBe("nt");
+    // Even with history on file — there is no declarable time either way.
+    expect(resolveSeedSource(switchEvent, 3, 27000).source).toBe("nt");
+  });
+
+  it("history wins over a declaration from volume 2 on", () => {
+    // The point of the rule: a claim never overrides the record.
+    expect(resolveSeedSource(normal, 2, 30000).seedTimeMs).toBe(30000);
+    expect(resolveSeedSource(normal, 5, 28000).seedTimeMs).toBe(28000);
   });
 });

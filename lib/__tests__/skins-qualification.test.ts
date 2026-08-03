@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applySkinsRollover,
   buildSkinsQualifierBoards,
+  detectQualifyingSwimOff,
   nextRolloverAthlete,
   populateSkinsHeatSheets,
   SKINS_SLOTS_PER_CATEGORY,
@@ -188,5 +189,83 @@ describe("Skins boards are split by gender as well as age group", () => {
     expect(heats).toHaveLength(2);
     expect(heats.map((h) => h.gender)).toEqual(["female", "male"]);
     for (const heat of heats) expect(heat.lanes).toHaveLength(1);
+  });
+});
+
+describe("a tie on the qualifying cutoff forces a swim-off", () => {
+  const timed = (id: string, ms: number, response: SkinsCandidate["response"] = "pending") =>
+    candidate({ athleteId: id, sourceRank: 1, bestTimeMs: ms, response });
+
+  it("detects two swimmers tied for the last slot", () => {
+    // 5 clear, then two identical times for the 6th and final place.
+    const rows = [
+      timed("a1", 25000), timed("a2", 25100), timed("a3", 25200),
+      timed("a4", 25300), timed("a5", 25400),
+      timed("a6", 25500), timed("a7", 25500),
+    ];
+    const swimOff = detectQualifyingSwimOff(rows);
+    expect(swimOff).not.toBeNull();
+    expect(swimOff!.athletes.map((a) => a.athleteId).sort()).toEqual(["a6", "a7"]);
+    expect(swimOff!.slotsRemaining).toBe(1);
+    expect(swimOff!.contestedTimeMs).toBe(25500);
+  });
+
+  it("three tied for the last two places contest both", () => {
+    const rows = [
+      timed("a1", 25000), timed("a2", 25100), timed("a3", 25200), timed("a4", 25300),
+      timed("a5", 25500), timed("a6", 25500), timed("a7", 25500),
+    ];
+    const swimOff = detectQualifyingSwimOff(rows);
+    expect(swimOff!.athletes).toHaveLength(3);
+    expect(swimOff!.slotsRemaining).toBe(2);
+  });
+
+  it("a tie entirely inside the cutoff decides nothing", () => {
+    const rows = [
+      timed("a1", 25000), timed("a2", 25000), timed("a3", 25200),
+      timed("a4", 25300), timed("a5", 25400), timed("a6", 25500), timed("a7", 26000),
+    ];
+    expect(detectQualifyingSwimOff(rows)).toBeNull();
+  });
+
+  it("a tie entirely outside the cutoff decides nothing either", () => {
+    const rows = [
+      timed("a1", 25000), timed("a2", 25100), timed("a3", 25200),
+      timed("a4", 25300), timed("a5", 25400), timed("a6", 25500),
+      timed("a7", 26000), timed("a8", 26000),
+    ];
+    expect(detectQualifyingSwimOff(rows)).toBeNull();
+  });
+
+  it("a field no larger than the slots never needs a swim-off", () => {
+    const rows = [timed("a1", 25000), timed("a2", 25000)];
+    expect(detectQualifyingSwimOff(rows)).toBeNull();
+  });
+
+  it("declined swimmers cannot be part of a tie for a place they gave up", () => {
+    // a6 declines, so a7/a8's tie is now for the LAST slot, not the first
+    // place outside it — the swim-off appears precisely because of the decline.
+    const rows = [
+      timed("a1", 25000), timed("a2", 25100), timed("a3", 25200),
+      timed("a4", 25300), timed("a5", 25400),
+      timed("a6", 25450, "declined"),
+      timed("a7", 25500), timed("a8", 25500),
+    ];
+    const swimOff = detectQualifyingSwimOff(rows);
+    expect(swimOff!.athletes.map((a) => a.athleteId).sort()).toEqual(["a7", "a8"]);
+    expect(swimOff!.slotsRemaining).toBe(1);
+  });
+
+  it("surfaces on the board for the right category and gender", () => {
+    const rows = [
+      ...Array.from({ length: 5 }, (_, i) =>
+        candidate({ athleteId: `m${i}`, sourceRank: i + 1, bestTimeMs: 25000 + i * 100, gender: "male" }),
+      ),
+      candidate({ athleteId: "m5", sourceRank: 6, bestTimeMs: 25500, gender: "male" }),
+      candidate({ athleteId: "m6", sourceRank: 6, bestTimeMs: 25500, gender: "male" }),
+    ];
+    const boards = buildSkinsQualifierBoards(rows);
+    expect(boards.find((b) => b.category === "Open" && b.gender === "male")!.swimOff).not.toBeNull();
+    expect(boards.find((b) => b.category === "Open" && b.gender === "female")!.swimOff).toBeNull();
   });
 });

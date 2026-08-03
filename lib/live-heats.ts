@@ -72,6 +72,7 @@ export interface RawEvent {
   stroke: string;
   distance_m: number;
   is_skins: boolean;
+  session_id?: string;
   heats: RawHeat[];
 }
 
@@ -120,6 +121,10 @@ export interface LiveEventView {
   stroke: string;
   distanceM: number;
   isSkins: boolean;
+  sessionId: string | null;
+  /** Populated when events are loaded across sessions, so the combined view
+   * can order and label them. */
+  sessionNumber: number | null;
   heats: LiveHeatView[];
 }
 
@@ -131,6 +136,8 @@ export function transformLiveEvents(raw: RawEvent[]): LiveEventView[] {
     stroke: ev.stroke,
     distanceM: ev.distance_m,
     isSkins: ev.is_skins,
+    sessionId: ev.session_id ?? null,
+    sessionNumber: null,
     heats: [...ev.heats]
       .sort((a, b) => a.heat_number - b.heat_number)
       .map((heat) => ({
@@ -181,6 +188,8 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
     stroke: "Freestyle",
     distanceM: 50,
     isSkins: false,
+    sessionId: null,
+    sessionNumber: 1,
     heats: [
       {
         heatId: "demo-heat-1",
@@ -274,6 +283,8 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
     stroke: "Backstroke",
     distanceM: 100,
     isSkins: false,
+    sessionId: null,
+    sessionNumber: 1,
     heats: [
       {
         heatId: "demo-heat-3",
@@ -300,7 +311,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
 ];
 
 const LIVE_EVENT_SELECT = `
-  id, name, stroke, distance_m, is_skins,
+  id, name, stroke, distance_m, is_skins, session_id, event_order,
   heats (
     id, heat_number, heat_group, gender, status,
     heat_lanes (
@@ -443,4 +454,87 @@ export async function fetchEventResultsForSession(
       eventPlace: r.event_place,
     })),
   };
+}
+
+/** World Aquatics points + top-performance flags for one swim, keyed by
+ * `${athleteId}:${eventId}` (an athlete enters an event at most once). */
+export interface PerformanceHighlight {
+  waPoints: number;
+  isBestOverall: boolean;
+  isBestInEvent: boolean;
+}
+
+/**
+ * Loads the points/badge overlay for a whole volume in one query.
+ *
+ * Kept separate from the heat fetch on purpose: the switch events have no
+ * points at all, so this is genuinely sparse — folding it into the lane rows
+ * would mean carrying a null column through every heat sheet that never uses
+ * it. A missing key here means "unrated", never "zero".
+ */
+export async function fetchPerformanceHighlights(
+  meetVolumeId: string,
+): Promise<FetchResult<Map<string, PerformanceHighlight>>> {
+  const result = await runQuery<
+    { athlete_id: string; event_id: string; wa_points: number; is_best_overall: boolean; is_best_in_event: boolean }[]
+  >(
+    "Loading World Aquatics points",
+    async () => {
+      const supabase = createClient();
+      return supabase
+        .from("performance_highlights")
+        .select("athlete_id, event_id, wa_points, is_best_overall, is_best_in_event")
+        .eq("meet_volume_id", meetVolumeId);
+    },
+    { empty: [] },
+  );
+
+  const map = new Map<string, PerformanceHighlight>();
+  for (const row of result.data) {
+    map.set(`${row.athlete_id}:${row.event_id}`, {
+      waPoints: row.wa_points,
+      isBestOverall: row.is_best_overall,
+      isBestInEvent: row.is_best_in_event,
+    });
+  }
+  return { ...result, data: map };
+}
+
+/**
+ * Loads every event across a set of sessions in one query, ordered the way
+ * they are actually swum: session first, then event order within it.
+ *
+ * The per-session fetch above stays because the live deck genuinely wants one
+ * session at a time. This one backs the combined "all races" view, where a
+ * spectator looking for one swimmer should not have to guess which session
+ * their race was in.
+ */
+export async function fetchLiveEventsForSessions(
+  sessions: { id: string; session_number: number }[],
+): Promise<FetchResult<LiveEventView[]>> {
+  const real = sessions.filter((s) => !s.id.startsWith("demo-"));
+  if (real.length === 0) {
+    return { data: DEMO_FALLBACK_ENABLED ? DEMO_LIVE_EVENTS : [], error: null, usedFallback: true };
+  }
+
+  const sessionNumberById = new Map(real.map((s) => [s.id, s.session_number]));
+  const result = await runQuery<RawEvent[]>(
+    "Loading every race in this meet",
+    async () => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("events")
+        .select(LIVE_EVENT_SELECT)
+        .in("session_id", real.map((s) => s.id))
+        .order("event_order", { ascending: true });
+      return { data: data as unknown as RawEvent[] | null, error };
+    },
+    { empty: [], demo: [] },
+  );
+
+  const events = transformLiveEvents(result.data)
+    .map((ev) => ({ ...ev, sessionNumber: sessionNumberById.get(ev.sessionId ?? "") ?? null }))
+    .sort((a, b) => (a.sessionNumber ?? 0) - (b.sessionNumber ?? 0));
+
+  return { ...result, data: events };
 }

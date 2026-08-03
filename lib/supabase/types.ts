@@ -97,6 +97,30 @@ export type EventResultRow = {
   event_place: number;
 };
 
+/** public.performance_highlights — every published swim scored in World
+ * Aquatics points, flagged if it is the best anywhere or best in its event.
+ * Switch events never appear: no base time, so no points, by design. */
+export type PerformanceHighlightRow = {
+  result_id: string;
+  athlete_id: string;
+  athlete_name: string;
+  team_name: string | null;
+  gender: Gender;
+  age_group: AgeGroup;
+  event_id: string;
+  event_name: string;
+  stroke: string;
+  distance_m: number;
+  meet_volume_id: string;
+  volume_number: number;
+  volume_name: string;
+  official_time_ms: number;
+  wa_points: number;
+  swam_at: string;
+  is_best_overall: boolean;
+  is_best_in_event: boolean;
+};
+
 export type TeamMembershipRow = {
   id: string;
   team_id: string;
@@ -346,6 +370,7 @@ export type Database = {
       teams: Table<TeamRow>;
       team_memberships: Table<TeamMembershipRow>;
       event_results: Table<EventResultRow>;
+      performance_highlights: Table<PerformanceHighlightRow>;
       athletes: Table<AthleteRow>;
       volume_team_affiliations: Table<VolumeTeamAffiliationRow>;
       meet_volumes: Table<MeetVolumeRow>;
@@ -386,7 +411,8 @@ export type Database = {
         Args: Record<string, never>;
         Returns: boolean;
       };
-      // NOTE: event_results is a VIEW, exposed read-only through Tables below.
+      // NOTE: event_results and performance_highlights are VIEWS, exposed
+      // read-only through Tables below.
       accept_safety_acknowledgement: {
         Args: { p_athlete_id: string };
         Returns: undefined;
@@ -398,6 +424,23 @@ export type Database = {
       visible_contacts: {
         Args: { p_user_ids: string[] };
         Returns: { user_id: string; email: string | null; phone: string | null }[];
+      };
+      best_previous_official_time: {
+        Args: { p_athlete_id: string; p_event_id: string };
+        Returns: number | null;
+      };
+      athlete_best_wa_points: {
+        Args: { p_athlete_id: string };
+        Returns: number | null;
+      };
+      world_aquatics_points: {
+        Args: {
+          p_stroke: string;
+          p_distance_m: number;
+          p_gender: Gender;
+          p_time_ms: number;
+        };
+        Returns: number | null;
       };
     };
     Enums: {

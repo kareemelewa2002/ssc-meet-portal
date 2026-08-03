@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
 import { withCompetitionRanks } from "@/lib/ranking";
+import { runQuery, type FetchResult } from "@/lib/fetch-policy";
 
 export interface RacePerformance {
   resultId: string;
@@ -286,4 +287,100 @@ export async function fetchAllTimePerformances(): Promise<RacePerformance[]> {
   } catch {
     return DEMO_ALL_TIME_RACES;
   }
+}
+
+/**
+ * Best Performance — the one ranking that compares swimmers ACROSS events.
+ *
+ * A 50 Breaststroke and a 100 Freestyle are not comparable as times, but they
+ * are as World Aquatics points, so this board ranks every published swim on
+ * points alone. The 50m switch events never appear: they have no base time,
+ * so no points, by design.
+ */
+export interface PointsPerformance {
+  resultId: string;
+  athleteId: string;
+  athleteName: string;
+  teamName?: string | null;
+  eventName: string;
+  stroke: string;
+  distanceM: number;
+  ageGroup: AgeGroup;
+  gender: Gender;
+  officialTimeMs: number;
+  waPoints: number;
+  volumeName: string;
+  isBestOverall: boolean;
+  isBestInEvent: boolean;
+}
+
+interface RawPointsRow {
+  result_id: string;
+  athlete_id: string;
+  athlete_name: string;
+  team_name: string | null;
+  event_name: string;
+  stroke: string;
+  distance_m: number;
+  age_group: AgeGroup;
+  gender: Gender;
+  official_time_ms: number;
+  wa_points: number;
+  volume_name: string;
+  is_best_overall: boolean;
+  is_best_in_event: boolean;
+}
+
+export async function fetchPointsPerformances(): Promise<FetchResult<PointsPerformance[]>> {
+  return runQuery<PointsPerformance[]>(
+    "Loading the World Aquatics points ranking",
+    async () => {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("performance_highlights")
+        .select(
+          "result_id, athlete_id, athlete_name, team_name, event_name, stroke, distance_m, age_group, gender, official_time_ms, wa_points, volume_name, is_best_overall, is_best_in_event",
+        )
+        .order("wa_points", { ascending: false })
+        .limit(200);
+      if (error) return { data: null, error };
+      const rows = (data ?? []) as unknown as RawPointsRow[];
+      return {
+        data: rows.map((r) => ({
+          resultId: r.result_id,
+          athleteId: r.athlete_id,
+          athleteName: r.athlete_name,
+          teamName: r.team_name,
+          eventName: r.event_name,
+          stroke: r.stroke,
+          distanceM: r.distance_m,
+          ageGroup: r.age_group,
+          gender: r.gender,
+          officialTimeMs: r.official_time_ms,
+          waPoints: r.wa_points,
+          volumeName: r.volume_name,
+          isBestOverall: r.is_best_overall,
+          isBestInEvent: r.is_best_in_event,
+        })),
+        error: null,
+      };
+    },
+    { empty: [] },
+  );
+}
+
+/** Ranks points performances, highest points first. Equal points share a
+ * place and skip the next, same as every other placing in the system. */
+export function rankPointsPerformances(
+  rows: PointsPerformance[],
+  filter: { gender?: Gender; ageGroup?: AgeGroup } = {},
+  limit = 25,
+): (PointsPerformance & { rank: number })[] {
+  const filtered = rows
+    .filter((r) => (!filter.gender || r.gender === filter.gender))
+    .filter((r) => (!filter.ageGroup || r.ageGroup === filter.ageGroup))
+    .sort((a, b) => b.waPoints - a.waPoints);
+
+  // Negated so the shared helper's ascending "best first" contract holds.
+  return withCompetitionRanks(filtered, (r) => -r.waPoints).filter((r) => r.rank <= limit);
 }

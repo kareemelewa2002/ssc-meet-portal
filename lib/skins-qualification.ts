@@ -3,6 +3,7 @@ import type { AgeGroup, Gender, HeatGroup, SkinsResponse } from "@/lib/supabase/
 import { createClient } from "@/lib/supabase/client";
 import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
 import { isValidUuid } from "@/lib/utils";
+import { resolveCutoff } from "@/lib/ranking";
 
 export const SKINS_SLOTS_PER_CATEGORY = 6;
 
@@ -32,6 +33,37 @@ export interface CategoryQualifierBoard {
   confirmed: SkinsQualifier[];
   waitlisted: SkinsQualifier[];
   declined: SkinsQualifier[];
+  /** Set when the last qualifying place is tied and must be swum off. */
+  swimOff: SkinsSwimOff | null;
+}
+
+/** A tie sitting exactly on a cutoff place. The tied swimmers race again for
+ * the places they are contesting — the alternative is deciding it on sort
+ * order, which is not a result. */
+export interface SkinsSwimOff {
+  athletes: SkinsCandidate[];
+  contestedTimeMs: number;
+  slotsRemaining: number;
+}
+
+/**
+ * Detects a tie sitting on the qualifying cutoff.
+ *
+ * Declined swimmers are removed first: they have given up their place, so
+ * they cannot be part of a tie for it, and their removal is what pulls the
+ * cutoff down onto a different pair in the first place.
+ */
+export function detectQualifyingSwimOff(
+  candidates: SkinsCandidate[],
+  slots: number = SKINS_SLOTS_PER_CATEGORY,
+): SkinsSwimOff | null {
+  const contenders = [...candidates]
+    .filter((c) => c.response !== "declined")
+    .sort((a, b) => a.bestTimeMs - b.bestTimeMs);
+
+  const { swimOff, slotsRemaining } = resolveCutoff(contenders, slots, (c) => c.bestTimeMs);
+  if (swimOff.length === 0) return null;
+  return { athletes: swimOff, contestedTimeMs: swimOff[0].bestTimeMs, slotsRemaining };
 }
 
 /**
@@ -91,6 +123,10 @@ export function buildSkinsQualifierBoards(
       confirmed: qualified.filter((q) => q.isActiveQualifier && q.isConfirmed),
       waitlisted: qualified.filter((q) => !q.isActiveQualifier && q.response !== "declined"),
       declined: qualified.filter((q) => q.response === "declined"),
+      swimOff: detectQualifyingSwimOff(
+        candidates.filter((c) => c.category === category && c.gender === gender),
+        slots,
+      ),
     };
   }));
 }

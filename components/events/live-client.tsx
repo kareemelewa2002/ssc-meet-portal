@@ -18,15 +18,19 @@ import {
   fetchEventResultsForSession,
   fetchEventSessionNumber,
   fetchLiveEventsForSession,
+  fetchLiveEventsForSessions,
   type EventResultView,
   type LiveEventView,
   type LiveHeatView,
   type LiveLaneView,
+  fetchPerformanceHighlights,
+  type PerformanceHighlight,
 } from "@/lib/live-heats";
 import { formatTimeMs, timeDropSeconds } from "@/lib/format";
 import { DQ_REASON_LABELS } from "@/lib/results";
 import type { AgeGroup, Gender, MeetVolumeRow, SessionRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { PerformanceBadges } from "@/components/results/performance-badges";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { SkeletonLane } from "@/components/ui/skeleton";
 
@@ -36,7 +40,15 @@ const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
   Open: "Open",
 };
 
-function LaneRow({ lane, outdoorMode }: { lane: LiveLaneView; outdoorMode: boolean }) {
+function LaneRow({
+  lane,
+  outdoorMode,
+  highlight,
+}: {
+  lane: LiveLaneView;
+  outdoorMode: boolean;
+  highlight?: PerformanceHighlight;
+}) {
   const drop =
     lane.result?.outcome === "valid"
       ? timeDropSeconds(lane.seedTimeMs, lane.result.officialTimeMs)
@@ -71,6 +83,15 @@ function LaneRow({ lane, outdoorMode }: { lane: LiveLaneView; outdoorMode: boole
             className={outdoorMode ? "text-yellow-300" : undefined}
           />
         </p>
+        {highlight && (
+          <div className="mt-0.5">
+            <PerformanceBadges
+              isBestOverall={highlight.isBestOverall}
+              isBestInEvent={highlight.isBestInEvent}
+              outdoorMode={outdoorMode}
+            />
+          </div>
+        )}
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
           {lane.teamName && (
             <span
@@ -130,6 +151,19 @@ function LaneRow({ lane, outdoorMode }: { lane: LiveLaneView; outdoorMode: boole
                 >
                   {formatTimeMs(lane.result.officialTimeMs)}
                 </span>
+                {highlight && (
+                  // The switch events have no base time, so no points — they
+                  // simply have no highlight row and nothing renders.
+                  <span
+                    className={cn(
+                      "font-telemetry text-[10px] font-bold",
+                      outdoorMode ? "text-yellow-100/80" : "text-muted-foreground",
+                    )}
+                    title="World Aquatics points (short course)"
+                  >
+                    {highlight.waPoints} pts
+                  </span>
+                )}
                 {drop != null && (
                   // Seed -> official delta. A drop is the whole point of the
                   // series' Progress scoring, so it gets the lime glow.
@@ -152,7 +186,17 @@ function LaneRow({ lane, outdoorMode }: { lane: LiveLaneView; outdoorMode: boole
   );
 }
 
-function HeatCard({ heat, outdoorMode }: { heat: LiveHeatView; outdoorMode: boolean }) {
+function HeatCard({
+  heat,
+  eventId,
+  outdoorMode,
+  highlights,
+}: {
+  heat: LiveHeatView;
+  eventId: string;
+  outdoorMode: boolean;
+  highlights: Map<string, PerformanceHighlight>;
+}) {
   return (
     <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
       <CardHeader className="flex-row items-center gap-2 space-y-0 pb-2">
@@ -164,7 +208,12 @@ function HeatCard({ heat, outdoorMode }: { heat: LiveHeatView; outdoorMode: bool
       </CardHeader>
       <CardContent className="space-y-2">
         {heat.lanes.map((lane) => (
-          <LaneRow key={lane.laneNumber} lane={lane} outdoorMode={outdoorMode} />
+          <LaneRow
+            key={lane.laneNumber}
+            lane={lane}
+            outdoorMode={outdoorMode}
+            highlight={highlights.get(`${lane.athleteId}:${eventId}`)}
+          />
         ))}
       </CardContent>
     </Card>
@@ -193,9 +242,13 @@ export function LiveEventsClient({
 
   const [volume, setVolume] = useState<MeetVolumeRow | null>(null);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
-  const [sessionNumber, setSessionNumber] = useState<1 | 2 | 3>(() => {
-    const raw = Number(searchParams.get("session"));
-    return raw === 2 || raw === 3 ? raw : 1;
+  // "all" lists every race in the meet in the order they are swum, and is the
+  // default: someone looking for one swimmer should not have to already know
+  // which session their race was in. An explicit ?session=N still wins, so
+  // existing deep links keep working.
+  const [sessionNumber, setSessionNumber] = useState<1 | 2 | 3 | "all">(() => {
+    const n = Number(searchParams.get("session"));
+    return n === 1 || n === 2 || n === 3 ? n : "all";
   });
   // A single-event deep link (?event=<id>) scopes the whole page to just
   // that event's heats — never a session-wide (let alone site-wide) wall.
@@ -212,6 +265,7 @@ export function LiveEventsClient({
   const [ageFilter, setAgeFilter] = useState<AgeGroup | null>(null);
   const [strokeFilter, setStrokeFilter] = useState<string | null>(null);
   const [eventNameFilter, setEventNameFilter] = useState<string | null>(null);
+  const [highlights, setHighlights] = useState<Map<string, PerformanceHighlight>>(new Map());
   const [eventResults, setEventResults] = useState<EventResultView[]>([]);
 
   useEffect(() => {
@@ -251,24 +305,35 @@ export function LiveEventsClient({
     };
   }, [eventFilterId, searchParams]);
 
+  const showingAll = sessionNumber === "all";
   const currentSession = useMemo(
-    () => sessions.find((s) => s.session_number === sessionNumber) ?? null,
-    [sessions, sessionNumber],
+    () => (showingAll ? null : sessions.find((s) => s.session_number === sessionNumber) ?? null),
+    [sessions, sessionNumber, showingAll],
   );
+  const volumeId = volume?.id ?? currentSession?.meet_volume_id ?? null;
 
   const loadEvents = useCallback(async () => {
-    if (!currentSession) return;
-    const result = await fetchLiveEventsForSession(currentSession.id);
+    if (showingAll ? sessions.length === 0 : !currentSession) return;
+
+    const result = showingAll
+      ? await fetchLiveEventsForSessions(sessions)
+      : await fetchLiveEventsForSession(currentSession!.id);
     setEvents(result.data);
     setDataError(result.error);
     setUsedFallback(result.usedFallback);
     setLoadingEvents(false);
-    // Overall standings only matter on the results view.
+
+    // Overall standings and points/badges only matter on the results view.
     if (isResults) {
-      const standings = await fetchEventResultsForSession(currentSession.id);
-      setEventResults(standings.data);
+      const targets = showingAll ? sessions : [currentSession!];
+      const standings = await Promise.all(targets.map((s) => fetchEventResultsForSession(s.id)));
+      setEventResults(standings.flatMap((r) => r.data));
+      if (volumeId) {
+        const hl = await fetchPerformanceHighlights(volumeId);
+        setHighlights(hl.data);
+      }
     }
-  }, [currentSession, isResults]);
+  }, [currentSession, isResults, sessions, showingAll, volumeId]);
 
   useEffect(() => {
     setLoadingEvents(true);
@@ -361,8 +426,8 @@ export function LiveEventsClient({
           </h1>
           <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
             {isResults
-              ? "Official times, places, and DQ/NS codes. Filter by event, age group, or gender."
-              : "Lane assignments and seed times by session. Results update automatically as they publish."}
+              ? "Every race in the order it was swum, with official times, World Aquatics points and DQ/NS codes. Filter by session, event, age group, or gender."
+              : "Every race in the order it is swum, with lane assignments and seed times. Filter by session, event, age group, or gender."}
           </p>
         </header>
 
@@ -384,7 +449,7 @@ export function LiveEventsClient({
               Showing <strong>{filteredEvents[0]?.name ?? "this event"}</strong> only.
             </span>
             <Link
-              href={`/events/${volId}/live?session=${sessionNumber}`}
+              href={`/events/${volId}/live?session=${sessionNumber === "all" ? 1 : sessionNumber}`}
               className={cn(
                 "min-h-[40px] rounded-md px-2 text-xs font-medium underline underline-offset-4",
                 outdoorMode ? "text-yellow-300" : "text-primary",
@@ -396,19 +461,19 @@ export function LiveEventsClient({
         ) : (
           <Tabs
             value={String(sessionNumber)}
-            onValueChange={(v) => setSessionNumber(Number(v) as 1 | 2 | 3)}
+            onValueChange={(v) => setSessionNumber(v === "all" ? "all" : (Number(v) as 1 | 2 | 3))}
           >
             <TabsList
               className={cn(
                 // The list variant hard-codes group-data-horizontal/tabs:h-9;
                 // override at the same specificity or 48px triggers overflow it.
-                "grid h-auto w-full grid-cols-3 gap-1 p-1 group-data-horizontal/tabs:h-auto",
+                "grid h-auto w-full grid-cols-4 gap-1 p-1 group-data-horizontal/tabs:h-auto",
                 outdoorMode ? "border-yellow-300/60 bg-black" : "bg-muted",
               )}
             >
-              {[1, 2, 3].map((n) => (
+              {(["all", 1, 2, 3] as const).map((n) => (
                 <TabsTrigger
-                  key={n}
+                  key={String(n)}
                   value={String(n)}
                   className={cn(
                     // h-auto defeats the primitive's h-[calc(100%-1px)],
@@ -421,7 +486,7 @@ export function LiveEventsClient({
                       : "text-foreground/70 data-active:bg-background data-active:text-foreground",
                   )}
                 >
-                  Session {n}
+                  {n === "all" ? "All Races" : `Session ${n}`}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -593,12 +658,30 @@ export function LiveEventsClient({
 
             {filteredEvents.map((ev) => (
               <div key={ev.eventId} className="space-y-2">
-                <h2 className={cn("text-base font-bold", outdoorMode && "text-yellow-300")}>
+                <h2
+                  className={cn(
+                    "flex flex-wrap items-center gap-2 text-base font-bold",
+                    outdoorMode && "text-yellow-300",
+                  )}
+                >
                   {ev.name}
+                  {showingAll && ev.sessionNumber != null && (
+                    // In the combined list the session is no longer implied by
+                    // a selected tab, so each race has to say where it sits.
+                    <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-normal">
+                      Session {ev.sessionNumber}
+                    </Badge>
+                  )}
                 </h2>
                 <div className="space-y-3">
                   {ev.heats.map((heat) => (
-                    <HeatCard key={heat.heatId} heat={heat} outdoorMode={outdoorMode} />
+                    <HeatCard
+                      key={heat.heatId}
+                      heat={heat}
+                      eventId={ev.eventId}
+                      outdoorMode={outdoorMode}
+                      highlights={highlights}
+                    />
                   ))}
                 </div>
               </div>

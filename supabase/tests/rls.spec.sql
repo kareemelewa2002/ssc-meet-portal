@@ -635,6 +635,7 @@ end $$;
 do $$
 declare v_mixed int; v_null int; v_heats int;
 begin
+  perform set_config('role','postgres',true);
   select count(*) into v_heats from public.heats;
   perform ssc_test.check('DB-15','precondition: heats exist to check', v_heats > 0, null);
 
@@ -671,6 +672,7 @@ do $$
 declare v_heat uuid; v_lane uuid; i int := 0; v_places int[]; v_pts numeric[];
   v_times int[] := array[25000, 25000, 25500];
 begin
+  perform set_config('role','postgres',true);
   -- Only needs three lanes: two on the same time and one behind them. Larger
   -- heats are consumed by earlier assertions in this suite.
   select h.id into v_heat
@@ -713,6 +715,7 @@ end $$;
 do $$
 declare v_event uuid; v_entry uuid; v_is_nt boolean; v_seed int; v_bad int;
 begin
+  perform set_config('role','postgres',true);
   select id into v_event from public.events where seeds_as_nt limit 1;
   perform ssc_test.check('DB-17','precondition: a switch event exists', v_event is not null, null);
   if v_event is null then return; end if;
@@ -724,7 +727,11 @@ begin
     format('violations=%s', v_bad));
 
   -- The trigger must win over a direct write, not just over the UI.
-  select id into v_entry from public.entries where event_id = v_event limit 1;
+  select id into v_entry
+  from public.entries
+  where event_id = v_event and status <> 'confirmed'
+  order by id
+  limit 1;
   if v_entry is not null then
     update public.entries set is_nt = false, seed_time_ms = 28000 where id = v_entry;
     select is_nt, seed_time_ms into v_is_nt, v_seed from public.entries where id = v_entry;
@@ -741,6 +748,108 @@ begin
     public.world_aquatics_points('Back-to-Breast Switch', 50, 'male', 30000) is null, null);
 exception when others then
   perform ssc_test.check('DB-17','switch events', false, sqlerrm);
+end $$;
+
+-- DB-18 — volume 2+ seeds from meet history, never from a declaration.
+do $$
+declare v_vol uuid; v_sess uuid; v_ev uuid; v_ath uuid; v_seed int; v_nt boolean;
+begin
+  perform set_config('role','postgres',true);
+  select id into v_vol from public.meet_volumes where volume_number = 2;
+  perform ssc_test.check('DB-18','precondition: a second volume exists', v_vol is not null, null);
+  if v_vol is null then return; end if;
+
+  insert into public.sessions (meet_volume_id, session_number, name, meet_date, start_time, end_time)
+  values (v_vol, 1, 'DB-18 session', '2027-10-01', '09:00', '12:00')
+  on conflict (meet_volume_id, session_number) do nothing;
+  select id into v_sess from public.sessions where meet_volume_id = v_vol and session_number = 1;
+
+  insert into public.events (session_id, name, stroke, distance_m, event_order, is_relay, is_skins, seeds_as_nt)
+  values (v_sess, 'DB-18 50m Freestyle', 'Freestyle', 50, 99, false, false, false)
+  returning id into v_ev;
+
+  -- A swimmer with a published Vol. 1 time for the same stroke/distance.
+  select en.athlete_id into v_ath
+  from public.results r
+  join public.heat_lanes hl on hl.id = r.heat_lane_id
+  join public.entries en on en.id = hl.entry_id
+  join public.events ev on ev.id = en.event_id
+  where r.status = 'published' and r.result_outcome = 'valid'
+    and ev.stroke = 'Freestyle' and ev.distance_m = 50
+  limit 1;
+
+  if v_ath is not null then
+    -- Declare something absurd; the trigger must overwrite it.
+    insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
+    values (v_ev, v_ath, 1000, false, 'pending_payment');
+    select seed_time_ms, is_nt into v_seed, v_nt
+    from public.entries where event_id = v_ev and athlete_id = v_ath;
+
+    perform ssc_test.check('DB-18','a declared time is replaced by the swimmer''s own record',
+      v_seed is not null and v_seed <> 1000 and not v_nt,
+      format('seed=%s is_nt=%s', v_seed, v_nt));
+    perform ssc_test.check('DB-18','the seed equals their best previous official time',
+      v_seed = public.best_previous_official_time(v_ath, v_ev),
+      format('seed=%s best=%s', v_seed, public.best_previous_official_time(v_ath, v_ev)));
+  end if;
+
+  -- A swimmer who has never swum it enters NT, whatever they claim.
+  select a.id into v_ath from public.athletes a
+  where not exists (
+    select 1 from public.results r
+    join public.heat_lanes hl on hl.id = r.heat_lane_id
+    join public.entries en on en.id = hl.entry_id
+    join public.events ev on ev.id = en.event_id
+    where en.athlete_id = a.id and ev.stroke = 'Freestyle' and ev.distance_m = 50
+      and r.status = 'published' and r.result_outcome = 'valid')
+  limit 1;
+
+  if v_ath is not null then
+    insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
+    values (v_ev, v_ath, 26000, false, 'pending_payment');
+    select seed_time_ms, is_nt into v_seed, v_nt
+    from public.entries where event_id = v_ev and athlete_id = v_ath;
+    perform ssc_test.check('DB-18','never swum it before means NT from volume 2',
+      v_nt and v_seed is null, format('seed=%s is_nt=%s', v_seed, v_nt));
+  end if;
+
+  delete from public.entries where event_id = v_ev;
+  delete from public.events where id = v_ev;
+exception when others then
+  perform ssc_test.check('DB-18','historical seeding', false, sqlerrm);
+end $$;
+
+-- DB-19 — World Aquatics points views.
+do $$
+declare v_switch int; v_neg int; v_best int; v_im boolean;
+begin
+  perform set_config('role','postgres',true);
+  select count(*) into v_switch
+  from public.performance_points pp
+  join public.events ev on ev.id = pp.event_id
+  where ev.seeds_as_nt and ev.stroke ilike '%switch%';
+  perform ssc_test.check('DB-19','the 50m switch events have no points at all', v_switch = 0,
+    format('rows=%s', v_switch));
+
+  select count(*) into v_neg from public.performance_points where wa_points is null or wa_points <= 0;
+  perform ssc_test.check('DB-19','every scored swim has positive points', v_neg = 0,
+    format('bad rows=%s', v_neg));
+
+  -- 100 IM is seeds_as_nt at ENTRY but must remain rateable: it has a base
+  -- time, and filtering rating on seeds_as_nt would silently discard it.
+  select seeds_as_nt into v_im from public.events where name like '100m Individual Medley%' limit 1;
+  perform ssc_test.check('DB-19','100 IM is entered NT (no long course equivalent)', coalesce(v_im, false), null);
+  perform ssc_test.check('DB-19','100 IM still has a base time, so it still scores',
+    public.world_aquatics_points('Individual Medley', 100, 'male', 60000) > 0, null);
+
+  select public.athlete_best_wa_points(a.id) into v_best
+  from public.athletes a
+  join public.entries en on en.athlete_id = a.id
+  where en.seed_time_ms is not null limit 1;
+  perform ssc_test.check('DB-19','a swimmer with a seed time is rateable before any results exist',
+    v_best is not null and v_best > 0, format('points=%s', v_best));
+exception when others then
+  perform ssc_test.check('DB-19','points views', false, sqlerrm);
 end $$;
 
 -- =============================================================================

@@ -464,23 +464,26 @@ create table if not exists public.events (
   -- have an auto-assignment pipeline) so seeding/registration UIs can tell
   -- "no direct entries by design" apart from "not yet seeded."
   is_relay boolean not null default false,
-  -- The 50m stroke-switch events (25m of one stroke + 25m of another) have no
-  -- equivalent anywhere else, so a swimmer has no comparable time to declare
-  -- and any seed time they entered would be guesswork. Entries for these are
+  -- True for events with no official long course equivalent: the 50m
+  -- stroke-switch events, and the 100m IM (a short-course-only event). A
+  -- swimmer has no comparable time to declare for these, so entries are
   -- forced to NT and seeded from World Aquatics points instead — see
-  -- public.athlete_best_wa_points().
+  -- public.athlete_best_wa_points(). Note this is about ENTRY, not scoring:
+  -- the 100 IM still has a base time and its results still earn points.
   seeds_as_nt boolean not null default false,
   created_at timestamptz not null default now()
 );
 
 alter table public.events add column if not exists seeds_as_nt boolean not null default false;
 
--- Existing databases: the switch events are identifiable by their stroke,
--- which is what the canonical program in seed-demo.sql sets.
+-- Existing databases. Two families of event have no official long course
+-- equivalent, so a swimmer has nothing to declare:
+--   * the 50m stroke-switch events (25m + 25m of two strokes), and
+--   * the 100m Individual Medley, which is only ever swum short course.
 update public.events
 set seeds_as_nt = true
 where seeds_as_nt = false
-  and stroke ilike '%switch%';
+  and (stroke ilike '%switch%' or (stroke = 'Individual Medley' and is_relay = false));
 
 -- Idempotent column add for databases created before is_relay existed.
 alter table public.events
@@ -2329,9 +2332,14 @@ comment on function public.world_aquatics_points(text, integer, public.gender, i
 -- very first meet, and real results take over naturally as they accumulate
 -- (a faster actual swim simply scores higher and wins the max).
 --
--- Switch events are excluded as a SOURCE as well as a target: rating a
--- swimmer on the very event being seeded would be circular, and they have no
--- base time anyway.
+-- Rateability is decided by whether the event has a row in wa_base_times, NOT
+-- by seeds_as_nt. The two are different things and 100m IM is why: it has no
+-- official long course event, so nobody can declare a seed time for it
+-- (seeds_as_nt), yet it has a perfectly good short course base time and a
+-- swimmer's 100 IM result is one of the better things to rate them on.
+-- Filtering on seeds_as_nt here would have silently discarded it. Events with
+-- no base time (the switch events, relays) score NULL, and max() ignores
+-- NULLs — so they drop out on their own without a filter.
 create or replace function public.athlete_best_wa_points(p_athlete_id uuid)
 returns integer
 language sql
@@ -2350,7 +2358,6 @@ as $$
       and r.status = 'published'
       and r.result_outcome = 'valid'
       and r.official_time_ms is not null
-      and ev.seeds_as_nt = false
       and ev.is_relay = false
 
     union all
@@ -2362,10 +2369,180 @@ as $$
     where en.athlete_id = p_athlete_id
       and en.is_nt = false
       and en.seed_time_ms is not null
-      and ev.seeds_as_nt = false
       and ev.is_relay = false
   ) rated;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- BEST PERFORMANCE (World Aquatics points)
+-- ---------------------------------------------------------------------------
+-- Every published swim, scored in World Aquatics points. This is the one
+-- ranking that compares swimmers ACROSS events: a 50 Breaststroke and a
+-- 100 Freestyle are not otherwise commensurable, but their points are.
+--
+-- Rows only exist for events with a base time on file, so the switch events
+-- are absent by construction rather than by filter — they have no points
+-- system and deliberately keep it that way.
+create or replace view public.performance_points as
+select
+  r.id                                          as result_id,
+  a.id                                          as athlete_id,
+  u.full_name                                   as athlete_name,
+  t.name                                        as team_name,
+  a.gender,
+  coalesce(en.age_group_at_entry, a.age_group)  as age_group,
+  ev.id                                         as event_id,
+  ev.name                                       as event_name,
+  ev.stroke,
+  ev.distance_m,
+  s.meet_volume_id,
+  mv.volume_number,
+  mv.name                                       as volume_name,
+  r.official_time_ms,
+  public.world_aquatics_points(ev.stroke, ev.distance_m, a.gender, r.official_time_ms) as wa_points,
+  r.created_at                                  as swam_at
+from public.results r
+join public.heat_lanes hl on hl.id = r.heat_lane_id
+join public.heats h       on h.id = hl.heat_id
+join public.entries en    on en.id = hl.entry_id
+join public.events ev     on ev.id = h.event_id
+join public.sessions s    on s.id = ev.session_id
+join public.meet_volumes mv on mv.id = s.meet_volume_id
+join public.athletes a    on a.id = en.athlete_id
+join public.users u       on u.id = a.user_id
+left join public.teams t  on t.id = a.team_id
+where r.status = 'published'
+  and r.result_outcome = 'valid'
+  and r.official_time_ms is not null
+  and public.world_aquatics_points(ev.stroke, ev.distance_m, a.gender, r.official_time_ms) is not null;
+
+comment on view public.performance_points is
+  'Every published valid swim scored in World Aquatics points. Excludes '
+  'events with no base time (the 50m switch events, relays), which have no '
+  'points system by design.';
+
+-- Which swims are the best anywhere, and the best within their own event.
+-- Ties share the top spot: two swimmers on identical points are both "best",
+-- which is the same rule finish places follow.
+create or replace view public.performance_highlights as
+with ranked as (
+  select
+    pp.*,
+    rank() over (order by pp.wa_points desc)                  as overall_rank,
+    rank() over (partition by pp.event_id order by pp.wa_points desc) as event_rank
+  from public.performance_points pp
+)
+select
+  ranked.*,
+  (overall_rank = 1) as is_best_overall,
+  (event_rank = 1)   as is_best_in_event
+from ranked;
+
+-- ---------------------------------------------------------------------------
+-- SEED TIMES FROM MEET HISTORY (volume 2 onward)
+-- ---------------------------------------------------------------------------
+-- Volume 1 is the only meet where a swimmer declares their own seed time,
+-- because it is the only meet with no history to draw on. From volume 2 the
+-- seed time is FOUND, not claimed: their best official time for that same
+-- stroke and distance in any earlier volume.
+--
+-- Matching is on (stroke, distance_m) rather than event id, so a swimmer who
+-- swam the 50m Freestyle in Vol. 1 is seeded on it in Vol. 2 even though the
+-- two volumes have different event rows.
+--
+-- Only published, valid, actually-swum times count. A DQ or an NS is not a
+-- time, and a draft result is not official yet.
+create or replace function public.best_previous_official_time(
+  p_athlete_id uuid,
+  p_event_id uuid
+)
+returns integer
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with target as (
+    select ev.stroke, ev.distance_m, s.meet_volume_id, mv.volume_number
+    from public.events ev
+    join public.sessions s on s.id = ev.session_id
+    join public.meet_volumes mv on mv.id = s.meet_volume_id
+    where ev.id = p_event_id
+  )
+  select min(r.official_time_ms)::integer
+  from public.results r
+  join public.heat_lanes hl on hl.id = r.heat_lane_id
+  join public.entries en on en.id = hl.entry_id
+  join public.events ev on ev.id = en.event_id
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  cross join target t
+  where en.athlete_id = p_athlete_id
+    and ev.stroke = t.stroke
+    and ev.distance_m = t.distance_m
+    and mv.volume_number < t.volume_number
+    and r.status = 'published'
+    and r.result_outcome = 'valid'
+    and r.official_time_ms is not null;
+$$;
+
+comment on function public.best_previous_official_time(uuid, uuid) is
+  'Best published valid time this athlete has swum for the same stroke and '
+  'distance in any EARLIER meet volume. NULL means they have never swum it, '
+  'which from volume 2 onward means they enter NT.';
+
+-- Applies the volume-2-onward rule at the moment an entry is written.
+--
+-- Volume 1 is left exactly as it was: the swimmer's declared seed time stands,
+-- because there is no history to override it with. From volume 2, whatever the
+-- client sent is discarded and replaced by what the swimmer actually swam —
+-- a declared time is a claim, and once there is a record there is no reason to
+-- take the claim over the record.
+create or replace function public.apply_historical_seed_time()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_volume_number integer;
+  v_seeds_as_nt boolean;
+  v_previous integer;
+begin
+  select mv.volume_number, ev.seeds_as_nt
+    into v_volume_number, v_seeds_as_nt
+  from public.events ev
+  join public.sessions s on s.id = ev.session_id
+  join public.meet_volumes mv on mv.id = s.meet_volume_id
+  where ev.id = new.event_id;
+
+  -- Volume 1, or an event nobody can declare a time for anyway: nothing to do.
+  -- (force_nt_for_switch_events handles the seeds_as_nt case.)
+  if v_volume_number is null or v_volume_number <= 1 or coalesce(v_seeds_as_nt, false) then
+    return new;
+  end if;
+
+  v_previous := public.best_previous_official_time(new.athlete_id, new.event_id);
+
+  if v_previous is null then
+    -- Never swum it before. NT — and NT swimmers are ordered by their best
+    -- event's World Aquatics points, so this is not the back of the heat by
+    -- default, just an unknown time.
+    new.is_nt := true;
+    new.seed_time_ms := null;
+  else
+    new.is_nt := false;
+    new.seed_time_ms := v_previous;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists apply_historical_seed_time_trigger on public.entries;
+create trigger apply_historical_seed_time_trigger
+  before insert on public.entries
+  for each row execute function public.apply_historical_seed_time();
 
 -- Entries for a switch event are always NT, whatever the client sends. The
 -- registration form hides the seed-time input, but a hidden input is not a

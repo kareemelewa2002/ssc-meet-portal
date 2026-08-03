@@ -46,3 +46,44 @@ export function withCompetitionRanks<T>(
 ): (T & { rank: number })[] {
   return assignCompetitionRanks(sorted, keyOf).map(({ item, rank }) => ({ ...item, rank }));
 }
+
+/**
+ * Splits a ranked field at a cutoff, refusing to break a tie that straddles it.
+ *
+ * Skins qualification takes the top 6, and each knockout round takes the top
+ * 4 then the top 2. Slicing the list at that index silently decides a tie by
+ * array position — two swimmers on identical times, one advances, one goes
+ * home, on nothing but sort order. The rule is that they swim off.
+ *
+ * `keyOf` is lower-is-better (a time). Returns who is clear of the cutoff,
+ * who is tied ON it, and how many places those tied swimmers are contesting.
+ */
+export interface CutoffResolution<T> {
+  /** Clear of the cutoff — through on merit, no swim-off needed. */
+  advancing: T[];
+  /** Tied exactly on the cutoff place. Empty when the cutoff is clean. */
+  swimOff: T[];
+  /** How many of `swimOff` advance. Always >= 1 when swimOff is non-empty. */
+  slotsRemaining: number;
+}
+
+export function resolveCutoff<T>(
+  sorted: readonly T[],
+  cutoff: number,
+  keyOf: (item: T) => number,
+): CutoffResolution<T> {
+  if (cutoff <= 0) return { advancing: [], swimOff: [], slotsRemaining: 0 };
+  // Field no bigger than the cutoff: everyone goes through, nothing to decide.
+  if (sorted.length <= cutoff) return { advancing: [...sorted], swimOff: [], slotsRemaining: 0 };
+
+  const boundary = keyOf(sorted[cutoff - 1]);
+  const clear = sorted.filter((item) => keyOf(item) < boundary);
+  const tied = sorted.filter((item) => keyOf(item) === boundary);
+
+  // The tie sits entirely inside the cutoff — it decides nothing.
+  if (clear.length + tied.length <= cutoff) {
+    return { advancing: [...clear, ...tied], swimOff: [], slotsRemaining: 0 };
+  }
+
+  return { advancing: clear, swimOff: tied, slotsRemaining: cutoff - clear.length };
+}
