@@ -758,6 +758,7 @@ $$;
 -- results. Read-only: it's a derived view over public.leaderboards, and
 -- inherits that table's RLS (public can already SELECT all leaderboard rows).
 -- =============================================================================
+drop view if exists public.series_leaderboards;
 create or replace view public.series_leaderboards as
 select
   athlete_id,
@@ -775,6 +776,7 @@ group by athlete_id, category;
 
 -- Best Performances: every valid race time ranked (one athlete may appear
 -- multiple times). Partitioned by stroke / distance / age group / gender.
+drop view if exists public.all_time_best_performances;
 create or replace view public.all_time_best_performances as
 select
   r.id as result_id,
@@ -834,6 +836,7 @@ where r.status = 'published'
 -- matching how real age-group records work. team_name/age_at_swim are
 -- correlated to the specific race that produced the best time (via
 -- `distinct on ... order by official_time_ms`), not just any race.
+drop view if exists public.all_time_best_performers;
 create or replace view public.all_time_best_performers as
 with race_rows as (
   select
@@ -2405,6 +2408,13 @@ $$;
 -- Rows only exist for events with a base time on file, so the switch events
 -- are absent by construction rather than by filter — they have no points
 -- system and deliberately keep it that way.
+-- create-or-replace cannot rename or reorder a view's columns, so a shape
+-- change makes this file un-rerunnable against any database still on the old
+-- shape. Dropping first is what keeps schema.sql idempotent across versions.
+-- Views hold no data, so there is nothing to lose by rebuilding them.
+drop view if exists public.performance_highlights;
+drop view if exists public.performance_points;
+
 create or replace view public.performance_points as
 select
   r.id                                          as result_id,
@@ -2808,6 +2818,7 @@ create trigger generate_heats_on_confirm_update
 -- Open. So one result produces up to three rows, one per board it belongs to.
 --
 -- Ranking is rank(), so equal times share a place and skip the next (1,1,3).
+drop view if exists public.event_results;
 create or replace view public.event_results as
 with scored as (
   select
