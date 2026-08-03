@@ -347,14 +347,23 @@ create table if not exists public.athletes (
   -- Under-15 parent/guardian linkage (see public.parent_link_status).
   parent_link_status public.parent_link_status not null default 'none',
   pending_parent_email text,
-  -- New swimmer profiles stay unapproved until an admin reviews them.
-  -- Unapproved athletes may edit their profile but cannot submit meet entries.
-  approved_by_admin boolean not null default false,
+  -- Vestigial. Account approval was removed: paying the entry fee is the
+  -- seriousness signal, and confirming that payment is the admin's decision
+  -- point. Kept only for historical rows and the admin "deactivate"
+  -- affordance, so it defaults to true and gates nothing.
+  approved_by_admin boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 -- Idempotent column add for databases that already had athletes without approval.
+-- Legacy teardown: a previous generation of this schema guarded
+-- approved_by_admin with a trigger that raises when auth.uid() is NULL. The
+-- Supabase SQL editor runs as superuser with no JWT, so that trigger made
+-- this very file un-rerunnable against any database it had already been
+-- applied to. CASCADE drops the dependent trigger with the function.
+drop function if exists public.enforce_athlete_approval_change() cascade;
+
 -- Retained for historical rows and for the admin "deactivate" affordance,
 -- but it no longer gates anything: athletes are approved on creation. The
 -- real gate is payment — an admin confirms cash at the desk, which confirms
@@ -1529,35 +1538,15 @@ create or replace trigger enforce_no_direct_skins_entry_trigger
 drop trigger if exists enforce_athlete_approved_for_entry_trigger on public.entries;
 drop function if exists public.enforce_athlete_approved_for_entry();
 
--- Only admins may flip approved_by_admin. Self-service inserts are forced
--- to false so a client cannot self-approve on signup.
-create or replace function public.enforce_athlete_approval_change()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if TG_OP = 'INSERT' then
-    if not public.is_admin() then
-      new.approved_by_admin := false;
-    end if;
-    return new;
-  end if;
-
-  if new.approved_by_admin is distinct from old.approved_by_admin
-    and not public.is_admin() then
-    raise exception 'Only an admin may approve or reject a swimmer registration.';
-  end if;
-
-  return new;
-end;
-$$;
-
-drop trigger if exists enforce_athlete_approval_change_trigger on public.athletes;
-create trigger enforce_athlete_approval_change_trigger
-  before insert or update on public.athletes
-  for each row execute function public.enforce_athlete_approval_change();
+-- public.enforce_athlete_approval_change() intentionally no longer exists.
+-- It guarded approved_by_admin, which no longer gates anything now that
+-- paying the entry fee is the only requirement. Worse, it actively broke two
+-- things: its INSERT branch forced every self-service signup back to
+-- approved_by_admin = false (silently undoing account auto-approval, since
+-- SECURITY DEFINER does not change auth.uid()), and its UPDATE branch raised
+-- whenever auth.uid() was NULL — which is exactly the case in the Supabase
+-- SQL editor, so re-running this file against an existing database failed.
+-- It is dropped near the top of this script.
 
 -- Stamps age_group_at_entry from the athlete's date_of_birth as of THIS
 -- volume's meet_date — never the athlete's current (mutable) age_group —

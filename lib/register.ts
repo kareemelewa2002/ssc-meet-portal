@@ -69,11 +69,7 @@ export interface AthleteProfileInsertPayload {
   specialty_events: string[];
   parent_link_status: ParentLinkStatus;
   pending_parent_email: string | null;
-  approved_by_admin: boolean;
 }
-
-export const SWIMMER_PENDING_APPROVAL_MESSAGE =
-  "Swimmer registration pending admin approval.";
 
 /**
  * Pure builder for the athletes-table insert payload — kept entirely
@@ -103,7 +99,11 @@ export function buildAthleteProfileInsert(
     specialty_events: bio.specialtyEvents,
     parent_link_status: needsParent ? "pending" : "none",
     pending_parent_email: needsParent ? (bio.parentEmail?.trim() || null) : null,
-    approved_by_admin: false,
+    // approved_by_admin is deliberately absent: account approval no longer
+    // exists, and the column now defaults to true at the database. Setting it
+    // here would re-create, one layer up, the exact bug that the dropped
+    // enforce_athlete_approval_change() trigger caused — new signups silently
+    // landing unapproved.
   };
 }
 

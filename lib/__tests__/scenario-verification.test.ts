@@ -69,8 +69,9 @@ describe("Scenario A — Registration, Approval & Parent Linkage Gate", () => {
     );
     expect(profile.parent_link_status).toBe("pending");
     expect(profile.pending_parent_email).toBe("guardian@example.com");
-    // New profiles always start unapproved, independent of parent linkage.
-    expect(profile.approved_by_admin).toBe(false);
+    // Parent linkage is now the only account-level gate — there is no
+    // separate admin approval for it to be independent of.
+    expect(profile).not.toHaveProperty("approved_by_admin");
   });
 
   it("A3: the safety acknowledgement blocks registration until accepted", () => {

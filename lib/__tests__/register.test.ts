@@ -63,7 +63,6 @@ describe("buildAthleteProfileInsert", () => {
     expect(payload.age_group).toBe("U14");
     expect(payload.parent_link_status).toBe("pending");
     expect(payload.pending_parent_email).toBe("parent@example.com");
-    expect(payload.approved_by_admin).toBe(false);
   });
 
   it("marks 15+ athletes as needing no parent link", () => {
@@ -73,7 +72,9 @@ describe("buildAthleteProfileInsert", () => {
     );
     expect(payload.parent_link_status).toBe("none");
     expect(payload.pending_parent_email).toBeNull();
-    expect(payload.approved_by_admin).toBe(false);
+    // Account approval is gone: the payload must not carry the vestigial
+    // approved_by_admin at all, so the database default (true) owns it.
+    expect(payload).not.toHaveProperty("approved_by_admin");
   });
 });
 
