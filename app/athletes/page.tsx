@@ -14,7 +14,7 @@ export default function AthletesDirectoryPage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h1 className="text-2xl font-bold tracking-tight">All athletes</h1>
             <Link
-              href="/leaderboards/all-time"
+              href="/leaderboards"
               className="inline-flex min-h-[48px] items-center justify-center rounded-lg border-2 border-black px-3 text-sm font-medium hover:bg-muted"
             >
               <Trophy className="mr-2 size-4" />

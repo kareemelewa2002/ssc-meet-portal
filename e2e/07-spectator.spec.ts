@@ -153,3 +153,35 @@ test.describe("Spectator, leaderboards & navigation", () => {
     expect(errors.filter((e) => !/favicon/i.test(e))).toEqual([]);
   });
 });
+
+test.describe("Leaderboards page carries every board", () => {
+  test("the All-Time tab is reachable from /leaderboards, not buried on Athletes", async ({ page }) => {
+    await login(page, CREDENTIALS.parent1);
+    // /leaderboards resolves the right volume server-side and redirects.
+    await page.goto("/leaderboards");
+    await page.waitForTimeout(1500);
+
+    // Meet standings plus the cross-volume boards, all on one screen.
+    await expect(page.getByRole("tab", { name: "Champions" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All-Time" })).toBeVisible();
+
+    await page.getByRole("tab", { name: "All-Time" }).click();
+    await page.waitForTimeout(800);
+    await expect(page.getByRole("tab", { name: "Best Performance", exact: true })).toBeVisible();
+  });
+
+  test("the points board has no event filter — comparing across events is its purpose", async ({ page }) => {
+    await login(page, CREDENTIALS.parent1);
+    await page.goto("/leaderboards/all-time");
+    await page.waitForTimeout(1500);
+
+    // Present on the time-ranked boards...
+    await expect(page.getByLabel("Event")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Best Performance", exact: true }).click();
+    await page.waitForTimeout(600);
+    // ...and gone on the points board, while age/gender stay.
+    await expect(page.getByLabel("Event")).toHaveCount(0);
+    await expect(page.getByLabel("Age group")).toBeVisible();
+  });
+});

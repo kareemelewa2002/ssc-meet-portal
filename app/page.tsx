@@ -1,18 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { LayoutDashboard, Lock, Radio, Trophy, Users, Waves } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
 import { MeetSummaryStats } from "@/components/home/meet-summary-stats";
 import { AppHeader } from "@/components/layout/app-header";
-import { DEMO_VOLUMES } from "@/lib/volumes";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
-import type { MeetVolumeRow, UserRole } from "@/lib/supabase/types";
+import type { UserRole } from "@/lib/supabase/types";
 
 /** Only roles with a dedicated deck portal get the Dashboard button. */
 const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
@@ -24,37 +21,9 @@ const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
 export default function HomePage() {
   const { outdoorMode } = useOutdoorMode();
   const { user } = useCurrentUser();
-  const [volumes, setVolumes] = useState<MeetVolumeRow[]>(DEMO_VOLUMES);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const supabase = createClient();
-        const { data, error } = await supabase
-          .from("meet_volumes")
-          .select("*")
-          .order("volume_number", { ascending: true });
-        if (!cancelled && !error && data && data.length > 0) {
-          setVolumes(data);
-        }
-      } catch {
-        // Non-fatal: the only thing volumes drive here is the Leaderboards
-        // href, which falls back to the all-time board.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // "Coming Soon" is gone: a volume with no confirmed date is simply not
-  // shown. The current meet is the most recent one that is actually running
-  // or already swum.
-  const currentVolume = useMemo(
-    () => [...volumes].reverse().find((v) => v.status !== "planned") ?? null,
-    [volumes],
-  );
+  // The volumes fetch that used to live here existed only to build the
+  // Leaderboards href. /leaderboards now resolves the right volume on the
+  // server, so the home page no longer needs to know about meets at all.
 
   const dashboardHref = ROLE_DASHBOARD_HREF[user?.role ?? "athlete"] ?? null;
 
@@ -66,7 +35,9 @@ export default function HomePage() {
       icon: Radio,
     },
     {
-      href: currentVolume ? `/events/${currentVolume.volume_number}/leaderboard` : "/leaderboards/all-time",
+      // /leaderboards resolves the right volume server-side, so this link
+      // is stable regardless of meet state.
+      href: "/leaderboards",
       label: "Leaderboards",
       description: "Meet standings for athletes and teams, plus all-time records.",
       icon: Trophy,
