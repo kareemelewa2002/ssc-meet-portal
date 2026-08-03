@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { resolveSkinsEventId } from "@/lib/skins-qualification";
-import { SkinsKnockout } from "@/components/admin/skins-knockout";
+import { SkinsBoardRunner } from "@/components/admin/skins-board-runner";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
@@ -87,7 +87,7 @@ export default function AdminPage() {
           {skinsResolving ? (
             <p className="text-sm text-muted-foreground">Resolving the Skins event…</p>
           ) : skinsEventId ? (
-            <SkinsKnockout eventId={skinsEventId} />
+            <SkinsBoardRunner eventId={skinsEventId} eventName="Skins" />
           ) : (
             !skinsError && (
               <p className="text-sm text-muted-foreground">

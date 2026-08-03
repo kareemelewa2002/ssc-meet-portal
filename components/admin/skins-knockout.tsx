@@ -46,7 +46,9 @@ export interface SkinsSwimmer {
 }
 
 export interface SkinsKnockoutProps {
-  eventId: string;
+  /** Kept on the contract for callers even though the bracket now scores via
+   * heat_lane ids resolved from real entries (see materialiseSkinsHeat). */
+  eventId?: string;
   eventName?: string;
   initialSwimmers?: SkinsSwimmer[];
   onRoundPublished?: (round: SkinsRound, advancing: SkinsSwimmer[]) => void;
@@ -100,7 +102,6 @@ function isEliminated(swimmer: SkinsSwimmer) {
 }
 
 export function SkinsKnockout({
-  eventId,
   eventName = "Session 3 — Skins",
   initialSwimmers,
   onRoundPublished,
@@ -306,7 +307,7 @@ export function SkinsKnockout({
       <Card className={className}>
         <CardHeader>
           <CardTitle>{eventName}</CardTitle>
-          <CardDescription>Event {eventId}</CardDescription>
+          <CardDescription>Skins knockout</CardDescription>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
@@ -334,7 +335,7 @@ export function SkinsKnockout({
             {eventName}
           </h2>
           <p className={cn("text-sm", outdoorMode ? "text-yellow-100/80" : "text-muted-foreground")}>
-            Event {eventId} · {roundLabel(round)}
+            {roundLabel(round)}
           </p>
         </div>
         <div className="flex items-center gap-2">

@@ -435,6 +435,20 @@ export type Database = {
         Args: { p_user_ids: string[] };
         Returns: { user_id: string; email: string | null; phone: string | null }[];
       };
+      materialise_skins_heat: {
+        Args: {
+          p_skins_event_id: string;
+          p_category: AgeGroup;
+          p_gender: Gender;
+          p_athlete_ids: string[];
+        };
+        Returns: {
+          athlete_id: string;
+          entry_id: string;
+          heat_lane_id: string;
+          lane_number: number;
+        }[];
+      };
       best_previous_official_time: {
         Args: { p_athlete_id: string; p_event_id: string };
         Returns: number | null;

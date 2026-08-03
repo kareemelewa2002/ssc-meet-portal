@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { PerformanceBadges } from "@/components/results/performance-badges";
 import { TeamLeaderboard } from "@/components/leaderboards/team-leaderboard";
 import { AppHeader } from "@/components/layout/app-header";
@@ -28,6 +29,7 @@ import type { AgeGroup, Gender } from "@/lib/supabase/types";
 export function AllTimeClient() {
   const [races, setRaces] = useState<RacePerformance[]>(DEMO_ALL_TIME_RACES);
   const [pointsRows, setPointsRows] = useState<PointsPerformance[]>([]);
+  const [pointsError, setPointsError] = useState<string | null>(null);
   const [gender, setGender] = useState<Gender>("male");
   const [ageGroup, setAgeGroup] = useState<AgeGroup>("Open");
   const [stroke, setStroke] = useState<string>("Freestyle");
@@ -43,6 +45,10 @@ export function AllTimeClient() {
       if (cancelled) return;
       setRaces(data);
       setPointsRows(points.data);
+      // Previously dropped: a missing performance_highlights view (a database
+      // still on an older schema) left the board silently empty and looking
+      // like nobody had swum anything.
+      setPointsError(points.error);
     })();
     return () => {
       cancelled = true;
@@ -231,6 +237,7 @@ export function AllTimeClient() {
           </Card>
         </TabsContent>
         <TabsContent value="points" className="mt-4">
+          <DataErrorBanner error={pointsError} subject="the World Aquatics points ranking" />
           <Card>
             <CardHeader>
               <CardTitle>

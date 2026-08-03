@@ -227,3 +227,52 @@ export async function resolveSkinsEventId(): Promise<FetchResult<string | null>>
 
   return { ...result, data: result.data[0]?.id ?? null };
 }
+
+/** One materialised Skins lane — a real entry a result can be written against. */
+export interface SkinsLane {
+  athleteId: string;
+  entryId: string;
+  heatLaneId: string;
+  laneNumber: number;
+}
+
+/**
+ * Creates (or returns) the real entries, heat and lanes for one Skins board.
+ *
+ * Without this the bracket had only placeholder ids, and publishing a round
+ * silently wrote nothing because every lane failed the UUID check on the way
+ * to heat_lanes. Idempotent, so reopening a board does not build a second
+ * field.
+ */
+export async function materialiseSkinsHeat(
+  skinsEventId: string,
+  category: AgeGroup,
+  gender: Gender,
+  athleteIds: string[],
+): Promise<FetchResult<SkinsLane[]>> {
+  const result = await runQuery<
+    { athlete_id: string; entry_id: string; heat_lane_id: string; lane_number: number }[]
+  >(
+    "Setting up the Skins heat",
+    async () => {
+      const supabase = createClient();
+      return supabase.rpc("materialise_skins_heat", {
+        p_skins_event_id: skinsEventId,
+        p_category: category,
+        p_gender: gender,
+        p_athlete_ids: athleteIds,
+      });
+    },
+    { empty: [] },
+  );
+
+  return {
+    ...result,
+    data: result.data.map((r) => ({
+      athleteId: r.athlete_id,
+      entryId: r.entry_id,
+      heatLaneId: r.heat_lane_id,
+      laneNumber: r.lane_number,
+    })),
+  };
+}

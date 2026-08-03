@@ -580,6 +580,24 @@ drop type if exists public.attendance_status;
 -- dropped and regenerated under the new numbering; scored heats are left
 -- alone rather than cascading away real times.
 alter table public.heats drop constraint if exists heats_event_id_heat_number_key;
+
+-- Renumber heats that were seeded under the old global numbering. Without
+-- this, an existing meet keeps "Heat 1..7" running across the whole event and
+-- the new titles ("17 & Under Women Heat 2") would be wrong on exactly the
+-- data the user is already looking at. heat_order preserves the running order
+-- the heats were actually seeded in, so renumbering never reorders the meet.
+update public.heats h
+set heat_number = renumbered.new_number
+from (
+  select id,
+         row_number() over (
+           partition by event_id, heat_group, gender
+           order by heat_order, heat_number, id
+         ) as new_number
+  from public.heats
+) renumbered
+where h.id = renumbered.id
+  and h.heat_number is distinct from renumbered.new_number;
 do $$
 begin
   if not exists (
@@ -2469,6 +2487,103 @@ select
   (overall_rank = 1) as is_best_overall,
   (event_rank = 1)   as is_best_in_event
 from ranked;
+
+-- ---------------------------------------------------------------------------
+-- SKINS LANES
+-- ---------------------------------------------------------------------------
+-- Skins qualification is derived from results, so a Skins swimmer has no
+-- entry of their own — and results are written against heat_lanes, which
+-- require one. The bracket UI therefore had nothing real to publish against:
+-- it built placeholder ids like 'skins-<athleteId>', which are not UUIDs, so
+-- every lane was skipped on publish and scoring a Skins round silently wrote
+-- nothing at all.
+--
+-- This materialises the missing rows for one board (age group x gender):
+-- entries for the Skins event, a heat, and its lanes. Idempotent — re-running
+-- returns the same heat and lanes rather than duplicating them, so an admin
+-- reopening the bracket does not create a second field.
+create or replace function public.materialise_skins_heat(
+  p_skins_event_id uuid,
+  p_category public.age_group,
+  p_gender public.gender,
+  p_athlete_ids uuid[]
+)
+returns table (athlete_id uuid, entry_id uuid, heat_lane_id uuid, lane_number integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+-- The RETURNS TABLE columns (athlete_id, entry_id, ...) are OUT parameters,
+-- and they shadow the identically named table columns — which made the
+-- ON CONFLICT (event_id, athlete_id) below ambiguous and the whole function
+-- fail at runtime. Resolve bare names to columns; every local is v_-prefixed
+-- so nothing else is affected.
+#variable_conflict use_column
+declare
+  v_heat_group public.heat_group;
+  v_heat_id uuid;
+  v_lane_seq integer[] := array[4,3,5,2,1,6];
+  v_athlete uuid;
+  v_entry uuid;
+  v_index integer := 0;
+begin
+  if not public.is_admin_or_referee() then
+    raise exception 'Only admins or referees may set up a Skins heat.';
+  end if;
+
+  if not exists (select 1 from public.events where id = p_skins_event_id and is_skins) then
+    raise exception 'materialise_skins_heat expects a Skins event (is_skins = true)';
+  end if;
+
+  v_heat_group := case when p_category = 'U14' then 'U13_14' else 'U17_OPEN' end;
+
+  select h.id into v_heat_id
+  from public.heats h
+  where h.event_id = p_skins_event_id
+    and h.heat_group = v_heat_group
+    and h.gender is not distinct from p_gender
+    and h.heat_number = 1;
+
+  if v_heat_id is null then
+    insert into public.heats (event_id, heat_group, gender, heat_number, heat_order, status)
+    values (p_skins_event_id, v_heat_group, p_gender, 1, 1, 'published')
+    returning id into v_heat_id;
+  end if;
+
+  foreach v_athlete in array p_athlete_ids loop
+    v_index := v_index + 1;
+    exit when v_index > array_length(v_lane_seq, 1);
+
+    -- Skins entries are always NT: there is no seed time for a knockout.
+    insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
+    values (p_skins_event_id, v_athlete, null, true, 'confirmed')
+    on conflict (event_id, athlete_id) do update set status = 'confirmed'
+    returning id into v_entry;
+
+    if v_entry is null then
+      select e.id into v_entry from public.entries e
+      where e.event_id = p_skins_event_id and e.athlete_id = v_athlete;
+    end if;
+
+    insert into public.heat_lanes (heat_id, lane_number, entry_id)
+    values (v_heat_id, v_lane_seq[v_index], v_entry)
+    on conflict (heat_id, entry_id) do update set lane_number = excluded.lane_number;
+  end loop;
+
+  return query
+  select a.id, en.id, hl.id, hl.lane_number
+  from public.heat_lanes hl
+  join public.entries en on en.id = hl.entry_id
+  join public.athletes a on a.id = en.athlete_id
+  where hl.heat_id = v_heat_id
+  order by hl.lane_number;
+end;
+$$;
+
+comment on function public.materialise_skins_heat(uuid, public.age_group, public.gender, uuid[]) is
+  'Creates (or returns) the entries, heat and lanes for one Skins board so a '
+  'round can actually be scored. Skins swimmers have no entry of their own '
+  'because qualification comes from results, and results need a heat_lane.';
 
 -- ---------------------------------------------------------------------------
 -- SEED TIMES FROM MEET HISTORY (volume 2 onward)
