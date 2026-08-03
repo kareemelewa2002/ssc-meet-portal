@@ -31,6 +31,7 @@ describe("transformLiveEvents", () => {
             id: "heat2",
             heat_number: 2,
             heat_group: "U17_OPEN",
+      gender: "male",
             status: "published",
             heat_lanes: [
               {
@@ -55,6 +56,7 @@ describe("transformLiveEvents", () => {
             id: "heat1",
             heat_number: 1,
             heat_group: "U17_OPEN",
+      gender: "male",
             status: "draft",
             heat_lanes: [
               {
@@ -114,6 +116,7 @@ describe("transformLiveEvents", () => {
             id: "heat1",
             heat_number: 1,
             heat_group: "U17_OPEN",
+      gender: "male",
             status: "published",
             heat_lanes: [
               {
@@ -170,6 +173,7 @@ describe("transformLiveEvents", () => {
             id: "heat1",
             heat_number: 1,
             heat_group: "U13_14",
+      gender: "male",
             status: "published",
             heat_lanes: [
               { lane_number: 1, entries: null, results: null },
@@ -214,6 +218,7 @@ describe("transformLiveEvents", () => {
             id: "heat1",
             heat_number: 1,
             heat_group: "U17_OPEN",
+      gender: "male",
             status: "published",
             heat_lanes: [
               {

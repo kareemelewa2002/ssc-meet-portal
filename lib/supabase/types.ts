@@ -10,7 +10,7 @@
 
 // Scope-locked to exactly 5 roles. 'usher'/'entry_helper' folded into
 // 'referee' (a single consolidated deck-official role now handles both
-// call-room attendance and time entry); 'team_captain' folded into 'coach'
+// lane assignment and time entry); 'team_captain' folded into 'coach'
 // (teams.captain_id already tracks "who manages this team" independently
 // of the role column — a coach can be a team's captain without a distinct
 // role value for it).
@@ -43,7 +43,6 @@ export type Gender = "male" | "female";
 
 export type VolumeStatus = "planned" | "scheduled" | "completed";
 
-export type AttendanceStatus = "pending" | "present" | "absent";
 
 export type AwardType = "best_swimmer" | "most_improved";
 
@@ -173,6 +172,9 @@ export type EventRow = {
   event_order: number;
   is_skins: boolean;
   is_relay: boolean;
+  /** The 50m stroke-switch events: always entered NT, seeded from World
+   * Aquatics points instead of a seed time. */
+  seeds_as_nt: boolean;
   created_at: string;
 };
 
@@ -191,6 +193,7 @@ export type HeatRow = {
   id: string;
   event_id: string;
   heat_group: HeatGroup;
+  gender: Gender | null;
   heat_number: number;
   heat_order: number;
   status: PublishStatus;
@@ -203,9 +206,6 @@ export type HeatLaneRow = {
   heat_id: string;
   lane_number: number;
   entry_id: string | null;
-  attendance_status: AttendanceStatus;
-  attendance_marked_at: string | null;
-  attendance_marked_by: string | null;
 };
 
 export type ResultRow = {
@@ -315,6 +315,7 @@ export type SkinsQualifierRpcRow = {
   athlete_name: string;
   team_name: string | null;
   category: AgeGroup;
+  gender: Gender;
   source_rank: number;
   best_time_ms: number;
   response: SkinsResponse;
@@ -411,7 +412,6 @@ export type Database = {
       skins_response: SkinsResponse;
       gender: Gender;
       volume_status: VolumeStatus;
-      attendance_status: AttendanceStatus;
       award_type: AwardType;
       parent_link_status: ParentLinkStatus;
       entry_status: EntryStatus;

@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
 import { seedEvent, type DraftHeat, type SeedableEntry } from "@/lib/seeding";
-import type { AgeGroup, HeatGroup } from "@/lib/supabase/types";
+import type { AgeGroup, Gender, HeatGroup } from "@/lib/supabase/types";
 
 export type SeedingStatus = "unseeded" | "draft_heats" | "published";
 
@@ -29,22 +29,35 @@ export interface RawSeedableEntryRow {
   age_group_at_entry: AgeGroup | null;
   seed_time_ms: number | null;
   is_nt: boolean;
-  athletes: { age: number; age_group: AgeGroup } | { age: number; age_group: AgeGroup }[] | null;
+  /** Supplied by callers that can compute it; the database seeder
+   * (public.generate_heats_for_event) derives it itself. */
+  wa_points?: number | null;
+  athletes:
+    | { age: number; age_group: AgeGroup; gender: Gender }
+    | { age: number; age_group: AgeGroup; gender: Gender }[]
+    | null;
 }
 
 export function mapEntryRowsToSeedableEntries(rows: RawSeedableEntryRow[]): SeedableEntry[] {
   return rows
-    .map((row) => {
+    .map((row): SeedableEntry | null => {
       const athlete = firstOf(row.athletes);
       // age_group_at_entry (frozen at registration time) is authoritative;
       // athletes.age_group is only a fallback for legacy rows predating it.
       const ageGroup = row.age_group_at_entry ?? athlete?.age_group;
       if (!ageGroup) return null;
+      // Gender decides which heat an entry belongs to, so an entry without
+      // one cannot be seeded at all — dropping it is correct and visible
+      // (the swimmer simply won't appear), where defaulting it would quietly
+      // put someone in the wrong race.
+      if (!athlete?.gender) return null;
       return {
         entryId: row.id,
         athleteId: row.athlete_id,
         ageGroup,
+        gender: athlete.gender,
         age: athlete?.age ?? 0,
+        waPoints: row.wa_points ?? null,
         seedTimeMs: row.seed_time_ms,
         isNt: row.is_nt,
       };
@@ -55,6 +68,7 @@ export function mapEntryRowsToSeedableEntries(rows: RawSeedableEntryRow[]): Seed
 export interface HeatInsertPayload {
   event_id: string;
   heat_group: HeatGroup;
+  gender: Gender;
   heat_number: number;
   heat_order: number;
   status: "draft";
@@ -81,6 +95,7 @@ export function prepareEventSeeding(
     heats: draftHeats.map((h) => ({
       event_id: eventId,
       heat_group: h.heatGroup,
+      gender: h.gender,
       heat_number: h.heatNumber,
       heat_order: h.heatOrder,
       status: "draft",
@@ -152,7 +167,7 @@ export async function seedEventAndWrite(eventId: string): Promise<SeedEventResul
 
   const { data: entryRows, error } = await supabase
     .from("entries")
-    .select("id, athlete_id, age_group_at_entry, seed_time_ms, is_nt, athletes ( age, age_group )")
+    .select("id, athlete_id, age_group_at_entry, seed_time_ms, is_nt, athletes ( age, age_group, gender )")
     .eq("event_id", eventId)
     .eq("status", "confirmed");
   if (error) return { success: false, error: error.message };
@@ -172,6 +187,7 @@ export async function seedEventAndWrite(eventId: string): Promise<SeedEventResul
       .insert({
         event_id: heat.event_id,
         heat_group: heat.heat_group,
+        gender: heat.gender,
         heat_number: heat.heat_number + heatNumberOffset,
         heat_order: heat.heat_order + heatNumberOffset,
         status: "draft",
@@ -232,6 +248,8 @@ export interface PreviewHeat {
   heatId: string;
   heatNumber: number;
   heatGroup: HeatGroup;
+  /** null only for legacy heats seeded before male/female were split. */
+  gender: Gender | null;
   status: "draft" | "published";
   lanes: PreviewLane[];
 }
@@ -240,6 +258,7 @@ interface RawPreviewHeat {
   id: string;
   heat_number: number;
   heat_group: HeatGroup;
+  gender: Gender | null;
   status: "draft" | "published";
   heat_lanes: Array<{
     id: string;
@@ -268,7 +287,7 @@ export async function fetchHeatPreview(eventId: string): Promise<PreviewHeat[]> 
       // Qualify the FK — athletes has two (user_id and parent_id), so a
       // bare "users(...)" embed is ambiguous to PostgREST (PGRST201) and
       // was silently emptying the entire heat sheet preview.
-      "id, heat_number, heat_group, status, heat_lanes ( id, lane_number, entry_id, entries ( seed_time_ms, is_nt, athletes ( id, users!athletes_user_id_fkey ( full_name ) ) ) )",
+      "id, heat_number, heat_group, gender, status, heat_lanes ( id, lane_number, entry_id, entries ( seed_time_ms, is_nt, athletes ( id, users!athletes_user_id_fkey ( full_name ) ) ) )",
     )
     .eq("event_id", eventId)
     .order("heat_number", { ascending: true });
@@ -278,6 +297,7 @@ export async function fetchHeatPreview(eventId: string): Promise<PreviewHeat[]> 
     heatId: heat.id,
     heatNumber: heat.heat_number,
     heatGroup: heat.heat_group,
+    gender: heat.gender ?? null,
     status: heat.status,
     lanes: (heat.heat_lanes ?? [])
       .map((lane) => {

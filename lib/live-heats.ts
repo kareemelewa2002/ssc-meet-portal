@@ -61,6 +61,7 @@ export interface RawHeat {
   id: string;
   heat_number: number;
   heat_group: HeatGroup;
+  gender: Gender | null;
   status: PublishStatus;
   heat_lanes: RawHeatLane[];
 }
@@ -107,6 +108,8 @@ export interface LiveHeatView {
   heatId: string;
   heatNumber: number;
   heatGroup: HeatGroup;
+  /** null only for legacy heats seeded before male/female were split. */
+  gender: Gender | null;
   status: PublishStatus;
   lanes: LiveLaneView[];
 }
@@ -134,6 +137,7 @@ export function transformLiveEvents(raw: RawEvent[]): LiveEventView[] {
         heatId: heat.id,
         heatNumber: heat.heat_number,
         heatGroup: heat.heat_group,
+        gender: heat.gender ?? null,
         status: heat.status,
         lanes: [...heat.heat_lanes]
           .map((lane): LiveLaneView | null => {
@@ -182,6 +186,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
         heatId: "demo-heat-1",
         heatNumber: 1,
         heatGroup: "U13_14",
+        gender: "female",
         status: "published",
         lanes: [
           {
@@ -198,9 +203,9 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
           {
             laneNumber: 4,
             athleteId: "demo-a2",
-            athleteName: "Kian Osei",
+            athleteName: "Nour Hadid",
             teamName: "Tidal Wave",
-            gender: "male",
+            gender: "female",
             ageGroup: "U14",
             seedTimeMs: null,
             isNt: true,
@@ -223,6 +228,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
         heatId: "demo-heat-2",
         heatNumber: 2,
         heatGroup: "U17_OPEN",
+        gender: "male",
         status: "published",
         lanes: [
           {
@@ -250,9 +256,9 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
           {
             laneNumber: 5,
             athleteId: "demo-a6",
-            athleteName: "Mia Reyes",
+            athleteName: "Omar Reyes",
             teamName: "Blue Marlins",
-            gender: "female",
+            gender: "male",
             ageGroup: "U17",
             seedTimeMs: 31000,
             isNt: false,
@@ -273,6 +279,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
         heatId: "demo-heat-3",
         heatNumber: 1,
         heatGroup: "U17_OPEN",
+        gender: "female",
         status: "published",
         lanes: [
           {
@@ -295,7 +302,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
 const LIVE_EVENT_SELECT = `
   id, name, stroke, distance_m, is_skins,
   heats (
-    id, heat_number, heat_group, status,
+    id, heat_number, heat_group, gender, status,
     heat_lanes (
       lane_number,
       entries (

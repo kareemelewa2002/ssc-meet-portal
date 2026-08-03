@@ -21,7 +21,7 @@ describe("rankBestPerformances", () => {
     expect(ranked.every((r) => r.rank <= 10)).toBe(true);
   });
 
-  it("applies dense ranking for tied times", () => {
+  it("ties equal times and skips the place they consumed (1,1,3 — not dense ranking)", () => {
     const races: RacePerformance[] = [
       {
         resultId: "1",
@@ -68,7 +68,9 @@ describe("rankBestPerformances", () => {
     });
     expect(ranked[0].rank).toBe(1);
     expect(ranked[1].rank).toBe(1);
-    expect(ranked[2].rank).toBe(2);
+    // Two swimmers took 1st, so the next is 3rd. This previously asserted 2
+    // (dense ranking), which is not the swimming placing rule.
+    expect(ranked[2].rank).toBe(3);
   });
 });
 

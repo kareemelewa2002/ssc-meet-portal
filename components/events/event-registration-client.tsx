@@ -230,12 +230,17 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
 
     const selections: EventSelection[] = Object.entries(drafts)
       .filter(([, d]) => d.selected)
-      .map(([eventId, d]) => ({
-        eventId,
-        isNt: d.isNt,
-        seedTimeMs: d.isNt ? null : parseTimeToMs(d.timeInput),
-      }));
+      .map(([eventId, d]) => {
+        const seedsAsNt = events.find((e) => e.id === eventId)?.seedsAsNt === true;
+        return {
+          eventId,
+          seedsAsNt,
+          isNt: seedsAsNt || d.isNt,
+          seedTimeMs: seedsAsNt || d.isNt ? null : parseTimeToMs(d.timeInput),
+        };
+      });
 
+    // Switch events are NT by definition, so they can never be "missing" a time.
     const invalidTime = selections.find((s) => !s.isNt && s.seedTimeMs == null);
     if (invalidTime) {
       setError(CLOCK_TIME_ERROR);
@@ -406,25 +411,37 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
                           )}
                         </div>
                         {!alreadyEntered && draft?.selected && (
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
-                            <ClockTimeInput
-                              id={`seed-${ev.id}`}
-                              label="Long Course seed time"
-                              value={draft.timeInput}
-                              disabled={draft.isNt}
-                              className="min-w-0 flex-1"
-                              onChange={(raw) => setTimeInput(ev.id, raw)}
-                            />
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant={draft.isNt ? "default" : "outline"}
-                              className="min-h-[48px] px-4 sm:mt-7"
-                              onClick={() => toggleNt(ev.id)}
-                            >
-                              NT
-                            </Button>
-                          </div>
+                          ev.seedsAsNt ? (
+                            // No seed time is asked for: a 25m+25m switch has
+                            // no equivalent anywhere else, so any time entered
+                            // would be a guess. Seeding uses the swimmer's best
+                            // other event instead.
+                            <p className="text-xs text-muted-foreground">
+                              <span className="font-bold text-foreground">Entered as NT.</span>{" "}
+                              This event has no comparable seed time — swimmers are seeded by
+                              their best event&apos;s World Aquatics points.
+                            </p>
+                          ) : (
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start">
+                              <ClockTimeInput
+                                id={`seed-${ev.id}`}
+                                label="Long Course seed time"
+                                value={draft.timeInput}
+                                disabled={draft.isNt}
+                                className="min-w-0 flex-1"
+                                onChange={(raw) => setTimeInput(ev.id, raw)}
+                              />
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={draft.isNt ? "default" : "outline"}
+                                className="min-h-[48px] px-4 sm:mt-7"
+                                onClick={() => toggleNt(ev.id)}
+                              >
+                                NT
+                              </Button>
+                            </div>
+                          )
                         )}
                       </div>
                     );

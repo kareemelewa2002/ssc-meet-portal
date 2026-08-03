@@ -27,6 +27,7 @@ const DEMO_INVITE: SkinsCandidate = {
   athleteName: "Leo Fontaine",
   teamName: "Tidal Wave",
   category: "Open",
+  gender: "male",
   sourceRank: 4,
   bestTimeMs: 28500,
   response: "pending",

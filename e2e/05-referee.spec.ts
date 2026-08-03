@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { CREDENTIALS, login, requireFixture } from "./helpers";
 
 test.describe("Consolidated Referee deck", () => {
-  test("loads with session/event/heat picker, attendance board, and time entry — no console errors", async ({ page }) => {
+  test("loads with session/event/heat picker and time entry — no console errors", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
     page.on("console", (m) => {
@@ -13,46 +13,11 @@ test.describe("Consolidated Referee deck", () => {
     await page.goto("/referee");
     await page.waitForTimeout(1500);
 
-    // The picker always renders. The attendance board only renders once a
-    // heat has lanes — heats are generated when an admin approves entries,
-    // so on a freshly-seeded database there are legitimately none yet.
+    // The picker always renders. The lane cards only render once a heat has
+    // lanes — heats are generated when an admin confirms entries, so on a
+    // freshly-seeded database there are legitimately none yet.
     await expect(page.getByText("Session, event & heat")).toBeVisible();
     expect(errors.filter((e) => !/favicon/i.test(e))).toEqual([]);
-
-    requireFixture(
-      (await page.getByText("Call-room attendance").count()) > 0,
-      "a seeded heat with lanes (approve swimmers in /admin to generate them)",
-    );
-    await expect(page.getByText("Call-room attendance")).toBeVisible();
-  });
-
-  test("referee can mark a lane Present, then Absent (call-room attendance, no separate usher role)", async ({ page }) => {
-    await login(page, CREDENTIALS.referee1);
-    await page.goto("/referee");
-    await page.waitForTimeout(1500);
-
-    const presentButtons = page.getByRole("button", { name: "Present" });
-    requireFixture((await presentButtons.count()) > 0, "seeded lanes for the default heat");
-
-    // This suite runs repeatedly against the same live, persistent
-    // heat_lanes rows (no reset between runs), so lane 1's starting
-    // attendance_status isn't guaranteed to be "pending" — assert the
-    // summary badge's text genuinely CHANGES on each click rather than
-    // assuming a fixed before/after count.
-    const summaryBadge = page.getByText(/\d+\/\d+ present/);
-    const before = await summaryBadge.innerText();
-    await presentButtons.first().click();
-    await page.waitForTimeout(800);
-    await expect(summaryBadge).not.toHaveText(before);
-
-    const afterPresent = await summaryBadge.innerText();
-    const absentButtons = page.getByRole("button", { name: "Absent" });
-    await absentButtons.first().click();
-    await page.waitForTimeout(800);
-    // Toggling to Absent moves that lane out of "present" — the summary
-    // must change again, not stay stuck (no usher write-lockdown quirks
-    // now that the referee owns attendance directly).
-    await expect(summaryBadge).not.toHaveText(afterPresent);
   });
 
   test("referee enters a valid time, saves progress, and it persists after reload", async ({ page }) => {

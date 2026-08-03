@@ -29,6 +29,7 @@ function mapRpcRow(row: SkinsQualifierRpcRow): SkinsCandidate {
     athleteName: row.athlete_name,
     teamName: row.team_name,
     category: row.category,
+    gender: row.gender,
     sourceRank: row.source_rank,
     bestTimeMs: row.best_time_ms,
     response: row.response,

@@ -22,9 +22,8 @@ import {
 } from "@/lib/results";
 import { createClient } from "@/lib/supabase/client";
 import { CLOCK_TIME_ERROR, formatTimeMs, timeDropSeconds } from "@/lib/format";
-import { ATTENDANCE_LABELS } from "@/lib/attendance";
 import { useToast } from "@/hooks/use-toast";
-import type { AttendanceStatus, DqReason, ResultOutcome } from "@/lib/supabase/types";
+import type { DqReason, ResultOutcome } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 
 export interface HeatLaneAthlete {
@@ -35,13 +34,6 @@ export interface HeatLaneAthlete {
   teamName?: string;
   seedTimeMs?: number | null;
   entryId?: string;
-  attendanceStatus?: AttendanceStatus;
-}
-
-function attendanceBadgeVariant(status: AttendanceStatus): "default" | "destructive" | "outline" {
-  if (status === "present") return "default";
-  if (status === "absent") return "destructive";
-  return "outline";
 }
 
 export interface LaneDraft {
@@ -92,31 +84,6 @@ export function HeatResultEntry({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const [attendance, setAttendance] = useState<Record<string, AttendanceStatus>>(() =>
-    Object.fromEntries(lanes.map((l) => [l.heatLaneId, l.attendanceStatus ?? "pending"])),
-  );
-
-  useEffect(() => {
-    const laneIds = new Set(lanes.map((l) => l.heatLaneId));
-    const supabase = createClient();
-    const channel = supabase
-      .channel(`referee-heat-attendance-${heatId}`)
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "heat_lanes" },
-        (payload) => {
-          const row = payload.new as { id?: string; attendance_status?: AttendanceStatus };
-          if (!row.id || !row.attendance_status || !laneIds.has(row.id)) return;
-          setAttendance((prev) => ({ ...prev, [row.id!]: row.attendance_status! }));
-        },
-      )
-      .subscribe();
-
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [heatId, lanes]);
-
   type ResultRow = {
     heat_lane_id: string;
     result_outcome: ResultOutcome | null;
@@ -346,12 +313,6 @@ export function HeatResultEntry({
                     </p>
                   )}
                 </div>
-                <Badge
-                  variant={attendanceBadgeVariant(attendance[lane.heatLaneId] ?? "pending")}
-                  className="h-7 shrink-0 px-2 text-xs"
-                >
-                  {ATTENDANCE_LABELS[attendance[lane.heatLaneId] ?? "pending"]}
-                </Badge>
               </div>
 
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">

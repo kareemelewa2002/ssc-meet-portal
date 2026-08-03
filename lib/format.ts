@@ -89,3 +89,11 @@ export function timeDropSeconds(
   if (officialTimeMs >= seedTimeMs) return null;
   return Math.round((seedTimeMs - officialTimeMs) / 10) / 100;
 }
+
+/** Heat-sheet label for the gender a heat is restricted to. null means a
+ * legacy heat seeded before male and female were split into separate races. */
+export function heatGenderLabel(gender: "male" | "female" | null | undefined): string | null {
+  if (gender === "male") return "Men";
+  if (gender === "female") return "Women";
+  return null;
+}

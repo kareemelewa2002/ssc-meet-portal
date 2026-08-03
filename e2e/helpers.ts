@@ -30,7 +30,7 @@ export function requireFixture(present: boolean, what: string) {
 export const SEED_PASSWORD = "Password123!";
 
 // Scope-locked to exactly 5 roles: admin, referee, coach, athlete, parent.
-// The Referee role is fully consolidated (attendance + time entry, one
+// The Referee role is fully consolidated (lane assignment + time entry, one
 // account, no lane-claim/Chief tier) — there is no usher, entry_helper, or
 // chief_referee anymore.
 export const CREDENTIALS = {

@@ -244,28 +244,28 @@ on conflict (meet_volume_id, session_number) do update
 create temporary table _seed_canonical_events on commit drop as
 select * from (values
   -- Session 1
-  (1, '100m Freestyle', 'Freestyle', 100, 1, false, false),
-  (1, '50m Back-to-Breast Switch (25m Back + 25m Breast)', 'Back-to-Breast Switch', 50, 2, false, false),
-  (1, '50m Butterfly', 'Butterfly', 50, 3, false, false),
-  (1, '4x50m Medley Relay (Mixed: 2 Boys + 2 Girls)', 'Medley Relay', 200, 4, true, false),
-  (1, '4x50m Freestyle Relay (Male)', 'Freestyle Relay', 200, 5, true, false),
-  (1, '4x50m Freestyle Relay (Female)', 'Freestyle Relay', 200, 6, true, false),
-  (1, '4x50m Freestyle Relay (Mixed)', 'Freestyle Relay', 200, 7, true, false),
+  (1, '100m Freestyle', 'Freestyle', 100, 1, false, false, false),
+  (1, '50m Back-to-Breast Switch (25m Back + 25m Breast)', 'Back-to-Breast Switch', 50, 2, false, false, true),
+  (1, '50m Butterfly', 'Butterfly', 50, 3, false, false, false),
+  (1, '4x50m Medley Relay (Mixed: 2 Boys + 2 Girls)', 'Medley Relay', 200, 4, true, false, false),
+  (1, '4x50m Freestyle Relay (Male)', 'Freestyle Relay', 200, 5, true, false, false),
+  (1, '4x50m Freestyle Relay (Female)', 'Freestyle Relay', 200, 6, true, false, false),
+  (1, '4x50m Freestyle Relay (Mixed)', 'Freestyle Relay', 200, 7, true, false, false),
   -- Session 2
-  (2, '100m Individual Medley (IM)', 'Individual Medley', 100, 1, false, false),
-  (2, '50m Backstroke', 'Backstroke', 50, 2, false, false),
-  (2, '50m Fly-to-Back Switch (25m Fly + 25m Back)', 'Fly-to-Back Switch', 50, 3, false, false),
-  (2, '50m Breaststroke', 'Breaststroke', 50, 4, false, false),
-  (2, '4x50m Freestyle Relay (Mixed: 2 Boys + 2 Girls)', 'Freestyle Relay', 200, 5, true, false),
-  (2, '4x50m Medley Relay (Male)', 'Medley Relay', 200, 6, true, false),
-  (2, '4x50m Medley Relay (Female)', 'Medley Relay', 200, 7, true, false),
+  (2, '100m Individual Medley (IM)', 'Individual Medley', 100, 1, false, false, false),
+  (2, '50m Backstroke', 'Backstroke', 50, 2, false, false, false),
+  (2, '50m Fly-to-Back Switch (25m Fly + 25m Back)', 'Fly-to-Back Switch', 50, 3, false, false, true),
+  (2, '50m Breaststroke', 'Breaststroke', 50, 4, false, false, false),
+  (2, '4x50m Freestyle Relay (Mixed: 2 Boys + 2 Girls)', 'Freestyle Relay', 200, 5, true, false, false),
+  (2, '4x50m Medley Relay (Male)', 'Medley Relay', 200, 6, true, false, false),
+  (2, '4x50m Medley Relay (Female)', 'Medley Relay', 200, 7, true, false, false),
   -- Session 3
-  (3, '50m Breast-to-Free Switch (25m Breast + 25m Free)', 'Breast-to-Free Switch', 50, 1, false, false),
-  (3, '4x100m Individual Medley Relay (Male)', 'Individual Medley Relay', 400, 2, true, false),
-  (3, '4x100m Individual Medley Relay (Female)', 'Individual Medley Relay', 400, 3, true, false),
-  (3, '50m Freestyle', 'Freestyle', 50, 4, false, false),
-  (3, '50m Freestyle Skins', 'Freestyle', 50, 5, false, true)
-) as v(session_number, name, stroke, distance_m, event_order, is_relay, is_skins);
+  (3, '50m Breast-to-Free Switch (25m Breast + 25m Free)', 'Breast-to-Free Switch', 50, 1, false, false, true),
+  (3, '4x100m Individual Medley Relay (Male)', 'Individual Medley Relay', 400, 2, true, false, false),
+  (3, '4x100m Individual Medley Relay (Female)', 'Individual Medley Relay', 400, 3, true, false, false),
+  (3, '50m Freestyle', 'Freestyle', 50, 4, false, false, false),
+  (3, '50m Freestyle Skins', 'Freestyle', 50, 5, false, true, false)
+) as v(session_number, name, stroke, distance_m, event_order, is_relay, is_skins, seeds_as_nt);
 
 -- Sync columns for events that already exist (a name can persist across
 -- rewrites while its stroke/distance/order/flags changed).
@@ -274,17 +274,18 @@ set stroke = c.stroke,
     distance_m = c.distance_m,
     event_order = c.event_order,
     is_relay = c.is_relay,
-    is_skins = c.is_skins
+    is_skins = c.is_skins,
+    seeds_as_nt = c.seeds_as_nt
 from public.sessions s, _seed_canonical_events c
 where e.session_id = s.id
   and s.session_number = c.session_number
   and e.name = c.name
   and s.meet_volume_id = (select id from public.meet_volumes where volume_number = 1)
-  and (e.stroke, e.distance_m, e.event_order, e.is_relay, e.is_skins)
-      is distinct from (c.stroke, c.distance_m, c.event_order, c.is_relay, c.is_skins);
+  and (e.stroke, e.distance_m, e.event_order, e.is_relay, e.is_skins, e.seeds_as_nt)
+      is distinct from (c.stroke, c.distance_m, c.event_order, c.is_relay, c.is_skins, c.seeds_as_nt);
 
-insert into public.events (session_id, name, stroke, distance_m, event_order, is_relay, is_skins)
-select s.id, c.name, c.stroke, c.distance_m, c.event_order, c.is_relay, c.is_skins
+insert into public.events (session_id, name, stroke, distance_m, event_order, is_relay, is_skins, seeds_as_nt)
+select s.id, c.name, c.stroke, c.distance_m, c.event_order, c.is_relay, c.is_skins, c.seeds_as_nt
 from public.sessions s
 join public.meet_volumes mv on mv.id = s.meet_volume_id and mv.volume_number = 1
 join _seed_canonical_events c on c.session_number = s.session_number
@@ -313,7 +314,7 @@ where e.session_id = s.id
 do $$
 begin
   -- A single dedicated Referee account — the consolidated Referee role
-  -- covers call-room attendance AND heat time entry for whichever heat
+  -- covers lane assignment AND heat time entry for whichever heat
   -- they open; no lane-claim/chief tier, so there's no need for a pool
   -- of interchangeable referee seats.
   perform public._seed_get_or_create_user('referee1@ssc-demo.test', 'Marcus Lee', 'referee', '+1-555-0102');

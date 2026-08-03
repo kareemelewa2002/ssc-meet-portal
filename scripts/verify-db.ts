@@ -119,11 +119,11 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "auth", table: "users", trigger: "on_auth_user_created" },
   { schema: "public", table: "athletes", trigger: "athletes_set_updated_at" },
   { schema: "public", table: "entries", trigger: "enforce_entry_status_change_trigger" },
+  { schema: "public", table: "entries", trigger: "force_nt_for_switch_events_trigger" },
   { schema: "public", table: "entries", trigger: "enforce_no_direct_skins_entry_trigger" },
   { schema: "public", table: "entries", trigger: "generate_heats_on_confirm_insert" },
   { schema: "public", table: "entries", trigger: "generate_heats_on_confirm_update" },
   { schema: "public", table: "entries", trigger: "set_entry_age_group_trigger" },
-  { schema: "public", table: "heat_lanes", trigger: "stamp_attendance_marked_trigger" },
   { schema: "public", table: "heats", trigger: "heats_set_updated_at" },
   { schema: "public", table: "meet_volumes", trigger: "meet_volumes_set_updated_at" },
   { schema: "public", table: "results", trigger: "enforce_result_publish_trigger" },
@@ -147,6 +147,10 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
  * scripts but never actually existed, so a partial manual cleanup that
  * dropped the wrong name still gets caught. */
 const LEGACY_TRIGGERS: Record<string, string> = {
+  stamp_attendance_marked_trigger:
+    "Call-room attendance was removed — a swimmer who does not swim is published NS on the " +
+    "result, which is the single authoritative record. This trigger stamped columns that no " +
+    "longer exist and would now fail every heat_lanes update.",
   enforce_athlete_approval_change_trigger:
     "Silently rewrites every self-service signup back to approved_by_admin = false " +
     "(SECURITY DEFINER does not change auth.uid(), so handle_new_auth_user is not exempt), " +

@@ -17,6 +17,9 @@ function candidate(
     athleteName: overrides.athleteName ?? overrides.athleteId,
     teamName: overrides.teamName ?? null,
     category: overrides.category ?? "Open",
+    // Default to one gender so tests that aren't about the gender split stay
+    // in a single board and keep asserting what they were written to assert.
+    gender: overrides.gender ?? "male",
     sourceRank: overrides.sourceRank,
     bestTimeMs: overrides.bestTimeMs ?? 20000 + overrides.sourceRank * 100,
     response: overrides.response ?? "pending",
@@ -95,8 +98,10 @@ describe("buildSkinsQualifierBoards", () => {
     candidates[0] = { ...candidates[0], response: "declined" }; // u17-1 declines
 
     const boards = buildSkinsQualifierBoards(candidates);
-    const u17 = boards.find((b) => b.category === "U17")!;
-    const open = boards.find((b) => b.category === "Open")!;
+    // A board is (category x gender) now — these candidates are all male, so
+    // the female boards for the same categories are legitimately empty.
+    const u17 = boards.find((b) => b.category === "U17" && b.gender === "male")!;
+    const open = boards.find((b) => b.category === "Open" && b.gender === "male")!;
 
     expect(u17.active.map((q) => q.athleteId)).toEqual([
       "u17-2",
@@ -141,5 +146,47 @@ describe("populateSkinsHeatSheets", () => {
     const heats = populateSkinsHeatSheets(mixed);
     expect(heats).toHaveLength(1);
     expect(heats[0].lanes.map((l) => l.athleteId)).toEqual(["a1"]);
+  });
+});
+
+describe("Skins boards are split by gender as well as age group", () => {
+  it("men and women fill their own six slots rather than competing for the same ones", () => {
+    // Eight women and eight men in one category. If gender were ignored, the
+    // six slots would be shared and the slower gender would be squeezed out.
+    const women = Array.from({ length: 8 }, (_, i) =>
+      candidate({ athleteId: `f${i + 1}`, gender: "female", sourceRank: i + 1, bestTimeMs: 26000 + i * 100 }),
+    );
+    const men = Array.from({ length: 8 }, (_, i) =>
+      candidate({ athleteId: `m${i + 1}`, gender: "male", sourceRank: i + 1, bestTimeMs: 25000 + i * 100 }),
+    );
+
+    const boards = buildSkinsQualifierBoards([...women, ...men]);
+    const openFemale = boards.find((b) => b.category === "Open" && b.gender === "female")!;
+    const openMale = boards.find((b) => b.category === "Open" && b.gender === "male")!;
+
+    expect(openFemale.active).toHaveLength(SKINS_SLOTS_PER_CATEGORY);
+    expect(openMale.active).toHaveLength(SKINS_SLOTS_PER_CATEGORY);
+    expect(openFemale.active.every((q) => q.gender === "female")).toBe(true);
+    expect(openMale.active.every((q) => q.gender === "male")).toBe(true);
+  });
+
+  it("produces one board per category x gender", () => {
+    const boards = buildSkinsQualifierBoards([]);
+    expect(boards).toHaveLength(6);
+    expect(boards.map((b) => `${b.category}-${b.gender}`)).toEqual([
+      "U14-female", "U14-male", "U17-female", "U17-male", "Open-female", "Open-male",
+    ]);
+  });
+
+  it("never builds a mixed-gender skins heat", () => {
+    const accepted: SkinsCandidate[] = [
+      candidate({ athleteId: "f1", gender: "female", category: "Open", sourceRank: 1, response: "accepted" }),
+      candidate({ athleteId: "m1", gender: "male", category: "Open", sourceRank: 1, response: "accepted" }),
+    ];
+    const heats = populateSkinsHeatSheets(accepted);
+
+    expect(heats).toHaveLength(2);
+    expect(heats.map((h) => h.gender)).toEqual(["female", "male"]);
+    for (const heat of heats) expect(heat.lanes).toHaveLength(1);
   });
 });

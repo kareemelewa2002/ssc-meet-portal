@@ -16,7 +16,7 @@ function rawEntry(overrides: Partial<RawSeedableEntryRow> & { id: string }): Raw
     age_group_at_entry: "age_group_at_entry" in overrides ? overrides.age_group_at_entry! : "Open",
     seed_time_ms: overrides.seed_time_ms ?? 30000,
     is_nt: overrides.is_nt ?? false,
-    athletes: "athletes" in overrides ? overrides.athletes! : { age: 20, age_group: "Open" },
+    athletes: "athletes" in overrides ? overrides.athletes! : { age: 20, age_group: "Open", gender: "male" },
   };
 }
 
@@ -26,7 +26,7 @@ describe("mapEntryRowsToSeedableEntries", () => {
       rawEntry({
         id: "e1",
         age_group_at_entry: "U14",
-        athletes: { age: 15, age_group: "U17" }, // athlete has since aged up
+        athletes: { age: 15, age_group: "U17", gender: "male" }, // athlete has since aged up
       }),
     ];
     const [seedable] = mapEntryRowsToSeedableEntries(rows);
@@ -34,7 +34,7 @@ describe("mapEntryRowsToSeedableEntries", () => {
   });
 
   it("falls back to the athlete's age_group for legacy rows with no snapshot", () => {
-    const rows = [rawEntry({ id: "e1", age_group_at_entry: null, athletes: { age: 16, age_group: "U17" } })];
+    const rows = [rawEntry({ id: "e1", age_group_at_entry: null, athletes: { age: 16, age_group: "U17", gender: "male" } })];
     const [seedable] = mapEntryRowsToSeedableEntries(rows);
     expect(seedable.ageGroup).toBe("U17");
   });
@@ -44,9 +44,19 @@ describe("mapEntryRowsToSeedableEntries", () => {
     expect(mapEntryRowsToSeedableEntries(rows)).toHaveLength(0);
   });
 
+  it("drops rows with no gender — a swimmer with no gender has no heat to go in", () => {
+    const rows = [
+      rawEntry({
+        id: "e1",
+        athletes: { age: 20, age_group: "Open" } as unknown as RawSeedableEntryRow["athletes"],
+      }),
+    ];
+    expect(mapEntryRowsToSeedableEntries(rows)).toHaveLength(0);
+  });
+
   it("normalizes array-shaped athlete embeds", () => {
     const rows = [
-      rawEntry({ id: "e1", age_group_at_entry: null, athletes: [{ age: 14, age_group: "U14" }] }),
+      rawEntry({ id: "e1", age_group_at_entry: null, athletes: [{ age: 14, age_group: "U14", gender: "female" }] }),
     ];
     const [seedable] = mapEntryRowsToSeedableEntries(rows);
     expect(seedable.age).toBe(14);
@@ -59,7 +69,7 @@ describe("prepareEventSeeding — fetch -> transform -> seedEvent -> write paylo
     const rows: RawSeedableEntryRow[] = [
       rawEntry({ id: "e1", age_group_at_entry: "Open", seed_time_ms: 24000 }),
       rawEntry({ id: "e2", age_group_at_entry: "Open", seed_time_ms: 25000 }),
-      rawEntry({ id: "e3", age_group_at_entry: "U14", is_nt: true, seed_time_ms: null, athletes: { age: 14, age_group: "U14" } }),
+      rawEntry({ id: "e3", age_group_at_entry: "U14", is_nt: true, seed_time_ms: null, athletes: { age: 14, age_group: "U14", gender: "male" } }),
     ];
 
     const prepared = prepareEventSeeding("event-123", rows);

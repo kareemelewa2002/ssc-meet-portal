@@ -13,11 +13,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { HeatResultEntry } from "@/components/referee/heat-result-entry";
-import { AttendanceBoard } from "@/components/referee/attendance-board";
 import { AppHeader } from "@/components/layout/app-header";
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
-import type { AttendanceStatus, PublishStatus, SessionRow } from "@/lib/supabase/types";
+import type { Gender, PublishStatus, SessionRow } from "@/lib/supabase/types";
+import { heatGenderLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface RefereeEventOption {
@@ -29,13 +29,13 @@ interface RefereeEventOption {
 interface RefereeHeatOption {
   id: string;
   heatNumber: number;
+  /** null only for legacy heats seeded before male/female were split. */
+  gender: Gender | null;
   status: PublishStatus;
 }
 
-// A superset shape satisfying both HeatResultEntry's HeatLaneAthlete (which
-// treats athleteId/attendanceStatus as optional, for a lane that might not
-// have a seeded entry yet) and AttendanceBoard's stricter AttendanceLane —
-// letting one fetched array feed both components without casts.
+// Satisfies HeatResultEntry's HeatLaneAthlete, which treats athleteId as
+// optional for a lane that might not have a seeded entry yet.
 interface RefereeLane {
   heatLaneId: string;
   laneNumber: number;
@@ -44,7 +44,6 @@ interface RefereeLane {
   teamName?: string;
   seedTimeMs?: number | null;
   entryId?: string;
-  attendanceStatus: AttendanceStatus;
 }
 
 /**
@@ -64,7 +63,7 @@ interface RefereeLane {
 
 /**
  * The consolidated Referee role's deck page: one screen covers call-room
- * attendance AND heat time entry (see AGENTS scope lock — usher/entry_helper/
+ * lane assignment AND heat time entry (see AGENTS scope lock — usher/entry_helper/
  * chief_referee no longer exist as separate concepts). Any referee who opens
  * a heat has full write access to every lane; the terminal action is
  * submitting the completed card to the Admin review queue, never publishing
@@ -150,7 +149,7 @@ export default function RefereePage() {
       const supabase = createClient();
       const { data, error } = await supabase
         .from("heats")
-        .select("id, heat_number, status")
+        .select("id, heat_number, gender, status")
         .eq("event_id", selectedEventId)
         .order("heat_number", { ascending: true });
 
@@ -164,6 +163,7 @@ export default function RefereePage() {
       const mapped: RefereeHeatOption[] = data.map((h) => ({
         id: h.id,
         heatNumber: h.heat_number,
+        gender: h.gender ?? null,
         status: h.status,
       }));
       setHeats(mapped);
@@ -194,7 +194,7 @@ export default function RefereePage() {
         .select(
           // Qualify the FK — athletes has two (user_id and parent_id), so a
           // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-          "id, lane_number, attendance_status, entries ( id, seed_time_ms, athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) )",
+          "id, lane_number, entries ( id, seed_time_ms, athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) )",
         )
         .eq("heat_id", selectedHeatId)
         .order("lane_number", { ascending: true });
@@ -208,7 +208,6 @@ export default function RefereePage() {
       type RawLane = {
         id: string;
         lane_number: number;
-        attendance_status: AttendanceStatus;
         entries:
           | {
               id: string;
@@ -260,7 +259,6 @@ export default function RefereePage() {
             teamName: team?.name,
             seedTimeMs: entry?.seed_time_ms ?? null,
             entryId: entry?.id,
-            attendanceStatus: lane.attendance_status ?? "pending",
           };
         })
         .filter((l): l is RefereeLane => l !== null)
@@ -387,7 +385,9 @@ export default function RefereePage() {
               <SelectContent>
                 {heats.map((h) => (
                   <SelectItem key={h.id} value={h.id}>
-                    Heat {h.heatNumber} {h.status === "published" ? "(Published)" : "(Draft)"}
+                    Heat {h.heatNumber}
+                    {heatGenderLabel(h.gender) ? ` — ${heatGenderLabel(h.gender)}` : ""}{" "}
+                    {h.status === "published" ? "(Published)" : "(Draft)"}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -416,13 +416,15 @@ export default function RefereePage() {
         </Card>
       ) : (
         <>
-          <AttendanceBoard outdoorMode={outdoorMode} lanes={lanes} />
-
           <HeatResultEntry
             heatId={heatId}
             heatLabel={
               selectedHeat
-                ? `${sessionEvents.find((e) => e.id === eventId)?.name ?? "Event"} — Heat ${selectedHeat.heatNumber}`
+                ? `${sessionEvents.find((e) => e.id === eventId)?.name ?? "Event"} — ${
+                    heatGenderLabel(selectedHeat.gender)
+                      ? `${heatGenderLabel(selectedHeat.gender)} `
+                      : ""
+                  }Heat ${selectedHeat.heatNumber}`
                 : "Heat"
             }
             lanes={lanes}

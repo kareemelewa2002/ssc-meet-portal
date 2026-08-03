@@ -3,6 +3,7 @@ import {
   MAX_EVENTS_MESSAGE,
   MAX_EVENTS_PER_MEET,
   RACE_PRICE_EGP,
+  buildEntryInserts,
   computeRegistrationTotalEgp,
   validateEventCount,
 } from "@/lib/event-registration";
@@ -30,5 +31,31 @@ describe("MAX_EVENTS_PER_MEET cap", () => {
   it("the cap is per meet, not per submission", () => {
     // Someone who already entered 4 cannot add even one more.
     expect(validateEventCount(1, 4).ok).toBe(false);
+  });
+});
+
+describe("stroke-switch events are always entered NT", () => {
+  it("forces is_nt and discards any seed time the client supplied", () => {
+    const [payload] = buildEntryInserts("athlete-1", [
+      { eventId: "switch-event", seedTimeMs: 28000, isNt: false, seedsAsNt: true },
+    ]);
+    expect(payload.is_nt).toBe(true);
+    expect(payload.seed_time_ms).toBeNull();
+  });
+
+  it("leaves ordinary events alone", () => {
+    const [payload] = buildEntryInserts("athlete-1", [
+      { eventId: "normal-event", seedTimeMs: 28000, isNt: false, seedsAsNt: false },
+    ]);
+    expect(payload.is_nt).toBe(false);
+    expect(payload.seed_time_ms).toBe(28000);
+  });
+
+  it("an explicit NT on an ordinary event still clears the time", () => {
+    const [payload] = buildEntryInserts("athlete-1", [
+      { eventId: "normal-event", seedTimeMs: 28000, isNt: true },
+    ]);
+    expect(payload.is_nt).toBe(true);
+    expect(payload.seed_time_ms).toBeNull();
   });
 });

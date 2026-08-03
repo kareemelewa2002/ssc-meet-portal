@@ -200,17 +200,6 @@ end $$;
 
 do $$
 begin
-  if not exists (select 1 from pg_type where typname = 'attendance_status') then
-    create type public.attendance_status as enum (
-      'pending',
-      'present',
-      'absent'
-    );
-  end if;
-end $$;
-
-do $$
-begin
   if not exists (select 1 from pg_type where typname = 'award_type') then
     create type public.award_type as enum (
       'best_swimmer',
@@ -475,8 +464,23 @@ create table if not exists public.events (
   -- have an auto-assignment pipeline) so seeding/registration UIs can tell
   -- "no direct entries by design" apart from "not yet seeded."
   is_relay boolean not null default false,
+  -- The 50m stroke-switch events (25m of one stroke + 25m of another) have no
+  -- equivalent anywhere else, so a swimmer has no comparable time to declare
+  -- and any seed time they entered would be guesswork. Entries for these are
+  -- forced to NT and seeded from World Aquatics points instead — see
+  -- public.athlete_best_wa_points().
+  seeds_as_nt boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+alter table public.events add column if not exists seeds_as_nt boolean not null default false;
+
+-- Existing databases: the switch events are identifiable by their stroke,
+-- which is what the canonical program in seed-demo.sql sets.
+update public.events
+set seeds_as_nt = true
+where seeds_as_nt = false
+  and stroke ilike '%switch%';
 
 -- Idempotent column add for databases created before is_relay existed.
 alter table public.events
@@ -519,6 +523,11 @@ create table if not exists public.heats (
   id uuid primary key default gen_random_uuid(),
   event_id uuid not null references public.events (id) on delete cascade,
   heat_group public.heat_group not null,
+  -- Male and female swim separately in every age group, so gender is part of
+  -- a heat's identity alongside heat_group. Nullable only to keep already
+  -- scored legacy heats (seeded before the split, possibly mixed) readable —
+  -- every heat generated from here on has it set.
+  gender public.gender,
   heat_number integer not null,
   heat_order integer not null default 0,
   status public.publish_status not null default 'draft',
@@ -526,6 +535,9 @@ create table if not exists public.heats (
   updated_at timestamptz not null default now(),
   unique (event_id, heat_number)
 );
+
+alter table public.heats add column if not exists gender public.gender;
+
 
 create index if not exists heats_event_id_idx on public.heats (event_id);
 create index if not exists heats_status_idx on public.heats (status);
@@ -535,16 +547,28 @@ create table if not exists public.heat_lanes (
   heat_id uuid not null references public.heats (id) on delete cascade,
   lane_number integer not null check (lane_number between 1 and 6),
   entry_id uuid references public.entries (id) on delete cascade,
-  -- Call-room check-in by Ushers before the heat starts behind the blocks.
-  attendance_status public.attendance_status not null default 'pending',
-  attendance_marked_at timestamptz,
-  attendance_marked_by uuid references public.users (id) on delete set null,
   unique (heat_id, lane_number),
   unique (heat_id, entry_id)
 );
 
+-- Attendance teardown. Call-room check-in was a second, redundant record of
+-- who turned up: a swimmer who does not swim is published as NS on the
+-- result, which is the authoritative record and the one that actually feeds
+-- scoring. Marking attendance separately meant the same fact could be
+-- recorded twice and disagree — present in the call room, NS on the sheet —
+-- with no rule for which won. `create table if not exists` cannot remove
+-- columns, so an existing database needs this explicitly.
+drop trigger if exists stamp_attendance_marked_trigger on public.heat_lanes;
+drop function if exists public.stamp_attendance_marked() cascade;
+drop index if exists public.heat_lanes_attendance_idx;
+alter table public.heat_lanes
+  drop column if exists attendance_status,
+  drop column if exists attendance_marked_at,
+  drop column if exists attendance_marked_by;
+drop type if exists public.attendance_status;
+
+
 create index if not exists heat_lanes_heat_id_idx on public.heat_lanes (heat_id);
-create index if not exists heat_lanes_attendance_idx on public.heat_lanes (attendance_status);
 
 -- ---------------------------------------------------------------------------
 -- results
@@ -752,9 +776,13 @@ select
   r.official_time_ms,
   r.finish_place,
   r.created_at as swam_at,
-  dense_rank() over (
+  -- Ranked on time alone. r.created_at was previously a second ORDER BY key,
+  -- which meant two identical times were split by whoever was entered first
+  -- and never actually tied. dense_rank would also be wrong: it awards the
+  -- next swimmer 2nd after a tie for 1st, where the rule is 3rd.
+  rank() over (
     partition by e.stroke, e.distance_m, coalesce(en.age_group_at_entry, a.age_group), a.gender
-    order by r.official_time_ms asc, r.created_at asc
+    order by r.official_time_ms asc
   ) as rank
 from public.results r
 join public.heat_lanes hl on hl.id = r.heat_lane_id
@@ -827,7 +855,7 @@ counts as (
 select
   pb.*,
   c.races_counted,
-  dense_rank() over (
+  rank() over (
     partition by pb.stroke, pb.distance_m, pb.age_group, pb.gender
     order by pb.best_time_ms asc
   ) as rank
@@ -1651,12 +1679,16 @@ create or replace trigger enforce_skins_qualification_columns_trigger
 -- Qualifying times are taken from non-skins events that share the same
 -- stroke + distance_m. NS outcomes are excluded entirely; DQ outcomes have
 -- no official_time_ms so they never enter the ranking.
+-- The return signature gained `gender`, and Postgres will not replace a
+-- function whose OUT columns changed — an existing database needs the drop.
+drop function if exists public.get_skins_qualifiers(uuid);
 create or replace function public.get_skins_qualifiers(event_id_param uuid)
 returns table (
   athlete_id uuid,
   athlete_name text,
   team_name text,
   category public.age_group,
+  gender public.gender,
   source_rank integer,
   best_time_ms integer,
   response public.skins_response,
@@ -1694,6 +1726,7 @@ begin
       u.full_name as athlete_name,
       t.name as team_name,
       a.age_group as category,
+      a.gender,
       min(r.official_time_ms)::integer as best_time_ms
     from public.results r
     join public.heat_lanes hl on hl.id = r.heat_lane_id
@@ -1709,13 +1742,13 @@ begin
       and ev.is_skins = false
       and ev.stroke = v_stroke
       and ev.distance_m = v_distance
-    group by a.id, u.full_name, t.name, a.age_group
+    group by a.id, u.full_name, t.name, a.age_group, a.gender
   ),
   ranked as (
     select
       best_times.*,
-      dense_rank() over (
-        partition by best_times.category
+      rank() over (
+        partition by best_times.category, best_times.gender
         order by best_times.best_time_ms
       )::integer as source_rank
     from best_times
@@ -1738,6 +1771,7 @@ begin
         when (
           select count(*) from with_response wr2
           where wr2.category = wr.category
+            and wr2.gender = wr.gender
             and wr2.response <> 'declined'
             and wr2.source_rank <= wr.source_rank
         ) <= 6 then true
@@ -1751,6 +1785,7 @@ begin
     active.athlete_name,
     active.team_name,
     active.category,
+    active.gender,
     active.source_rank,
     active.best_time_ms,
     active.response,
@@ -1760,18 +1795,20 @@ begin
       when active.is_active_qualifier then (
         select count(*)::integer from active a2
         where a2.category = active.category
+          and a2.gender = active.gender
           and a2.is_active_qualifier
           and a2.source_rank <= active.source_rank
       )
       else null
     end as slot_number
   from active
-  order by active.category, active.source_rank;
+  order by active.category, active.gender, active.source_rank;
 end;
 $$;
 
 comment on function public.get_skins_qualifiers(uuid) is
-  'Returns ranked Skins candidates per age group with accept/decline '
+  'Returns ranked Skins candidates per age group AND gender (men and women '
+  'never race each other) with accept/decline '
   'rollover applied. Active qualifier slots are the first 6 non-declined '
   'athletes by source_rank; confirmed = accepted response.';
 
@@ -2074,9 +2111,7 @@ drop policy if exists "public_view_published_heats" on public.heats;
 create policy "public_view_published_heats" on public.heats
   for select using (status = 'published');
 
--- The single consolidated Referee role owns heat_lanes end to end (both
--- call-room attendance check-in and lane assignment) — no separate usher
--- tier or attendance-only lockdown trigger needed anymore.
+-- The single consolidated Referee role owns heat_lanes end to end.
 drop policy if exists "admins_referees_full_access_heat_lanes" on public.heat_lanes;
 create policy "admins_referees_full_access_heat_lanes" on public.heat_lanes
   for all using (public.is_admin_or_referee()) with check (public.is_admin_or_referee());
@@ -2086,26 +2121,6 @@ create policy "public_view_published_heat_lanes" on public.heat_lanes
   for select using (
     exists (select 1 from public.heats h where h.id = heat_id and h.status = 'published')
   );
-
--- Audit trail: stamp who/when marked attendance, on every attendance change.
-create or replace function public.stamp_attendance_marked()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if new.attendance_status is distinct from old.attendance_status then
-    new.attendance_marked_at := now();
-    new.attendance_marked_by := auth.uid();
-  end if;
-  return new;
-end;
-$$;
-
-create or replace trigger stamp_attendance_marked_trigger
-  before update on public.heat_lanes
-  for each row execute function public.stamp_attendance_marked();
 
 -- ---------------------------------------------------------------------------
 -- results
@@ -2179,8 +2194,13 @@ begin
     return new;
   end if;
 
+  -- rank(), never row_number(): swimmers on the same time to the hundredth
+  -- share a place and the next swimmer skips the places they consumed
+  -- (1,1,3). row_number() would hand one of them 2nd on scan order alone.
+  -- Times are stored as exact multiples of 10ms (parsed from ss.cc), so
+  -- equality here is exactly equality to the hundredth.
   with ranked as (
-    select r.id, row_number() over (order by r.official_time_ms asc) as computed_place
+    select r.id, rank() over (order by r.official_time_ms asc) as computed_place
     from public.results r
     join public.heat_lanes hl on hl.id = r.heat_lane_id
     where hl.heat_id = v_heat_id and r.result_outcome = 'valid'
@@ -2214,6 +2234,187 @@ create or replace trigger recompute_heat_finish_places_trigger
 --   * NT swimmers seed ahead of timed swimmers within a bucket (oldest first),
 --     matching how an unseeded entry is treated on deck.
 --   * Lanes fill from the middle out: 4, 3, 5, 2, 1, 6.
+-- ---------------------------------------------------------------------------
+-- WORLD AQUATICS POINTS
+-- ---------------------------------------------------------------------------
+-- Used to seed the 50m stroke-switch events, where nobody has a comparable
+-- time. A swimmer's ability is instead read from their BEST other event,
+-- converted to World Aquatics points so that (say) a 50 Breaststroke and a
+-- 100 Freestyle become directly comparable numbers.
+--
+--   P = 1000 * (base_time / swum_time)^3
+--
+-- Base times are per stroke x distance x gender. They are DATA, not code, so
+-- they can be corrected with a single UPDATE when World Aquatics republishes
+-- them — no migration, no redeploy.
+--
+-- COURSE: these are SHORT COURSE (25m) base times. The program includes a
+-- 100m Individual Medley, which is only swum short course, so that is the
+-- course this meet runs. If SSC ever moves to a 50m pool, replace the rows in
+-- this table with the long course base times; nothing else needs to change.
+--
+-- ACCURACY: these ship as approximate records rounded to the hundredth and
+-- should be verified against the current official list before a meet that
+-- depends on them. They only ever decide the ORDER swimmers are seeded in, so
+-- a small error shifts a lane, not a result.
+create table if not exists public.wa_base_times (
+  stroke text not null,
+  distance_m integer not null check (distance_m > 0),
+  gender public.gender not null,
+  base_time_ms integer not null check (base_time_ms > 0),
+  updated_at timestamptz not null default now(),
+  primary key (stroke, distance_m, gender)
+);
+
+insert into public.wa_base_times (stroke, distance_m, gender, base_time_ms) values
+  ('Freestyle',         50,  'male',   19900),
+  ('Freestyle',        100,  'male',   44840),
+  ('Backstroke',        50,  'male',   22110),
+  ('Breaststroke',      50,  'male',   24950),
+  ('Butterfly',         50,  'male',   21320),
+  ('Individual Medley',100,  'male',   49280),
+  ('Freestyle',         50,  'female', 22830),
+  ('Freestyle',        100,  'female', 50250),
+  ('Backstroke',        50,  'female', 25250),
+  ('Breaststroke',      50,  'female', 28370),
+  ('Butterfly',         50,  'female', 23910),
+  ('Individual Medley',100,  'female', 56510)
+on conflict (stroke, distance_m, gender) do update
+  set base_time_ms = excluded.base_time_ms, updated_at = now();
+
+alter table public.wa_base_times enable row level security;
+
+drop policy if exists "public_read_wa_base_times" on public.wa_base_times;
+create policy "public_read_wa_base_times" on public.wa_base_times for select using (true);
+
+drop policy if exists "admins_manage_wa_base_times" on public.wa_base_times;
+create policy "admins_manage_wa_base_times" on public.wa_base_times
+  for all using (public.is_admin()) with check (public.is_admin());
+
+create or replace function public.world_aquatics_points(
+  p_stroke text,
+  p_distance_m integer,
+  p_gender public.gender,
+  p_time_ms integer
+)
+returns integer
+language sql
+stable
+set search_path = public
+as $$
+  select case
+    when p_time_ms is null or p_time_ms <= 0 then null
+    else (
+      select floor(1000 * power(b.base_time_ms::numeric / p_time_ms::numeric, 3))::integer
+      from public.wa_base_times b
+      where b.stroke = p_stroke and b.distance_m = p_distance_m and b.gender = p_gender
+    )
+  end;
+$$;
+
+comment on function public.world_aquatics_points(text, integer, public.gender, integer) is
+  'World Aquatics points: 1000 * (base/time)^3. NULL when the event has no '
+  'base time on file (relays, skins, and the switch events themselves), which '
+  'is why callers must treat NULL as "unrated" rather than "zero".';
+
+-- A swimmer's best World Aquatics points across every event they can be
+-- rated on.
+--
+-- Deliberately reads BOTH sources:
+--   * published race results — what they have actually swum, and
+--   * seed times on their other confirmed entries — what they declared.
+-- The first SSC volume has no prior results at all, so results alone would
+-- leave every swimmer unrated and the switch events would fall back to
+-- seeding by age on day one. Declared seed times make the rule work from the
+-- very first meet, and real results take over naturally as they accumulate
+-- (a faster actual swim simply scores higher and wins the max).
+--
+-- Switch events are excluded as a SOURCE as well as a target: rating a
+-- swimmer on the very event being seeded would be circular, and they have no
+-- base time anyway.
+create or replace function public.athlete_best_wa_points(p_athlete_id uuid)
+returns integer
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select max(points)::integer from (
+    select public.world_aquatics_points(ev.stroke, ev.distance_m, a.gender, r.official_time_ms) as points
+    from public.results r
+    join public.heat_lanes hl on hl.id = r.heat_lane_id
+    join public.entries en on en.id = hl.entry_id
+    join public.events ev on ev.id = en.event_id
+    join public.athletes a on a.id = en.athlete_id
+    where en.athlete_id = p_athlete_id
+      and r.status = 'published'
+      and r.result_outcome = 'valid'
+      and r.official_time_ms is not null
+      and ev.seeds_as_nt = false
+      and ev.is_relay = false
+
+    union all
+
+    select public.world_aquatics_points(ev.stroke, ev.distance_m, a.gender, en.seed_time_ms)
+    from public.entries en
+    join public.events ev on ev.id = en.event_id
+    join public.athletes a on a.id = en.athlete_id
+    where en.athlete_id = p_athlete_id
+      and en.is_nt = false
+      and en.seed_time_ms is not null
+      and ev.seeds_as_nt = false
+      and ev.is_relay = false
+  ) rated;
+$$;
+
+-- Entries for a switch event are always NT, whatever the client sends. The
+-- registration form hides the seed-time input, but a hidden input is not a
+-- rule — this is.
+create or replace function public.force_nt_for_switch_events()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if exists (select 1 from public.events e where e.id = new.event_id and e.seeds_as_nt) then
+    new.is_nt := true;
+    new.seed_time_ms := null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists force_nt_for_switch_events_trigger on public.entries;
+create trigger force_nt_for_switch_events_trigger
+  before insert or update on public.entries
+  for each row execute function public.force_nt_for_switch_events();
+
+-- Gender split migration. Heats are pure derived data — regenerated from
+-- confirmed entries every time payment is confirmed — so an unscored heat can
+-- simply be dropped and rebuilt with the split applied. A heat that already
+-- has results is NOT touched: deleting it would cascade away real race times.
+-- Those keep gender null and are labelled as legacy in the UI.
+update public.heats h
+set gender = sub.gender::public.gender
+from (
+  select hl.heat_id, min(a.gender::text) as gender
+  from public.heat_lanes hl
+  join public.entries en on en.id = hl.entry_id
+  join public.athletes a on a.id = en.athlete_id
+  group by hl.heat_id
+  having count(distinct a.gender) = 1
+) sub
+where h.id = sub.heat_id and h.gender is null;
+
+delete from public.heats h
+where h.gender is null
+  and not exists (
+    select 1 from public.heat_lanes hl
+    join public.results r on r.heat_lane_id = hl.id
+    where hl.heat_id = h.id
+  );
+
 create or replace function public.generate_heats_for_event(p_event_id uuid)
 returns integer
 language plpgsql
@@ -2245,30 +2446,43 @@ begin
 
   delete from public.heats where event_id = p_event_id;
 
-  with ranked as (
+  -- Four seeding buckets, not two: male and female swim separately in every
+  -- age group, so a bucket is (heat_group x gender). Heat numbers run
+  -- U13-14 female, U13-14 male, U17/Open female, U17/Open male — the boolean
+  -- ORDER BY below encodes exactly that, since false sorts before true.
+  with base as (
     select
       e.id as entry_id,
       e.event_id,
       case when coalesce(e.age_group_at_entry, a.age_group) = 'U14'
-        then 'U13_14' else 'U17_OPEN' end as heat_group,
-      row_number() over (
-        partition by e.event_id,
-          case when coalesce(e.age_group_at_entry, a.age_group) = 'U14'
-            then 'U13_14' else 'U17_OPEN' end
-        order by
-          e.is_nt desc,
-          case when e.is_nt then null else e.seed_time_ms end asc nulls last,
-          case when e.is_nt then a.age end desc nulls last
-      ) as rank_in_bucket,
-      count(*) over (
-        partition by e.event_id,
-          case when coalesce(e.age_group_at_entry, a.age_group) = 'U14'
-            then 'U13_14' else 'U17_OPEN' end
-      ) as bucket_size
+        then 'U13_14' else 'U17_OPEN' end::public.heat_group as heat_group,
+      a.gender,
+      e.is_nt,
+      e.seed_time_ms,
+      a.age,
+      public.athlete_best_wa_points(a.id) as wa_points
     from public.entries e
     join public.athletes a on a.id = e.athlete_id
     where e.event_id = p_event_id
       and e.status = 'confirmed'
+  ),
+  ranked as (
+    select
+      base.*,
+      row_number() over (
+        partition by heat_group, gender
+        order by
+          is_nt desc,
+          case when is_nt then null else seed_time_ms end asc nulls last,
+          -- NT swimmers have no time to rank on, so they rank on their best
+          -- other event converted to World Aquatics points (highest first).
+          -- Age is only the last resort, for a swimmer with nothing rateable
+          -- on file at all — a genuinely unknown quantity.
+          case when is_nt then wa_points end desc nulls last,
+          case when is_nt then age end desc nulls last
+      ) as rank_in_bucket,
+      count(*) over (partition by heat_group, gender) as bucket_size
+    from base
   ),
   chunked as (
     select *,
@@ -2277,30 +2491,39 @@ begin
       (((rank_in_bucket - 1) % 6) + 1)::int as lane_slot
     from ranked
   ),
-  bucketed as (
-    select *,
-      (num_chunks - chunk_index)::int as heat_number_in_bucket,
-      max(case when heat_group = 'U13_14' then num_chunks else 0 end)
-        over (partition by event_id) as u1314_chunk_count
+  -- One row per bucket carrying how many heats precede it, so heat_number
+  -- stays unique per event across all four buckets.
+  buckets as (
+    select
+      heat_group,
+      gender,
+      max(num_chunks) as num_chunks,
+      coalesce(
+        sum(max(num_chunks)) over (
+          order by (heat_group = 'U17_OPEN'), (gender = 'male')
+          rows between unbounded preceding and 1 preceding
+        ), 0
+      )::int as heat_number_offset
     from chunked
+    group by heat_group, gender
   ),
   plan as (
     select
-      event_id,
-      heat_group::public.heat_group as heat_group,
-      case when heat_group = 'U13_14'
-        then heat_number_in_bucket
-        else u1314_chunk_count + heat_number_in_bucket
-      end as heat_number,
-      lane_slot,
-      entry_id
-    from bucketed
+      c.event_id,
+      c.heat_group,
+      c.gender,
+      -- Fastest heat last within each bucket (chunk 0 is the fastest).
+      b.heat_number_offset + (c.num_chunks - c.chunk_index) as heat_number,
+      c.lane_slot,
+      c.entry_id
+    from chunked c
+    join buckets b on b.heat_group = c.heat_group and b.gender = c.gender
   ),
   inserted_heats as (
-    insert into public.heats (event_id, heat_group, heat_number, heat_order, status)
-    select distinct event_id, heat_group, heat_number, heat_number, 'published'::public.publish_status
+    insert into public.heats (event_id, heat_group, gender, heat_number, heat_order, status)
+    select distinct event_id, heat_group, gender, heat_number, heat_number, 'published'::public.publish_status
     from plan
-    returning id, event_id, heat_group, heat_number
+    returning id, event_id, heat_number
   ),
   inserted_lanes as (
     insert into public.heat_lanes (heat_id, lane_number, entry_id)
@@ -2308,7 +2531,6 @@ begin
     from plan p
     join inserted_heats ih
       on ih.event_id = p.event_id
-     and ih.heat_group = p.heat_group
      and ih.heat_number = p.heat_number
     returning 1
   )
@@ -2486,7 +2708,7 @@ begin
       alter publication supabase_realtime add table public.heats;
     end if;
 
-    -- Call-room attendance flips must reach referees behind the blocks live.
+    -- Lane reassignments must reach referees behind the blocks live.
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'heat_lanes'

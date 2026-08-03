@@ -1,5 +1,5 @@
 import { LANE_SEQUENCE, LANES_PER_HEAT, type DraftHeat, type DraftHeatLane } from "@/lib/seeding";
-import type { AgeGroup, HeatGroup, SkinsResponse } from "@/lib/supabase/types";
+import type { AgeGroup, Gender, HeatGroup, SkinsResponse } from "@/lib/supabase/types";
 import { createClient } from "@/lib/supabase/client";
 import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
 import { isValidUuid } from "@/lib/utils";
@@ -11,7 +11,8 @@ export interface SkinsCandidate {
   athleteName: string;
   teamName?: string | null;
   category: AgeGroup;
-  /** 1-based rank within the category (1 = fastest). */
+  gender: Gender;
+  /** 1-based rank within the category AND gender (1 = fastest). */
   sourceRank: number;
   bestTimeMs: number;
   response: SkinsResponse;
@@ -26,6 +27,7 @@ export interface SkinsQualifier extends SkinsCandidate {
 
 export interface CategoryQualifierBoard {
   category: AgeGroup;
+  gender: Gender;
   active: SkinsQualifier[];
   confirmed: SkinsQualifier[];
   waitlisted: SkinsQualifier[];
@@ -65,28 +67,32 @@ export function applySkinsRollover(
 }
 
 /**
- * Groups candidates by age category and applies rollover independently
- * for U14, U17, and Open — each fills up to 6 active slots.
+ * Groups candidates by age category AND gender, applying rollover
+ * independently to each of the six boards (U14/U17/Open x female/male).
+ * Men and women never race each other, so they cannot compete for the same
+ * six slots either — each board fills its own.
  */
 export function buildSkinsQualifierBoards(
   candidates: SkinsCandidate[],
   slots: number = SKINS_SLOTS_PER_CATEGORY,
 ): CategoryQualifierBoard[] {
   const categories: AgeGroup[] = ["U14", "U17", "Open"];
+  const genders: Gender[] = ["female", "male"];
 
-  return categories.map((category) => {
+  return categories.flatMap((category) => genders.map((gender) => {
     const qualified = applySkinsRollover(
-      candidates.filter((c) => c.category === category),
+      candidates.filter((c) => c.category === category && c.gender === gender),
       slots,
     );
     return {
       category,
+      gender,
       active: qualified.filter((q) => q.isActiveQualifier),
       confirmed: qualified.filter((q) => q.isActiveQualifier && q.isConfirmed),
       waitlisted: qualified.filter((q) => !q.isActiveQualifier && q.response !== "declined"),
       declined: qualified.filter((q) => q.response === "declined"),
     };
-  });
+  }));
 }
 
 function categoryToHeatGroup(category: AgeGroup): HeatGroup {
@@ -95,37 +101,41 @@ function categoryToHeatGroup(category: AgeGroup): HeatGroup {
 
 /**
  * Builds draft skins heats from accepted (confirmed) qualifiers.
- * Each category seeds its own heat of up to 6, lanes [4,3,5,2,1,6].
+ * Each category x gender seeds its own heat of up to 6, lanes [4,3,5,2,1,6].
  */
 export function populateSkinsHeatSheets(
   confirmed: SkinsCandidate[],
 ): DraftHeat[] {
   const categories: AgeGroup[] = ["U14", "U17", "Open"];
+  const genders: Gender[] = ["female", "male"];
   const heats: DraftHeat[] = [];
   let heatNumber = 0;
 
   for (const category of categories) {
-    const swimmers = confirmed
-      .filter((c) => c.category === category && c.response === "accepted")
-      .sort((a, b) => a.bestTimeMs - b.bestTimeMs)
-      .slice(0, LANES_PER_HEAT);
+    for (const gender of genders) {
+      const swimmers = confirmed
+        .filter((c) => c.category === category && c.gender === gender && c.response === "accepted")
+        .sort((a, b) => a.bestTimeMs - b.bestTimeMs)
+        .slice(0, LANES_PER_HEAT);
 
-    if (swimmers.length === 0) continue;
+      if (swimmers.length === 0) continue;
 
-    heatNumber += 1;
-    const lanes: DraftHeatLane[] = swimmers.map((s, index) => ({
-      laneNumber: LANE_SEQUENCE[index],
-      entryId: `skins-${s.athleteId}`,
-      athleteId: s.athleteId,
-    }));
+      heatNumber += 1;
+      const lanes: DraftHeatLane[] = swimmers.map((s, index) => ({
+        laneNumber: LANE_SEQUENCE[index],
+        entryId: `skins-${s.athleteId}`,
+        athleteId: s.athleteId,
+      }));
 
-    heats.push({
-      heatGroup: categoryToHeatGroup(category),
-      heatNumber,
-      heatOrder: heatNumber,
-      status: "draft",
-      lanes,
-    });
+      heats.push({
+        heatGroup: categoryToHeatGroup(category),
+        gender,
+        heatNumber,
+        heatOrder: heatNumber,
+        status: "draft",
+        lanes,
+      });
+    }
   }
 
   return heats;

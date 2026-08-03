@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
+import { withCompetitionRanks } from "@/lib/ranking";
 
 export interface RacePerformance {
   resultId: string;
@@ -60,7 +61,8 @@ function matchesFilter(row: {
 
 /**
  * Best Performances — rank every valid race time (athlete may appear multiple
- * times). Dense rank within stroke/distance/age/gender.
+ * times), within stroke/distance/age/gender. Equal times share a place and
+ * skip the next (see lib/ranking.ts).
  */
 export function rankBestPerformances(
   races: RacePerformance[],
@@ -81,16 +83,12 @@ export function rankBestPerformances(
       return (a.swamAt ?? "").localeCompare(b.swamAt ?? "");
     });
 
-  let lastTime: number | null = null;
-  let rank = 0;
-  const ranked: RankedPerformance[] = filtered.map((race) => {
-    if (lastTime === null || race.officialTimeMs !== lastTime) {
-      rank += 1;
-      lastTime = race.officialTimeMs;
-    }
-    return { ...race, rank };
-  });
+  // swamAt orders the display only — it must not split a genuine tie, so the
+  // rank key is the time alone.
+  const ranked: RankedPerformance[] = withCompetitionRanks(filtered, (r) => r.officialTimeMs);
 
+  // A tie that straddles the cutoff keeps every tied swimmer: they hold the
+  // same place, so dropping one because of array position would be arbitrary.
   return ranked.filter((r) => r.rank <= limit);
 }
 
@@ -146,15 +144,7 @@ export function rankBestPerformers(
   }
 
   const sorted = [...byAthlete.values()].sort((a, b) => a.bestTimeMs - b.bestTimeMs);
-  let lastTime: number | null = null;
-  let rank = 0;
-  const ranked = sorted.map((row) => {
-    if (lastTime === null || row.bestTimeMs !== lastTime) {
-      rank += 1;
-      lastTime = row.bestTimeMs;
-    }
-    return { ...row, rank };
-  });
+  const ranked = withCompetitionRanks(sorted, (r) => r.bestTimeMs);
 
   return ranked.filter((r) => r.rank <= limit);
 }

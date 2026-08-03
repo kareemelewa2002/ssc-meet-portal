@@ -631,6 +631,118 @@ exception when others then
   perform ssc_test.check('DB-14','event results', false, sqlerrm);
 end $$;
 
+-- DB-15 — male and female never share a heat.
+do $$
+declare v_mixed int; v_null int; v_heats int;
+begin
+  select count(*) into v_heats from public.heats;
+  perform ssc_test.check('DB-15','precondition: heats exist to check', v_heats > 0, null);
+
+  select count(*) into v_mixed from (
+    select hl.heat_id
+    from public.heat_lanes hl
+    join public.entries en on en.id = hl.entry_id
+    join public.athletes a on a.id = en.athlete_id
+    group by hl.heat_id
+    having count(distinct a.gender) > 1
+  ) x;
+  perform ssc_test.check('DB-15','no heat contains more than one gender', v_mixed = 0,
+    format('mixed heats=%s', v_mixed));
+
+  select count(*) into v_null from public.heats where gender is null;
+  perform ssc_test.check('DB-15','every generated heat is labelled with its gender', v_null = 0,
+    format('unlabelled=%s', v_null));
+
+  -- The label must agree with who is actually in the water.
+  select count(*) into v_mixed
+  from public.heat_lanes hl
+  join public.heats h on h.id = hl.heat_id
+  join public.entries en on en.id = hl.entry_id
+  join public.athletes a on a.id = en.athlete_id
+  where h.gender is not null and a.gender <> h.gender;
+  perform ssc_test.check('DB-15','heat gender label matches its swimmers', v_mixed = 0,
+    format('mismatched lanes=%s', v_mixed));
+exception when others then
+  perform ssc_test.check('DB-15','gender split', false, sqlerrm);
+end $$;
+
+-- DB-16 — tied times share a place and skip the places they consumed (1,1,3).
+do $$
+declare v_heat uuid; v_lane uuid; i int := 0; v_places int[]; v_pts numeric[];
+  v_times int[] := array[25000, 25000, 25500];
+begin
+  -- Only needs three lanes: two on the same time and one behind them. Larger
+  -- heats are consumed by earlier assertions in this suite.
+  select h.id into v_heat
+  from public.heats h
+  join public.heat_lanes hl on hl.heat_id = h.id
+  where not exists (select 1 from public.results r
+                    join public.heat_lanes hl2 on hl2.id = r.heat_lane_id
+                    where hl2.heat_id = h.id)
+  group by h.id having count(hl.id) >= 3 limit 1;
+  perform ssc_test.check('DB-16','precondition: an unscored heat with 3+ lanes', v_heat is not null, null);
+  if v_heat is null then return; end if;
+
+  for v_lane in select id from public.heat_lanes where heat_id = v_heat order by lane_number limit 3 loop
+    i := i + 1;
+    insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+    values (v_lane, 'valid', v_times[i], 'draft');
+  end loop;
+
+  select array_agg(r.finish_place order by r.official_time_ms, r.finish_place),
+         array_agg(r.placement_points order by r.official_time_ms, r.finish_place)
+    into v_places, v_pts
+  from public.results r
+  join public.heat_lanes hl on hl.id = r.heat_lane_id
+  where hl.heat_id = v_heat;
+
+  -- Two tied for 1st, so the next swimmer is 3rd — not 2nd (dense ranking)
+  -- and not split arbitrarily by scan order (row_number).
+  perform ssc_test.check('DB-16','equal times share a place and skip the next',
+    v_places = array[1,1,3], format('places=%s', v_places));
+  perform ssc_test.check('DB-16','tied swimmers score identical placement points',
+    v_pts[1] = v_pts[2] and v_pts[3] < v_pts[1], format('points=%s', v_pts));
+
+  delete from public.results r using public.heat_lanes hl
+    where hl.id = r.heat_lane_id and hl.heat_id = v_heat;
+exception when others then
+  perform ssc_test.check('DB-16','tie ranking', false, sqlerrm);
+end $$;
+
+-- DB-17 — stroke-switch events are NT no matter what the client sends.
+do $$
+declare v_event uuid; v_entry uuid; v_is_nt boolean; v_seed int; v_bad int;
+begin
+  select id into v_event from public.events where seeds_as_nt limit 1;
+  perform ssc_test.check('DB-17','precondition: a switch event exists', v_event is not null, null);
+  if v_event is null then return; end if;
+
+  select count(*) into v_bad
+  from public.entries en join public.events ev on ev.id = en.event_id
+  where ev.seeds_as_nt and (not en.is_nt or en.seed_time_ms is not null);
+  perform ssc_test.check('DB-17','no switch entry carries a seed time', v_bad = 0,
+    format('violations=%s', v_bad));
+
+  -- The trigger must win over a direct write, not just over the UI.
+  select id into v_entry from public.entries where event_id = v_event limit 1;
+  if v_entry is not null then
+    update public.entries set is_nt = false, seed_time_ms = 28000 where id = v_entry;
+    select is_nt, seed_time_ms into v_is_nt, v_seed from public.entries where id = v_entry;
+    perform ssc_test.check('DB-17','a direct write cannot un-NT a switch entry',
+      v_is_nt and v_seed is null, format('is_nt=%s seed=%s', v_is_nt, v_seed));
+  end if;
+
+  -- World Aquatics points: a base-time swim scores 1000, and an event with no
+  -- base time on file is unrated (NULL), never zero.
+  perform ssc_test.check('DB-17','world_aquatics_points scores a base time at 1000',
+    public.world_aquatics_points('Freestyle', 50, 'male', 19900) = 1000,
+    format('got %s', public.world_aquatics_points('Freestyle', 50, 'male', 19900)));
+  perform ssc_test.check('DB-17','an unrated event returns NULL, not 0',
+    public.world_aquatics_points('Back-to-Breast Switch', 50, 'male', 30000) is null, null);
+exception when others then
+  perform ssc_test.check('DB-17','switch events', false, sqlerrm);
+end $$;
+
 -- =============================================================================
 -- Report
 -- =============================================================================

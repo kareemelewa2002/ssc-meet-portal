@@ -3,7 +3,7 @@
  *
  * These tests exercise the pure application logic behind each primary user
  * scenario. Scenarios that are fundamentally database/RLS-level guarantees
- * (D1's admin-only publish gate, C's live attendance sync, E1's realtime
+ * (D1's admin-only publish gate, C's NS-as-absence rule, E1's realtime
  * result broadcast) are proven instead via a local Postgres walkthrough
  * (supabase/schema.sql + supabase/seed-demo.sql applied to a scratch
  * database, RLS enforced under a non-superuser role) — noted inline below
@@ -29,12 +29,6 @@ import {
   parseClockTime,
   parseTimeToMs,
 } from "@/lib/format";
-import {
-  applyAttendancePatch,
-  setLaneAttendance,
-  summarizeAttendance,
-  type AttendanceLane,
-} from "@/lib/attendance";
 import { scoreHeatResult } from "@/lib/results";
 import {
   rankBestPerformances,
@@ -118,32 +112,29 @@ describe("Scenario B — Meet Event Entry & Strict Clock-Time Input", () => {
   });
 });
 
-describe("Scenario C — Referee Call-Room Attendance Workflow", () => {
-  const lanes: AttendanceLane[] = [
-    { heatLaneId: "hl-1", laneNumber: 1, athleteId: "a1", athleteName: "Swimmer One", attendanceStatus: "pending" },
-    { heatLaneId: "hl-2", laneNumber: 2, athleteId: "a2", athleteName: "Swimmer Two", attendanceStatus: "pending" },
-  ];
-
-  it("marks Lane 1 present and Lane 2 absent, reflected in the summary", () => {
-    let next = setLaneAttendance(lanes, "hl-1", "present");
-    next = setLaneAttendance(next, "hl-2", "absent");
-
-    expect(next.find((l) => l.heatLaneId === "hl-1")?.attendanceStatus).toBe("present");
-    expect(next.find((l) => l.heatLaneId === "hl-2")?.attendanceStatus).toBe("absent");
-
-    const summary = summarizeAttendance(next);
-    expect(summary).toEqual({ total: 2, present: 1, absent: 1, pending: 0, readyForStart: true });
+describe("Scenario C — absence is recorded as NS on the result", () => {
+  // Call-room attendance check-in was removed. It was a second, independent
+  // record of who turned up, and it could disagree with the result sheet —
+  // marked present in the call room, published NS behind the blocks — with
+  // no rule for which one won. A swimmer who does not swim is published NS,
+  // and that single record is what scoring reads.
+  it("NS scores zero and carries no time, so absence needs no separate marking", () => {
+    const ns = scoreHeatResult({ outcome: "no_show" });
+    expect(ns.resultOutcome).toBe("no_show");
+    expect(ns.isNoShow).toBe(true);
+    expect(ns.officialTimeMs).toBeNull();
+    expect(ns.finishPlace).toBeNull();
+    expect(ns.placementPoints).toBe(0);
+    expect(ns.improvementPoints).toBe(0);
   });
 
-  it("mirrors a realtime attendance patch (a second referee's live view of the same heat)", () => {
-    // The consolidated Referee role's AttendanceBoard subscribes to
-    // postgres_changes on heat_lanes and applies incoming rows via this
-    // exact helper — proven live via Supabase Realtime in
-    // supabase/schema.sql's publication setup; here we assert the merge
-    // logic itself.
-    const mirrored = applyAttendancePatch(lanes, "hl-1", "present");
-    expect(mirrored.find((l) => l.heatLaneId === "hl-1")?.attendanceStatus).toBe("present");
-    expect(mirrored.find((l) => l.heatLaneId === "hl-2")?.attendanceStatus).toBe("pending");
+  it("NS is distinct from DQ — both score zero, only DQ carries a code", () => {
+    const ns = scoreHeatResult({ outcome: "no_show" });
+    const dq = scoreHeatResult({ outcome: "dq" }, "false_start");
+    expect(ns.dqCode).toBeNull();
+    expect(dq.dqCode).toBe("false_start");
+    expect(dq.isNoShow).toBe(false);
+    expect(ns.placementPoints).toBe(dq.placementPoints);
   });
 });
 

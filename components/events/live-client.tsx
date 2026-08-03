@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { heatGenderLabel } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
@@ -157,6 +158,9 @@ function HeatCard({ heat, outdoorMode }: { heat: LiveHeatView; outdoorMode: bool
       <CardHeader className="flex-row items-center gap-2 space-y-0 pb-2">
         <Badge className="h-7 px-2.5">Heat {heat.heatNumber}</Badge>
         <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U14" : "U17 & Open"}</Badge>
+        {heatGenderLabel(heat.gender) && (
+          <Badge variant="outline">{heatGenderLabel(heat.gender)}</Badge>
+        )}
       </CardHeader>
       <CardContent className="space-y-2">
         {heat.lanes.map((lane) => (

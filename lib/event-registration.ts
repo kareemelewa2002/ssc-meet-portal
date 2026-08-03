@@ -33,6 +33,9 @@ export interface EventSelection {
   eventId: string;
   seedTimeMs: number | null;
   isNt: boolean;
+  /** True for the 50m stroke-switch events, which have no comparable time
+   * anywhere else and are always entered NT. */
+  seedsAsNt?: boolean;
 }
 
 export interface EntryInsertPayload {
@@ -54,13 +57,20 @@ export function buildEntryInserts(
   athleteId: string,
   selections: EventSelection[],
 ): EntryInsertPayload[] {
-  return selections.map((selection) => ({
-    event_id: selection.eventId,
-    athlete_id: athleteId,
-    seed_time_ms: selection.isNt ? null : selection.seedTimeMs,
-    is_nt: selection.isNt,
-    status: "pending_payment" as const,
-  }));
+  return selections.map((selection) => {
+    // A switch event is NT by definition. public.force_nt_for_switch_events()
+    // enforces this at the database too — this mirror exists so the payload
+    // the UI shows and the row that lands are the same thing, not so the rule
+    // is enforced here.
+    const isNt = selection.seedsAsNt === true || selection.isNt;
+    return {
+      event_id: selection.eventId,
+      athlete_id: athleteId,
+      seed_time_ms: isNt ? null : selection.seedTimeMs,
+      is_nt: isNt,
+      status: "pending_payment" as const,
+    };
+  });
 }
 
 export interface RegisterableEvent {
@@ -69,6 +79,8 @@ export interface RegisterableEvent {
   stroke: string;
   distanceM: number;
   sessionNumber: number;
+  /** Entered NT always — no seed time is asked for or accepted. */
+  seedsAsNt: boolean;
 }
 
 /** Skins events are excluded — public.enforce_no_direct_skins_entry blocks
@@ -89,7 +101,7 @@ export async function fetchRegisterableEvents(meetVolumeId: string): Promise<Reg
     const sessionNumberById = new Map(sessions.map((s) => [s.id, s.session_number]));
     const { data: events, error } = await supabase
       .from("events")
-      .select("id, name, stroke, distance_m, session_id, is_skins, is_relay")
+      .select("id, name, stroke, distance_m, session_id, is_skins, is_relay, seeds_as_nt")
       .in("session_id", sessions.map((s) => s.id))
       .eq("is_skins", false)
       .eq("is_relay", false)
@@ -102,6 +114,7 @@ export async function fetchRegisterableEvents(meetVolumeId: string): Promise<Reg
       stroke: e.stroke,
       distanceM: e.distance_m,
       sessionNumber: sessionNumberById.get(e.session_id) ?? 0,
+      seedsAsNt: e.seeds_as_nt ?? false,
     }));
   } catch {
     return [];
