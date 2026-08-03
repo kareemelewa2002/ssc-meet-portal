@@ -10,9 +10,18 @@ import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { AppHeader } from "@/components/layout/app-header";
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
-import type { Gender, PublishStatus, SessionRow } from "@/lib/supabase/types";
-import { heatGenderLabel } from "@/lib/format";
+import type { Gender, HeatGroup, PublishStatus, SessionRow } from "@/lib/supabase/types";
+import { heatTitle } from "@/lib/format";
 import { cn } from "@/lib/utils";
+
+type RawDeckEvent = {
+  name: string;
+  event_order: number;
+  session_id: string;
+  stroke: string;
+  distance_m: number;
+  is_skins: boolean;
+};
 
 type RawAthlete = {
   id: string;
@@ -24,6 +33,7 @@ type RawAthlete = {
 interface RefereeDeckHeat {
   heatId: string;
   heatNumber: number;
+  heatGroup: HeatGroup;
   /** null only for legacy heats seeded before male/female were split. */
   gender: Gender | null;
   status: PublishStatus;
@@ -32,6 +42,11 @@ interface RefereeDeckHeat {
   eventOrder: number;
   sessionId: string | null;
   sessionNumber: number | null;
+  /** True when this event is the one Skins qualification is drawn from, so an
+   * NS here genuinely costs a swimmer their Skins place. Computed by matching
+   * the Skins event's own stroke and distance rather than assuming freestyle —
+   * a later volume may run Skins on a different stroke. */
+  feedsSkins: boolean;
   lanes: RefereeLane[];
 }
 
@@ -114,7 +129,7 @@ export default function RefereePage() {
       const supabase = createClient();
       const { data: heatRows, error: heatError } = await supabase
         .from("heats")
-        .select("id, heat_number, gender, status, event_id, events ( name, event_order, session_id )")
+        .select("id, heat_number, heat_group, gender, status, event_id, events ( name, event_order, session_id, stroke, distance_m, is_skins )")
         .order("heat_number", { ascending: true });
 
       if (heatError || !heatRows?.length) {
@@ -125,13 +140,11 @@ export default function RefereePage() {
       type RawHeatRow = {
         id: string;
         heat_number: number;
+        heat_group: HeatGroup;
         gender: Gender | null;
         status: PublishStatus;
         event_id: string;
-        events:
-          | { name: string; event_order: number; session_id: string }
-          | { name: string; event_order: number; session_id: string }[]
-          | null;
+        events: RawDeckEvent | RawDeckEvent[] | null;
       };
 
       const heatIds = (heatRows as unknown as RawHeatRow[]).map((h) => h.id);
@@ -175,6 +188,15 @@ export default function RefereePage() {
         lanesByHeat.set(lane.heat_id, list);
       }
 
+      // Which (stroke, distance) feeds Skins this volume — read from the
+      // Skins event itself, never hard-coded to freestyle.
+      const { data: skinsRows } = await supabase
+        .from("events")
+        .select("stroke, distance_m")
+        .eq("is_skins", true)
+        .limit(1);
+      const skinsSource = skinsRows?.[0] ?? null;
+
       const sessionNumberById = new Map(sessionsRef.current.map((s) => [s.id, s.session_number]));
       const built: RefereeDeckHeat[] = (heatRows as unknown as RawHeatRow[])
         .map((h) => {
@@ -182,6 +204,7 @@ export default function RefereePage() {
           return {
             heatId: h.id,
             heatNumber: h.heat_number,
+            heatGroup: h.heat_group,
             gender: h.gender ?? null,
             status: h.status,
             eventId: h.event_id,
@@ -189,6 +212,12 @@ export default function RefereePage() {
             eventOrder: event?.event_order ?? 0,
             sessionId: event?.session_id ?? null,
             sessionNumber: sessionNumberById.get(event?.session_id ?? "") ?? null,
+            feedsSkins:
+              !!skinsSource &&
+              !!event &&
+              event.is_skins === false &&
+              event.stroke === skinsSource.stroke &&
+              event.distance_m === skinsSource.distance_m,
             lanes: (lanesByHeat.get(h.id) ?? []).sort((a, b) => a.laneNumber - b.laneNumber),
           };
         })
@@ -350,13 +379,12 @@ export default function RefereePage() {
             <HeatResultEntry
               key={heat.heatId}
               heatId={heat.heatId}
-              heatLabel={`${heat.eventName} — ${
-                heatGenderLabel(heat.gender) ? `${heatGenderLabel(heat.gender)} ` : ""
-              }Heat ${heat.heatNumber}${
+              heatLabel={`${heat.eventName} — ${heatTitle(heat)}${
                 heat.sessionNumber != null ? ` · Session ${heat.sessionNumber}` : ""
               }`}
               lanes={heat.lanes}
               outdoorMode={outdoorMode}
+              feedsSkins={heat.feedsSkins}
             />
           ))}
         </div>

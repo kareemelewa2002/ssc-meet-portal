@@ -536,7 +536,10 @@ create table if not exists public.heats (
   status public.publish_status not null default 'draft',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (event_id, heat_number)
+  -- Heat numbers restart per age group and gender ("17 & Under Women Heat 1"),
+  -- so uniqueness is per bucket, not per event. heat_order carries the global
+  -- running order.
+  unique (event_id, heat_group, gender, heat_number)
 );
 
 alter table public.heats add column if not exists gender public.gender;
@@ -569,6 +572,25 @@ alter table public.heat_lanes
   drop column if exists attendance_marked_at,
   drop column if exists attendance_marked_by;
 drop type if exists public.attendance_status;
+
+-- Heat numbering migration. Heat numbers used to run globally across an
+-- event; they now restart within each (age group, gender) bucket, so the old
+-- constraint would reject the very first re-seed. Heats are pure derived data
+-- (rebuilt whenever payment is confirmed), so unscored ones are simply
+-- dropped and regenerated under the new numbering; scored heats are left
+-- alone rather than cascading away real times.
+alter table public.heats drop constraint if exists heats_event_id_heat_number_key;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'heats_event_id_heat_group_gender_heat_number_key'
+  ) then
+    alter table public.heats
+      add constraint heats_event_id_heat_group_gender_heat_number_key
+      unique (event_id, heat_group, gender, heat_number);
+  end if;
+end $$;
 
 
 create index if not exists heat_lanes_heat_id_idx on public.heat_lanes (heat_id);
@@ -2648,13 +2670,17 @@ begin
       base.*,
       row_number() over (
         partition by heat_group, gender
+        -- Rank 1 is the FASTEST swimmer, and rank 1 lands in the last heat
+        -- (fastest heat last). So a declared time always outranks NT: this
+        -- previously ordered `is_nt desc`, which ranked every NT swimmer
+        -- ahead of the field and put them in the final heat ahead of
+        -- swimmers who had actually declared a time.
         order by
-          is_nt desc,
+          is_nt asc,
           case when is_nt then null else seed_time_ms end asc nulls last,
-          -- NT swimmers have no time to rank on, so they rank on their best
-          -- other event converted to World Aquatics points (highest first).
-          -- Age is only the last resort, for a swimmer with nothing rateable
-          -- on file at all — a genuinely unknown quantity.
+          -- Among NT swimmers only: no time to rank on, so rank on their best
+          -- other event in World Aquatics points (highest first). Age is the
+          -- last resort, for a swimmer with nothing rateable on file at all.
           case when is_nt then wa_points end desc nulls last,
           case when is_nt then age end desc nulls last
       ) as rank_in_bucket,
@@ -2689,8 +2715,11 @@ begin
       c.event_id,
       c.heat_group,
       c.gender,
-      -- Fastest heat last within each bucket (chunk 0 is the fastest).
-      b.heat_number_offset + (c.num_chunks - c.chunk_index) as heat_number,
+      -- heat_number counts WITHIN the bucket ("17 & Under Women Heat 2"),
+      -- because that is how a heat is called on deck. heat_order keeps the
+      -- global running order across the whole event.
+      (c.num_chunks - c.chunk_index) as heat_number,
+      b.heat_number_offset + (c.num_chunks - c.chunk_index) as heat_order,
       c.lane_slot,
       c.entry_id
     from chunked c
@@ -2698,9 +2727,9 @@ begin
   ),
   inserted_heats as (
     insert into public.heats (event_id, heat_group, gender, heat_number, heat_order, status)
-    select distinct event_id, heat_group, gender, heat_number, heat_number, 'published'::public.publish_status
+    select distinct event_id, heat_group, gender, heat_number, heat_order, 'published'::public.publish_status
     from plan
-    returning id, event_id, heat_number
+    returning id, event_id, heat_group, gender, heat_number
   ),
   inserted_lanes as (
     insert into public.heat_lanes (heat_id, lane_number, entry_id)
@@ -2708,6 +2737,8 @@ begin
     from plan p
     join inserted_heats ih
       on ih.event_id = p.event_id
+     and ih.heat_group = p.heat_group
+     and ih.gender is not distinct from p.gender
      and ih.heat_number = p.heat_number
     returning 1
   )
@@ -2771,11 +2802,10 @@ create trigger generate_heats_on_confirm_update
 -- so it can never drift out of sync the way a trigger-maintained copy would.
 -- Overall standings across every heat of an event.
 --
--- CATEGORIES ARE NOT MUTUALLY EXCLUSIVE. "Open" means open to all ages, so a
--- U14 or U17 swimmer is ranked in the Open standings against the Open field
--- as well as in their own age group. Each result therefore produces up to two
--- rows: one for the swimmer's own age group, and one for Open. An Open
--- swimmer produces a single row, since Open already is their age group.
+-- CATEGORIES ARE NOT MUTUALLY EXCLUSIVE. Each board means "this age and
+-- younger": a 14 & Under swimmer is ranked in 14 & Under, 17 & Under AND
+-- Open; a 17 & Under swimmer in 17 & Under and Open; an Open swimmer only in
+-- Open. So one result produces up to three rows, one per board it belongs to.
 --
 -- Ranking is rank(), so equal times share a place and skip the next (1,1,3).
 create or replace view public.event_results as
@@ -2791,6 +2821,7 @@ with scored as (
     u.full_name                                       as athlete_name,
     t.name                                            as team_name,
     h.heat_number,
+    h.heat_order,
     hl.lane_number,
     r.official_time_ms,
     r.result_outcome,
@@ -2812,8 +2843,19 @@ categorised as (
   select scored.*, cat.age_group, (cat.age_group <> scored.own_age_group) as is_open_entry
   from scored
   -- distinct collapses the duplicate for a swimmer whose own group IS Open.
+  -- Boards are CUMULATIVE, not exclusive: a 14 & Under swimmer is ranked in
+  -- 14 & Under, in 17 & Under, and in Open; a 17 & Under swimmer in 17 & Under
+  -- and Open. Each board is "this age and younger", with Open meaning open to
+  -- everyone. distinct collapses the duplicate for a swimmer whose own group
+  -- already is the board.
   cross join lateral (
-    select distinct unnest(array[scored.own_age_group, 'Open'::public.age_group]) as age_group
+    select distinct unnest(
+      case scored.own_age_group
+        when 'U14' then array['U14', 'U17', 'Open']::public.age_group[]
+        when 'U17' then array['U17', 'Open']::public.age_group[]
+        else array['Open']::public.age_group[]
+      end
+    ) as age_group
   ) cat
 )
 select
@@ -2823,14 +2865,18 @@ select
   meet_volume_id,
   age_group,
   own_age_group,
-  -- True when this row is a younger swimmer appearing in the Open standings,
+  -- True when this row is a younger swimmer ranked up into an older board,
   -- so the UI can say so rather than looking like a mis-categorised entry.
   is_open_entry,
   gender,
   athlete_id,
   athlete_name,
   team_name,
+  -- heat_number restarts per (age group, gender), so it identifies a heat
+  -- only together with those. heat_order is the event-wide running order and
+  -- is what actually distinguishes one heat from another.
   heat_number,
+  heat_order,
   lane_number,
   official_time_ms,
   result_outcome,

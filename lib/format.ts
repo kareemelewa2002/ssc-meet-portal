@@ -97,3 +97,20 @@ export function heatGenderLabel(gender: "male" | "female" | null | undefined): s
   if (gender === "female") return "Women";
   return null;
 }
+
+/**
+ * The full name of a heat as it is called on deck: age board, gender, and the
+ * heat's number WITHIN that board — "17 & Under Women Heat 2".
+ *
+ * heat_number restarts per (age group, gender), so the number alone is
+ * ambiguous across an event; heat_order carries the global running order.
+ */
+export function heatTitle(heat: {
+  heatGroup: "U13_14" | "U17_OPEN";
+  gender: "male" | "female" | null | undefined;
+  heatNumber: number;
+}): string {
+  const board = heat.heatGroup === "U13_14" ? "14 & Under" : "17 & Under / Open";
+  const gender = heatGenderLabel(heat.gender);
+  return [board, gender, `Heat ${heat.heatNumber}`].filter(Boolean).join(" ");
+}

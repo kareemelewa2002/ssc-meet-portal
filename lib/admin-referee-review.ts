@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
-import type { DqReason, Gender, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
+import type { DqReason, Gender, HeatGroup, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
 
 export interface PendingReviewLane {
   heatLaneId: string;
@@ -20,7 +20,12 @@ export interface PendingReviewHeat {
   eventName: string;
   /** For the dashboard's session filter — null if the embed came back thin. */
   sessionNumber: number | null;
+  heatGroup: HeatGroup;
   gender: Gender | null;
+  /** Publish state of the heat as a whole. 'partial' means some lanes are
+   * published and some are not, which should never happen but is worth
+   * surfacing rather than rounding to one or the other. */
+  publishState: "draft" | "partial" | "published";
   lanes: PendingReviewLane[];
   /** True once every seeded lane has a submitted (draft) outcome — the
    * signal that the referee considers this heat card complete and ready
@@ -32,8 +37,8 @@ interface RawHeatLane {
   id: string;
   lane_number: number;
   heats:
-    | { id: string; heat_number: number; gender: Gender | null; event_id: string; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }
-    | { id: string; heat_number: number; gender: Gender | null; event_id: string; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }[]
+    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }
+    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }[]
     | null;
   entries:
     | {
@@ -67,12 +72,16 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
       .select(
         // Qualify the FK — athletes has two (user_id and parent_id), so a
         // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-        "id, lane_number, heats ( id, heat_number, gender, event_id, events ( name, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
+        "id, lane_number, heats ( id, heat_number, heat_group, gender, event_id, events ( name, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
       )
       .order("lane_number", { ascending: true });
     if (error || !data) return [];
 
     const heatMap = new Map<string, PendingReviewHeat>();
+    // Counted rather than folded in-place: a heat is published only when
+    // EVERY scored lane is, and 'partial' (some published, some not) has to be
+    // distinguishable from both rather than rounded to one of them.
+    const statusCounts = new Map<string, { scored: number; published: number }>();
 
     for (const lane of data as unknown as RawHeatLane[]) {
       const heat = firstOf(lane.heats);
@@ -90,7 +99,9 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
         heatNumber: heat.heat_number,
         eventName: event?.name ?? "Event",
         sessionNumber: firstOf(event?.sessions)?.session_number ?? null,
+        heatGroup: heat.heat_group,
         gender: heat.gender ?? null,
+        publishState: "published",
         lanes: [],
         complete: true,
       };
@@ -107,13 +118,37 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
         dqCode: result?.dq_code ?? null,
       });
       if (!result?.result_outcome) existing.complete = false;
+      if (result?.result_outcome) {
+        const counts = statusCounts.get(heat.id) ?? { scored: 0, published: 0 };
+        counts.scored += 1;
+        if (result.status === "published") counts.published += 1;
+        statusCounts.set(heat.id, counts);
+      }
       heatMap.set(heat.id, existing);
     }
 
     return [...heatMap.values()]
       .filter((h) => h.lanes.some((l) => l.resultOutcome != null))
-      .map((h) => ({ ...h, lanes: h.lanes.sort((a, b) => a.laneNumber - b.laneNumber) }))
-      .sort((a, b) => a.heatNumber - b.heatNumber);
+      .map((h) => {
+        const counts = statusCounts.get(h.heatId) ?? { scored: 0, published: 0 };
+        const publishState: PendingReviewHeat["publishState"] =
+          counts.published === 0
+            ? "draft"
+            : counts.published === counts.scored
+              ? "published"
+              : "partial";
+        return {
+          ...h,
+          publishState,
+          lanes: h.lanes.sort((a, b) => a.laneNumber - b.laneNumber),
+        };
+      })
+      .sort(
+        (a, b) =>
+          (a.sessionNumber ?? 0) - (b.sessionNumber ?? 0) ||
+          a.eventName.localeCompare(b.eventName) ||
+          a.heatNumber - b.heatNumber,
+      );
   } catch {
     return [];
   }
@@ -138,6 +173,32 @@ export async function publishHeatResults(heatId: string): Promise<{ success: boo
     .update({ status: "published" })
     .in("heat_lane_id", laneIds)
     .not("result_outcome", "is", null);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+/**
+ * Corrects a single lane's official time from the admin review queue.
+ *
+ * The admin reviewing a heat card is the person who spots a mistyped time,
+ * and until now their only options were publish it wrong or send the referee
+ * back to the deck. finish_place and placement_points are deliberately not
+ * written: public.recompute_heat_finish_places() re-ranks the whole heat from
+ * official_time_ms the moment this lands, so writing them here would race the
+ * trigger and could disagree with it.
+ */
+export async function updateLaneTime(
+  heatLaneId: string,
+  officialTimeMs: number,
+): Promise<{ success: boolean; error?: string }> {
+  if (!Number.isFinite(officialTimeMs) || officialTimeMs <= 0) {
+    return { success: false, error: "A corrected time must be greater than zero." };
+  }
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("results")
+    .update({ official_time_ms: officialTimeMs, result_outcome: "valid" })
+    .eq("heat_lane_id", heatLaneId);
   if (error) return { success: false, error: error.message };
   return { success: true };
 }

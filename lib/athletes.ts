@@ -10,9 +10,27 @@ import { firstOf } from "@/lib/live-heats";
 import { calculateAge } from "@/lib/age";
 import { describeError, failure, ok, type FetchResult } from "@/lib/fetch-policy";
 
+/**
+ * Display names for the age boards.
+ *
+ * The enum values stay 'U14'/'U17' — they are referenced by RLS policies,
+ * triggers and views, and renaming a Postgres enum label to something with
+ * spaces and an ampersand would buy nothing but risk. This is the only place
+ * they become words, and every screen reads from here.
+ *
+ * "& Under" is literal: the boards are cumulative, so a 14 & Under swimmer is
+ * ranked in 14 & Under, 17 & Under and Open (see public.event_results).
+ */
 export const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
-  U14: "U14",
-  U17: "U17",
+  U14: "14 & Under",
+  U17: "17 & Under",
+  Open: "Open",
+};
+
+/** Compact form for badges and pills where the full name will not fit. */
+export const AGE_GROUP_SHORT_LABELS: Record<AgeGroup, string> = {
+  U14: "14&U",
+  U17: "17&U",
   Open: "Open",
 };
 

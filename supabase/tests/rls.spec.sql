@@ -528,10 +528,12 @@ begin
   perform ssc_test.check('DB-13','every confirmed entry gets a lane',
     v_lanes = v_confirmed, format('lanes=%s confirmed=%s', v_lanes, v_confirmed));
 
-  -- U14 always swims before the combined U17/Open field.
-  select max(heat_number) into v_u14_max from public.heats
+  -- U14 always swims before the combined U17/Open field. heat_order, NOT
+  -- heat_number: numbering restarts inside each (age group, gender) bucket,
+  -- so both fields start at 1 and only heat_order carries the running order.
+  select max(heat_order) into v_u14_max from public.heats
    where event_id = v_event and heat_group = 'U13_14';
-  select min(heat_number) into v_open_min from public.heats
+  select min(heat_order) into v_open_min from public.heats
    where event_id = v_event and heat_group = 'U17_OPEN';
   perform ssc_test.check('DB-13','U14 heats are scheduled before U17/Open',
     v_u14_max is null or v_open_min is null or v_u14_max < v_open_min,
@@ -611,7 +613,9 @@ begin
 
   -- The whole point: winners are drawn from more than one heat, proving the
   -- ranking is cross-heat rather than heat-local.
-  select count(distinct heat_number) into v_distinct_heats
+  -- heat_order, not heat_number: two different heats now legitimately share
+  -- heat_number (one per age group x gender), which would collapse the count.
+  select count(distinct heat_order) into v_distinct_heats
     from public.event_results where event_id = v_event;
   perform ssc_test.check('DB-14','ranking spans multiple heats',
     v_distinct_heats >= 2, format('heats represented=%s', v_distinct_heats));
@@ -776,7 +780,11 @@ begin
   join public.events ev on ev.id = en.event_id
   where r.status = 'published' and r.result_outcome = 'valid'
     and ev.stroke = 'Freestyle' and ev.distance_m = 50
+  order by en.athlete_id
   limit 1;
+
+  perform ssc_test.check('DB-18','precondition: a swimmer with a previous official time',
+    v_ath is not null, null);
 
   if v_ath is not null then
     -- Declare something absurd; the trigger must overwrite it.
@@ -802,7 +810,11 @@ begin
     join public.events ev on ev.id = en.event_id
     where en.athlete_id = a.id and ev.stroke = 'Freestyle' and ev.distance_m = 50
       and r.status = 'published' and r.result_outcome = 'valid')
+  order by a.id
   limit 1;
+
+  perform ssc_test.check('DB-18','precondition: a swimmer who has never swum it',
+    v_ath is not null, null);
 
   if v_ath is not null then
     insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
@@ -879,12 +891,19 @@ begin
     format('max rows per swimmer per board=%s', v_dupes));
 
   -- A draft result must never reach the standings.
+  -- order by h.id: earlier blocks consume unscored heats, so an unordered
+  -- limit 1 made this block skip on some runs and not others — the assertion
+  -- count wobbled between runs, which would hide a genuine skip.
   select h.id into v_heat
   from public.heats h join public.heat_lanes hl on hl.heat_id = h.id
   where not exists (select 1 from public.results r
                     join public.heat_lanes hl2 on hl2.id = r.heat_lane_id
                     where hl2.heat_id = h.id)
-  group by h.id having count(hl.id) >= 1 limit 1;
+  group by h.id having count(hl.id) >= 1
+  order by h.id limit 1;
+
+  perform ssc_test.check('DB-20','precondition: an unscored heat to draft into',
+    v_heat is not null, null);
 
   if v_heat is not null then
     select id into v_lane from public.heat_lanes where heat_id = v_heat order by lane_number limit 1;
@@ -903,6 +922,53 @@ begin
   end if;
 exception when others then
   perform ssc_test.check('DB-20','open board / draft isolation', false, sqlerrm);
+end $$;
+
+-- DB-21 — seeding order, heat numbering, and cumulative boards.
+do $$
+declare v_bad int; v_maxnum int; v_u17_from_u14 int;
+begin
+  perform set_config('role','postgres',true);
+
+  -- A swimmer with a declared time must never be seeded into a LATER (faster)
+  -- heat than an NT swimmer in the same bucket. Ordering by is_nt desc used to
+  -- rank every NT swimmer first, landing them in the final heat.
+  select count(*) into v_bad
+  from public.heats h_nt
+  join public.heat_lanes hl_nt on hl_nt.heat_id = h_nt.id
+  join public.entries en_nt on en_nt.id = hl_nt.entry_id
+  join public.heats h_t
+    on h_t.event_id = h_nt.event_id
+   and h_t.heat_group = h_nt.heat_group
+   and h_t.gender is not distinct from h_nt.gender
+  join public.heat_lanes hl_t on hl_t.heat_id = h_t.id
+  join public.entries en_t on en_t.id = hl_t.entry_id
+  where en_nt.is_nt and not en_t.is_nt
+    and h_nt.heat_number > h_t.heat_number;
+  perform ssc_test.check('DB-21','no NT swimmer is seeded above a swimmer with a time',
+    v_bad = 0, format('violations=%s', v_bad));
+
+  -- Heat numbers restart within each (age group, gender) bucket.
+  select max(heat_number) into v_maxnum
+  from public.heats h
+  join public.events ev on ev.id = h.event_id
+  where ev.is_relay = false and ev.is_skins = false;
+  perform ssc_test.check('DB-21','heat numbers restart per bucket rather than running globally',
+    v_maxnum is null or v_maxnum <= 6, format('max heat_number=%s', v_maxnum));
+
+  -- Boards are cumulative: the 17 & Under board includes 14 & Under swimmers.
+  select count(*) into v_u17_from_u14
+  from public.event_results where age_group = 'U17' and own_age_group = 'U14';
+  perform ssc_test.check('DB-21','the 17 & Under board includes 14 & Under swimmers',
+    v_u17_from_u14 > 0, format('rows=%s', v_u17_from_u14));
+
+  -- ...but never the other way round.
+  select count(*) into v_bad
+  from public.event_results where age_group = 'U14' and own_age_group <> 'U14';
+  perform ssc_test.check('DB-21','the 14 & Under board never includes older swimmers',
+    v_bad = 0, format('violations=%s', v_bad));
+exception when others then
+  perform ssc_test.check('DB-21','seeding order / boards', false, sqlerrm);
 end $$;
 
 -- =============================================================================

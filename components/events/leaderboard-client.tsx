@@ -234,8 +234,8 @@ export function LeaderboardClient({ volId }: { volId: string }) {
             onChange={(v) => v && setCategory(v)}
             outdoorMode={outdoorMode}
             options={[
-              { value: "U14", label: "U14" },
-              { value: "U17", label: "U17" },
+              { value: "U14", label: "14 & Under" },
+              { value: "U17", label: "17 & Under" },
               { value: "Open", label: "Open (All Ages)" },
             ]}
           />

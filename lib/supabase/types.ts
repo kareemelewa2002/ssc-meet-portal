@@ -96,7 +96,10 @@ export type EventResultRow = {
   athlete_id: string;
   athlete_name: string;
   team_name: string | null;
+  /** Restarts per (age group, gender) — identifies a heat only together with
+   * those. heat_order is the event-wide running order. */
   heat_number: number;
+  heat_order: number;
   lane_number: number;
   official_time_ms: number;
   result_outcome: ResultOutcome;

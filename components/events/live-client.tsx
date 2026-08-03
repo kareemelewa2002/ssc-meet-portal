@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { heatGenderLabel } from "@/lib/format";
+import { heatTitle } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
@@ -30,15 +30,10 @@ import { formatTimeMs, timeDropSeconds } from "@/lib/format";
 import { DQ_REASON_LABELS } from "@/lib/results";
 import type { AgeGroup, Gender, MeetVolumeRow, SessionRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
+import { AGE_GROUP_LABELS, AGE_GROUP_SHORT_LABELS } from "@/lib/athletes";
 import { PerformanceBadges } from "@/components/results/performance-badges";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { SkeletonLane } from "@/components/ui/skeleton";
-
-const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
-  U14: "U14",
-  U17: "U17",
-  Open: "Open",
-};
 
 function LaneRow({
   lane,
@@ -101,7 +96,7 @@ function LaneRow({
             </span>
           )}
           <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
-            {AGE_GROUP_LABELS[lane.ageGroup]}
+            {AGE_GROUP_SHORT_LABELS[lane.ageGroup]}
           </Badge>
           <Badge variant="outline" className="h-5 px-1.5 text-[10px] capitalize">
             {lane.gender}
@@ -207,11 +202,7 @@ function HeatCard({
   return (
     <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
       <CardHeader className="flex-row items-center gap-2 space-y-0 pb-2">
-        <Badge className="h-7 px-2.5">Heat {heat.heatNumber}</Badge>
-        <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U14" : "U17 & Open"}</Badge>
-        {heatGenderLabel(heat.gender) && (
-          <Badge variant="outline">{heatGenderLabel(heat.gender)}</Badge>
-        )}
+        <Badge className="h-7 px-2.5">{heatTitle(heat)}</Badge>
       </CardHeader>
       <CardContent className="space-y-2">
         {heat.lanes.map((lane) => (
@@ -335,9 +326,17 @@ export function LiveEventsClient({
       const targets = showingAll ? sessions : [currentSession!];
       const standings = await Promise.all(targets.map((s) => fetchEventResultsForSession(s.id)));
       setEventResults(standings.flatMap((r) => r.data));
-      if (volumeId) {
-        const hl = await fetchPerformanceHighlights(volumeId);
-        setHighlights(hl.data);
+
+      // These errors were previously dropped on the floor, so a failing
+      // event_results query (a column the live database does not have yet,
+      // say) rendered as the perfectly calm "No results published yet" —
+      // indistinguishable from a meet nobody had scored. That is precisely
+      // the silent-failure mode lib/fetch-policy.ts exists to prevent.
+      const standingsError = standings.find((r) => r.error)?.error ?? null;
+      const hl = volumeId ? await fetchPerformanceHighlights(volumeId) : null;
+      if (hl) setHighlights(hl.data);
+      if (standingsError || hl?.error) {
+        setDataError(standingsError ?? hl?.error ?? null);
       }
     }
   }, [currentSession, isResults, sessions, showingAll, volumeId]);
@@ -455,7 +454,7 @@ export function LiveEventsClient({
         <DataErrorBanner
           error={dataError}
           usedFallback={usedFallback}
-          subject="heat sheets"
+          subject={isResults ? "results" : "heat sheets"}
           onRetry={() => void loadEvents()}
         />
 
@@ -531,8 +530,8 @@ export function LiveEventsClient({
             onChange={setAgeFilter}
             outdoorMode={outdoorMode}
             options={[
-              { value: "U14", label: "U14" },
-              { value: "U17", label: "U17" },
+              { value: "U14", label: AGE_GROUP_LABELS.U14 },
+              { value: "U17", label: AGE_GROUP_LABELS.U17 },
               { value: "Open", label: "Open" },
             ]}
           />
@@ -574,7 +573,7 @@ export function LiveEventsClient({
               />
               <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
                 {dataError
-                  ? "Heat sheets couldn’t be loaded — see the error above."
+                  ? "Couldn’t be loaded — see the error above."
                   : isResults
                     ? eventResults.length === 0
                       // A referee's entries are drafts until an admin publishes

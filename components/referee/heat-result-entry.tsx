@@ -23,7 +23,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { CLOCK_TIME_ERROR, formatTimeMs, timeDropSeconds } from "@/lib/format";
 import { useToast } from "@/hooks/use-toast";
-import type { DqReason, ResultOutcome } from "@/lib/supabase/types";
+import type { DqReason, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 
 export interface HeatLaneAthlete {
@@ -51,6 +51,10 @@ export interface HeatResultEntryProps {
   heatLabel?: string;
   lanes: HeatLaneAthlete[];
   outdoorMode?: boolean;
+  /** True when this event is the one Skins qualification is drawn from, so an
+   * NS here also costs the swimmer their Skins place. The caption used to
+   * claim that unconditionally, which was wrong on every other event. */
+  feedsSkins?: boolean;
   onSaved?: () => void;
   className?: string;
 }
@@ -73,6 +77,7 @@ export function HeatResultEntry({
   heatLabel = "Heat results",
   lanes,
   outdoorMode = false,
+  feedsSkins = false,
   onSaved,
   className,
 }: HeatResultEntryProps) {
@@ -84,12 +89,15 @@ export function HeatResultEntry({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [alreadySubmitted, setAlreadySubmitted] = useState(false);
+  const [alreadyPublished, setAlreadyPublished] = useState(false);
   type ResultRow = {
     heat_lane_id: string;
     result_outcome: ResultOutcome | null;
     official_time_ms: number | null;
     finish_place: number | null;
     dq_code: DqReason | null;
+    status?: PublishStatus;
   };
 
   const applyResultRow = useCallback((row: ResultRow) => {
@@ -123,10 +131,17 @@ export function HeatResultEntry({
       const supabase = createClient();
       const { data } = await supabase
         .from("results")
-        .select("heat_lane_id, result_outcome, official_time_ms, finish_place, dq_code")
+        .select("heat_lane_id, result_outcome, official_time_ms, finish_place, dq_code, status")
         .in("heat_lane_id", laneIds);
       if (!cancelled && data) {
-        for (const row of data as ResultRow[]) applyResultRow(row);
+        const rows = data as ResultRow[];
+        for (const row of rows) applyResultRow(row);
+        // Already sent, and possibly already published. Without this the deck
+        // happily re-submits the same card with no indication it was sent
+        // before — or that an admin has already published it and a re-submit
+        // would be overwriting a live result.
+        setAlreadySubmitted(rows.some((r) => r.result_outcome != null));
+        setAlreadyPublished(rows.length > 0 && rows.every((r) => r.status === "published"));
       }
     })();
 
@@ -435,7 +450,10 @@ export function HeatResultEntry({
                     outdoorMode ? "text-yellow-100/80" : "text-muted-foreground",
                   )}
                 >
-                  No-Show: 0 points. Excluded from Skins qualification.
+                  No-Show: 0 points, and no time recorded.
+                  {feedsSkins
+                    ? " This event feeds Skins qualification, so an NS here also costs their Skins place."
+                    : ""}
                 </p>
               )}
             </div>
@@ -448,23 +466,43 @@ export function HeatResultEntry({
           </p>
         )}
 
-        <Button
-          type="button"
-          className="min-h-[54px] w-full text-base font-bold sm:w-auto"
-          disabled={saving || readyLanes.length === 0}
-          onClick={() => void handleSave()}
-        >
-          {saving ? (
-            <Loader2 className="mr-2 size-4 animate-spin" />
-          ) : (
-            <Send className="mr-2 size-4" />
-          )}
-          {saved && allReady
-            ? "Heat card submitted to Admin"
-            : allReady
-              ? "Submit Heat Card to Admin"
-              : `Save Progress (${readyLanes.length}/${lanes.length} lanes)`}
-        </Button>
+        {alreadyPublished ? (
+          <p className="rounded-md border-2 border-black bg-neon-lime/15 p-3 text-sm">
+            <span className="font-bold">Already published by Admin.</span> These times are live on
+            the results page and leaderboards. Ask an Admin to correct a time from the review
+            queue — re-submitting here would overwrite a published result.
+          </p>
+        ) : (
+          <>
+            {alreadySubmitted && !saved && (
+              // Sent before. Re-submitting is still allowed (a referee may be
+              // correcting a lane), but it must be a decision, not an accident.
+              <p className="rounded-md border-2 border-black bg-neon-orange/15 p-3 text-sm">
+                <span className="font-bold">This card was already sent to Admin.</span> Submitting
+                again replaces what they are reviewing — only do that if you are correcting a lane.
+              </p>
+            )}
+            <Button
+              type="button"
+              className="min-h-[54px] w-full text-base font-bold sm:w-auto"
+              disabled={saving || readyLanes.length === 0}
+              onClick={() => void handleSave()}
+            >
+              {saving ? (
+                <Loader2 className="mr-2 size-4 animate-spin" />
+              ) : (
+                <Send className="mr-2 size-4" />
+              )}
+              {saved && allReady
+                ? "Heat card submitted to Admin"
+                : alreadySubmitted && allReady
+                  ? "Re-submit Heat Card to Admin"
+                  : allReady
+                    ? "Submit Heat Card to Admin"
+                    : `Save Progress (${readyLanes.length}/${lanes.length} lanes)`}
+            </Button>
+          </>
+        )}
       </CardContent>
     </Card>
   );

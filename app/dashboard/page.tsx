@@ -17,8 +17,8 @@ import { formatTimeMs } from "@/lib/format";
 import type { AgeGroup } from "@/lib/supabase/types";
 
 const CATEGORY_LABELS: Record<AgeGroup, string> = {
-  U14: "U14",
-  U17: "U17",
+  U14: "14 & Under",
+  U17: "17 & Under",
   Open: "Open",
 };
 

@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Loader2, RefreshCcw, Send } from "lucide-react";
+import { CheckCircle2, Loader2, Pencil, RefreshCcw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getErrorMessage } from "@/lib/utils";
-import { formatTimeMs, heatGenderLabel } from "@/lib/format";
+import { formatTimeMs, heatTitle, parseTimeToMs, CLOCK_TIME_ERROR } from "@/lib/format";
 import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { RESULT_OUTCOME_LABELS, DQ_REASON_LABELS } from "@/lib/results";
 import { useToast } from "@/hooks/use-toast";
@@ -15,6 +16,7 @@ import { AthleteLink } from "@/components/athletes/athlete-link";
 import {
   fetchPendingReviewHeats,
   publishHeatResults,
+  updateLaneTime,
   type PendingReviewHeat,
 } from "@/lib/admin-referee-review";
 
@@ -24,6 +26,9 @@ export function RefereeHeatCards({ className }: { className?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyHeatId, setBusyHeatId] = useState<string | null>(null);
+  const [editingLaneId, setEditingLaneId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [savingLane, setSavingLane] = useState(false);
   const [sessionFilter, setSessionFilter] = useState<string | null>(null);
   const [eventFilter, setEventFilter] = useState<string | null>(null);
   const [genderFilter, setGenderFilter] = useState<string | null>(null);
@@ -43,6 +48,31 @@ export function RefereeHeatCards({ className }: { className?: string }) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const saveLaneTime = async (heatLaneId: string) => {
+    const ms = parseTimeToMs(editValue);
+    if (ms == null) {
+      toast.error("Invalid time format", CLOCK_TIME_ERROR);
+      return;
+    }
+    setSavingLane(true);
+    try {
+      const res = await updateLaneTime(heatLaneId, ms);
+      if (!res.success) {
+        toast.error("Couldn't save the correction", res.error ?? "Unknown error");
+        return;
+      }
+      setEditingLaneId(null);
+      setEditValue("");
+      // Re-read rather than patching locally: the heat's finish places are
+      // recomputed by the database, so the local copy is stale the moment a
+      // time changes.
+      await load();
+      toast.success("Time corrected", "Finish places have been recalculated.");
+    } finally {
+      setSavingLane(false);
+    }
+  };
 
   const publish = async (heatId: string) => {
     const heat = heats.find((h) => h.heatId === heatId);
@@ -152,27 +182,57 @@ export function RefereeHeatCards({ className }: { className?: string }) {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-semibold">
-                    {heat.eventName} — {heatGenderLabel(heat.gender) ? `${heatGenderLabel(heat.gender)} ` : ""}
-                    Heat {heat.heatNumber}
+                    {heat.eventName} — {heatTitle(heat)}
                     {heat.sessionNumber != null ? ` · Session ${heat.sessionNumber}` : ""}
                   </p>
-                  <Badge variant={heat.complete ? "default" : "outline"} className="mt-1">
-                    {heat.complete ? "Draft Heat Card — Ready" : "Draft Heat Card — In Progress"}
+                  <Badge
+                    variant={
+                      heat.publishState === "published"
+                        ? "default"
+                        : heat.complete
+                          ? "default"
+                          : "outline"
+                    }
+                    className="mt-1 gap-1"
+                  >
+                    {heat.publishState === "published" ? (
+                      <>
+                        <CheckCircle2 className="size-3" />
+                        Published
+                      </>
+                    ) : heat.publishState === "partial" ? (
+                      "Partly published — re-publish to finish"
+                    ) : heat.complete ? (
+                      "Draft Heat Card — Ready"
+                    ) : (
+                      "Draft Heat Card — In Progress"
+                    )}
                   </Badge>
                 </div>
-                <Button
-                  type="button"
-                  className="min-h-[48px] gap-2"
-                  disabled={!heat.complete || busyHeatId === heat.heatId}
-                  onClick={() => void publish(heat.heatId)}
-                >
-                  {busyHeatId === heat.heatId ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Send className="size-4" />
-                  )}
-                  Publish Heat Card
-                </Button>
+                {heat.publishState === "published" ? (
+                  // Already published. The button is gone rather than disabled
+                  // with a tooltip, because a disabled Publish button next to a
+                  // published card is the exact ambiguity that led to the same
+                  // heat being published repeatedly.
+                  <p className="max-w-[16rem] text-xs text-muted-foreground">
+                    These results are live on the results page and leaderboards. Edit a time below
+                    to correct and re-publish.
+                  </p>
+                ) : (
+                  <Button
+                    type="button"
+                    className="min-h-[48px] gap-2"
+                    disabled={!heat.complete || busyHeatId === heat.heatId}
+                    onClick={() => void publish(heat.heatId)}
+                  >
+                    {busyHeatId === heat.heatId ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Send className="size-4" />
+                    )}
+                    {heat.publishState === "partial" ? "Publish remaining lanes" : "Publish Heat Card"}
+                  </Button>
+                )}
               </div>
 
               <div className="space-y-1.5">
@@ -192,7 +252,35 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                     {lane.teamName && (
                       <span className="shrink-0 text-xs text-muted-foreground">{lane.teamName}</span>
                     )}
-                    {lane.resultOutcome ? (
+                    {editingLaneId === lane.heatLaneId ? (
+                      <div className="flex w-full items-center gap-2 sm:w-auto">
+                        <Input
+                          value={editValue}
+                          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEditValue(e.target.value)}
+                          placeholder="mm:ss.cc"
+                          className="h-9 w-28"
+                          aria-label={`Corrected time for ${lane.athleteName}`}
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="h-9"
+                          disabled={savingLane}
+                          onClick={() => void saveLaneTime(lane.heatLaneId)}
+                        >
+                          Save
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-9"
+                          onClick={() => setEditingLaneId(null)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : lane.resultOutcome ? (
                       <Badge
                         variant={
                           lane.resultOutcome === "valid"
@@ -215,6 +303,24 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                       <Badge variant="outline" className="shrink-0">
                         Not entered yet
                       </Badge>
+                    )}
+                    {editingLaneId !== lane.heatLaneId && lane.resultOutcome === "valid" && (
+                      // An admin reviewing a card is the person who spots a
+                      // mistyped time; without this their only options were
+                      // publish it wrong or send the referee back to the deck.
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-9 shrink-0 gap-1 px-2 text-xs"
+                        onClick={() => {
+                          setEditingLaneId(lane.heatLaneId);
+                          setEditValue(formatTimeMs(lane.officialTimeMs));
+                        }}
+                      >
+                        <Pencil className="size-3" />
+                        Edit
+                      </Button>
                     )}
                     {lane.finishPlace != null && (
                       <Badge variant="secondary" className="shrink-0 gap-1">

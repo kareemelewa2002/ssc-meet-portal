@@ -47,7 +47,7 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { useToast } from "@/hooks/use-toast";
 import type { TeamRow } from "@/lib/supabase/types";
 
-const AGE_GROUP_LABELS: Record<string, string> = { U14: "U14", U17: "U17", Open: "Open" };
+const AGE_GROUP_LABELS: Record<string, string> = { U14: "14 & Under", U17: "17 & Under", Open: "Open" };
 
 export default function TeamsPage() {
   const { user } = useCurrentUser();

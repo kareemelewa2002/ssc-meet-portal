@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AppHeader } from "@/components/layout/app-header";
-import { formatTimeMs, heatGenderLabel } from "@/lib/format";
+import { formatTimeMs, heatTitle } from "@/lib/format";
 import { fetchActiveVolume, fetchSessionsForVolume } from "@/lib/volumes";
 import {
   fetchHeatPreview,
@@ -289,11 +289,7 @@ export default function AdminSeedingPage() {
                   {previewHeats.map((heat) => (
                     <div key={heat.heatId} className="space-y-2 rounded-lg border p-3" data-print-card>
                       <div className="flex items-center gap-2">
-                        <Badge className="h-7 px-2.5">Heat {heat.heatNumber}</Badge>
-                        <Badge variant="outline">{heat.heatGroup === "U13_14" ? "U14" : "U17 & Open"}</Badge>
-                        {heatGenderLabel(heat.gender) && (
-                          <Badge variant="outline">{heatGenderLabel(heat.gender)}</Badge>
-                        )}
+                        <Badge className="h-7 px-2.5">{heatTitle(heat)}</Badge>
                       </div>
                       {heat.lanes.map((lane) => (
                         <button
