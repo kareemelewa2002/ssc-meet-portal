@@ -852,6 +852,59 @@ exception when others then
   perform ssc_test.check('DB-19','points views', false, sqlerrm);
 end $$;
 
+-- DB-20 — Open is open to all ages, and drafts are not results.
+do $$
+declare v_u14_rows int; v_open_own int; v_dupes int; v_draft_visible int; v_heat uuid; v_lane uuid;
+begin
+  perform set_config('role','postgres',true);
+
+  -- Age-group boards stay exclusive...
+  select count(*) into v_u14_rows
+  from public.event_results where age_group = 'U14' and own_age_group <> 'U14';
+  perform ssc_test.check('DB-20','the U14 board contains only U14 swimmers', v_u14_rows = 0,
+    format('foreign rows=%s', v_u14_rows));
+
+  -- ...but the Open board takes everyone.
+  select count(distinct own_age_group) into v_open_own
+  from public.event_results where age_group = 'Open';
+  perform ssc_test.check('DB-20','the Open board ranks U14 and U17 swimmers too', v_open_own > 1,
+    format('distinct own age groups on the Open board=%s', v_open_own));
+
+  -- An Open swimmer must not be duplicated by the own-group + Open expansion.
+  select coalesce(max(c), 0) into v_dupes from (
+    select athlete_id, event_id, age_group, count(*) c
+    from public.event_results group by 1,2,3
+  ) x;
+  perform ssc_test.check('DB-20','no swimmer appears twice on the same board', v_dupes <= 1,
+    format('max rows per swimmer per board=%s', v_dupes));
+
+  -- A draft result must never reach the standings.
+  select h.id into v_heat
+  from public.heats h join public.heat_lanes hl on hl.heat_id = h.id
+  where not exists (select 1 from public.results r
+                    join public.heat_lanes hl2 on hl2.id = r.heat_lane_id
+                    where hl2.heat_id = h.id)
+  group by h.id having count(hl.id) >= 1 limit 1;
+
+  if v_heat is not null then
+    select id into v_lane from public.heat_lanes where heat_id = v_heat order by lane_number limit 1;
+    insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+    values (v_lane, 'valid', 24000, 'draft');
+
+    select count(*) into v_draft_visible
+    from public.event_results er
+    join public.heat_lanes hl on hl.heat_id = v_heat
+    join public.entries en on en.id = hl.entry_id
+    where er.athlete_id = en.athlete_id and er.official_time_ms = 24000;
+    perform ssc_test.check('DB-20','a draft result never reaches the standings', v_draft_visible = 0,
+      format('leaked rows=%s', v_draft_visible));
+
+    delete from public.results where heat_lane_id = v_lane;
+  end if;
+exception when others then
+  perform ssc_test.check('DB-20','open board / draft isolation', false, sqlerrm);
+end $$;
+
 -- =============================================================================
 -- Report
 -- =============================================================================

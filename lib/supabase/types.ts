@@ -84,7 +84,14 @@ export type EventResultRow = {
   event_name: string;
   session_id: string;
   meet_volume_id: string;
+  /** The board this row belongs to. Not mutually exclusive: "Open" means
+   * open to all ages, so a U14 swimmer appears in both U14 and Open. */
   age_group: AgeGroup;
+  /** The swimmer's actual age group, which differs from age_group on an
+   * Open-board row for a younger swimmer. */
+  own_age_group: AgeGroup;
+  /** True when this row is a younger swimmer ranked in the Open standings. */
+  is_open_entry: boolean;
   gender: Gender;
   athlete_id: string;
   athlete_name: string;

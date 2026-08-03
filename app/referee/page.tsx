@@ -5,14 +5,8 @@ import { Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { HeatResultEntry } from "@/components/referee/heat-result-entry";
+import { FilterPillGroup } from "@/components/events/filter-pill-group";
 import { AppHeader } from "@/components/layout/app-header";
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
@@ -20,18 +14,25 @@ import type { Gender, PublishStatus, SessionRow } from "@/lib/supabase/types";
 import { heatGenderLabel } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-interface RefereeEventOption {
+type RawAthlete = {
   id: string;
-  name: string;
-  sessionId: string;
-}
+  users: { full_name: string } | { full_name: string }[] | null;
+  teams: { name: string } | { name: string }[] | null;
+};
 
-interface RefereeHeatOption {
-  id: string;
+/** One heat, with everything needed to render and score it in place. */
+interface RefereeDeckHeat {
+  heatId: string;
   heatNumber: number;
   /** null only for legacy heats seeded before male/female were split. */
   gender: Gender | null;
   status: PublishStatus;
+  eventId: string;
+  eventName: string;
+  eventOrder: number;
+  sessionId: string | null;
+  sessionNumber: number | null;
+  lanes: RefereeLane[];
 }
 
 // Satisfies HeatResultEntry's HeatLaneAthlete, which treats athleteId as
@@ -72,27 +73,18 @@ interface RefereeLane {
 export default function RefereePage() {
   const [outdoorMode, setOutdoorMode] = useState(false);
 
-  const [sessions, setSessions] = useState<SessionRow[]>([]);
-  const [events, setEvents] = useState<RefereeEventOption[]>([]);
-  const [heats, setHeats] = useState<RefereeHeatOption[]>([]);
-  const [sessionId, setSessionId] = useState("");
-  const [eventId, setEventId] = useState("");
-  const [heatId, setHeatId] = useState("");
-  const [lanes, setLanes] = useState<RefereeLane[]>([]);
+  const [deck, setDeck] = useState<RefereeDeckHeat[]>([]);
+  const [loadingDeck, setLoadingDeck] = useState(true);
+  // Filters, not gates: they narrow the stacked list, they do not decide
+  // which single heat is visible.
+  const [sessionFilter, setSessionFilter] = useState<string | null>(null);
+  const [eventFilter, setEventFilter] = useState<string | null>(null);
+  const [genderFilter, setGenderFilter] = useState<string | null>(null);
+  const [unscoredOnly, setUnscoredOnly] = useState(false);
 
-  const sessionEvents = useMemo(
-    () => events.filter((e) => e.sessionId === sessionId),
-    [events, sessionId],
-  );
-
-  // Keep the event picker consistent with the chosen session — otherwise a
-  // session switch leaves a stale event selected and the deck renders empty.
-  useEffect(() => {
-    if (sessionEvents.length === 0) return;
-    if (!sessionEvents.some((e) => e.id === eventId)) {
-      setEventId(sessionEvents[0].id);
-    }
-  }, [sessionEvents, eventId]);
+  // The deck loader needs session numbers to order heats the way they are
+  // swum; a ref avoids making the loader depend on (and re-run for) sessions.
+  const sessionsRef = useRef<SessionRow[]>([]);
 
   const loadSchedule = useCallback(async () => {
     try {
@@ -101,189 +93,148 @@ export default function RefereePage() {
         .from("sessions")
         .select("*")
         .order("session_number", { ascending: true });
-      let activeSessionId = "";
-      if (sess?.length) {
-        setSessions(sess);
-        setSessionId((prev) => {
-          activeSessionId = sess.some((s) => s.id === prev) ? prev : sess[0].id;
-          return activeSessionId;
-        });
-      }
-
-      const { data: ev } = await supabase
-        .from("events")
-        .select("id, name, session_id")
-        .order("event_order", { ascending: true });
-      if (ev?.length) {
-        const mapped = ev.map((e) => ({ id: e.id, name: e.name, sessionId: e.session_id }));
-        setEvents(mapped);
-        setEventId((prev) => {
-          if (mapped.some((e) => e.id === prev)) return prev;
-          // Must be an event IN the selected session: the global first event
-          // often belongs to another session, which left the picker showing
-          // "Select event" and the deck empty.
-          const inSession = mapped.filter((e) => e.sessionId === activeSessionId);
-          return (inSession[0] ?? mapped[0]).id;
-        });
-      }
+      if (sess?.length) sessionsRef.current = sess;
     } catch {
       // Fail closed: an empty deck is honest, a fabricated one is not.
     }
   }, []);
 
-  const latestHeatsRequestRef = useRef<string | null>(null);
-
-  // Every event can have several heats (age-bracket heat sheets); the
-  // referee works one physical heat at a time, so this is a second-level
-  // picker beneath the event dropdown.
-  const loadHeatsForEvent = useCallback(async (selectedEventId: string) => {
-    latestHeatsRequestRef.current = selectedEventId;
-
-    if (!selectedEventId) {
-      setHeats([]);
-      setHeatId("");
-      return;
-    }
-
+  /**
+   * Loads EVERY heat with its lanes in two queries, rather than drilling
+   * session -> event -> heat one at a time.
+   *
+   * A referee on deck does not page through a picker to find the heat in
+   * front of them; they scan down the sheet. So the deck lists all heats
+   * stacked, and the pickers become filters that narrow the list instead of
+   * gating it.
+   */
+  const loadDeck = useCallback(async () => {
+    setLoadingDeck(true);
     try {
       const supabase = createClient();
-      const { data, error } = await supabase
+      const { data: heatRows, error: heatError } = await supabase
         .from("heats")
-        .select("id, heat_number, gender, status")
-        .eq("event_id", selectedEventId)
+        .select("id, heat_number, gender, status, event_id, events ( name, event_order, session_id )")
         .order("heat_number", { ascending: true });
 
-      if (latestHeatsRequestRef.current !== selectedEventId) return;
-      if (error || !data?.length) {
-        setHeats([]);
-        setHeatId("");
+      if (heatError || !heatRows?.length) {
+        setDeck([]);
         return;
       }
 
-      const mapped: RefereeHeatOption[] = data.map((h) => ({
-        id: h.id,
-        heatNumber: h.heat_number,
-        gender: h.gender ?? null,
-        status: h.status,
-      }));
-      setHeats(mapped);
-      // Default to the first heat still in draft (the one a referee is
-      // actually about to run) — fall back to the first heat overall.
-      const defaultHeat = mapped.find((h) => h.status === "draft") ?? mapped[0];
-      setHeatId(defaultHeat.id);
-    } catch {
-      if (latestHeatsRequestRef.current !== selectedEventId) return;
-      setHeats([]);
-    }
-  }, []);
+      type RawHeatRow = {
+        id: string;
+        heat_number: number;
+        gender: Gender | null;
+        status: PublishStatus;
+        event_id: string;
+        events:
+          | { name: string; event_order: number; session_id: string }
+          | { name: string; event_order: number; session_id: string }[]
+          | null;
+      };
 
-  const latestLanesRequestRef = useRef<string | null>(null);
-
-  const loadLanesForHeat = useCallback(async (selectedHeatId: string) => {
-    latestLanesRequestRef.current = selectedHeatId;
-
-    if (!selectedHeatId) {
-      setLanes([]);
-      return;
-    }
-
-    try {
-      const supabase = createClient();
-      const { data, error } = await supabase
+      const heatIds = (heatRows as unknown as RawHeatRow[]).map((h) => h.id);
+      const { data: laneRows } = await supabase
         .from("heat_lanes")
         .select(
           // Qualify the FK — athletes has two (user_id and parent_id), so a
           // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-          "id, lane_number, entries ( id, seed_time_ms, athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) )",
+          "id, heat_id, lane_number, entries ( id, seed_time_ms, athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) )",
         )
-        .eq("heat_id", selectedHeatId)
+        .in("heat_id", heatIds)
         .order("lane_number", { ascending: true });
 
-      if (latestLanesRequestRef.current !== selectedHeatId) return;
-      if (error || !data?.length) {
-        setLanes([]);
-        return;
-      }
-
-      type RawLane = {
+      type RawLaneRow = {
         id: string;
+        heat_id: string;
         lane_number: number;
         entries:
-          | {
-              id: string;
-              seed_time_ms: number | null;
-              athletes:
-                | {
-                    id: string;
-                    users: { full_name: string } | { full_name: string }[] | null;
-                    teams: { name: string } | { name: string }[] | null;
-                  }
-                | {
-                    id: string;
-                    users: { full_name: string } | { full_name: string }[] | null;
-                    teams: { name: string } | { name: string }[] | null;
-                  }[]
-                | null;
-            }
-          | {
-              id: string;
-              seed_time_ms: number | null;
-              athletes:
-                | {
-                    id: string;
-                    users: { full_name: string } | { full_name: string }[] | null;
-                    teams: { name: string } | { name: string }[] | null;
-                  }
-                | {
-                    id: string;
-                    users: { full_name: string } | { full_name: string }[] | null;
-                    teams: { name: string } | { name: string }[] | null;
-                  }[]
-                | null;
-            }[]
+          | { id: string; seed_time_ms: number | null; athletes: RawAthlete | RawAthlete[] | null }
+          | { id: string; seed_time_ms: number | null; athletes: RawAthlete | RawAthlete[] | null }[]
           | null;
       };
 
-      const mapped = (data as unknown as RawLane[])
-        .map((lane): RefereeLane | null => {
-          const entry = firstOf(lane.entries);
-          const athlete = entry ? firstOf(entry.athletes) : null;
-          const user = athlete ? firstOf(athlete.users) : null;
-          const team = athlete ? firstOf(athlete.teams) : null;
-          if (!athlete || !user) return null;
+      const lanesByHeat = new Map<string, RefereeLane[]>();
+      for (const lane of (laneRows ?? []) as unknown as RawLaneRow[]) {
+        const entry = firstOf(lane.entries);
+        const athlete = entry ? firstOf(entry.athletes) : null;
+        const user = athlete ? firstOf(athlete.users) : null;
+        const team = athlete ? firstOf(athlete.teams) : null;
+        if (!athlete || !user) continue;
+        const list = lanesByHeat.get(lane.heat_id) ?? [];
+        list.push({
+          heatLaneId: lane.id,
+          laneNumber: lane.lane_number,
+          athleteName: user.full_name,
+          athleteId: athlete.id,
+          teamName: team?.name,
+          seedTimeMs: entry?.seed_time_ms ?? null,
+          entryId: entry?.id,
+        });
+        lanesByHeat.set(lane.heat_id, list);
+      }
+
+      const sessionNumberById = new Map(sessionsRef.current.map((s) => [s.id, s.session_number]));
+      const built: RefereeDeckHeat[] = (heatRows as unknown as RawHeatRow[])
+        .map((h) => {
+          const event = firstOf(h.events);
           return {
-            heatLaneId: lane.id,
-            laneNumber: lane.lane_number,
-            athleteName: user.full_name,
-            athleteId: athlete.id,
-            teamName: team?.name,
-            seedTimeMs: entry?.seed_time_ms ?? null,
-            entryId: entry?.id,
+            heatId: h.id,
+            heatNumber: h.heat_number,
+            gender: h.gender ?? null,
+            status: h.status,
+            eventId: h.event_id,
+            eventName: event?.name ?? "Event",
+            eventOrder: event?.event_order ?? 0,
+            sessionId: event?.session_id ?? null,
+            sessionNumber: sessionNumberById.get(event?.session_id ?? "") ?? null,
+            lanes: (lanesByHeat.get(h.id) ?? []).sort((a, b) => a.laneNumber - b.laneNumber),
           };
         })
-        .filter((l): l is RefereeLane => l !== null)
-        .sort((a, b) => a.laneNumber - b.laneNumber);
+        // The order they are actually swum.
+        .sort(
+          (a, b) =>
+            (a.sessionNumber ?? 0) - (b.sessionNumber ?? 0) ||
+            a.eventOrder - b.eventOrder ||
+            a.heatNumber - b.heatNumber,
+        );
 
-      setLanes(mapped);
+      setDeck(built);
     } catch {
-      if (latestLanesRequestRef.current !== selectedHeatId) return;
-      setLanes([]);
+      // Fail closed: an empty deck is honest, a fabricated one is not.
+      setDeck([]);
+    } finally {
+      setLoadingDeck(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadSchedule();
-  }, [loadSchedule]);
+    void (async () => {
+      // Schedule first: the deck orders heats by session number.
+      await loadSchedule();
+      await loadDeck();
+    })();
+  }, [loadSchedule, loadDeck]);
 
-  useEffect(() => {
-    void loadHeatsForEvent(eventId);
-  }, [eventId, loadHeatsForEvent]);
+  const sessionNumbers = useMemo(
+    () => [...new Set(deck.map((h) => h.sessionNumber).filter((n): n is number => n != null))].sort(),
+    [deck],
+  );
+  const eventNames = useMemo(
+    () => [...new Set(deck.map((h) => h.eventName))],
+    [deck],
+  );
 
-  useEffect(() => {
-    void loadLanesForHeat(heatId);
-  }, [heatId, loadLanesForHeat]);
-
-  const selectedHeat = heats.find((h) => h.id === heatId);
+  const visibleHeats = useMemo(
+    () =>
+      deck
+        .filter((h) => !sessionFilter || String(h.sessionNumber) === sessionFilter)
+        .filter((h) => !eventFilter || h.eventName === eventFilter)
+        .filter((h) => !genderFilter || h.gender === genderFilter)
+        .filter((h) => !unscoredOnly || h.status !== "published"),
+    [deck, sessionFilter, eventFilter, genderFilter, unscoredOnly],
+  );
 
   return (
     <div className={cn("min-h-screen", outdoorMode && "bg-black text-yellow-300")}>
@@ -317,90 +268,69 @@ export default function RefereePage() {
 
       <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
         <CardHeader>
-          <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>Session, event & heat</CardTitle>
+          <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>Filter the deck</CardTitle>
           <CardDescription className={outdoorMode ? "text-yellow-100/70" : undefined}>
-            Pick the physical heat you&rsquo;re on deck for.
+            Every heat is listed below in the order it is swum. These narrow the list — they
+            don&rsquo;t hide the rest of the meet behind a picker.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-3">
+        <CardContent className="flex flex-wrap gap-4">
+          {sessionNumbers.length > 1 && (
+            <FilterPillGroup
+              label="Session"
+              value={sessionFilter}
+              onChange={setSessionFilter}
+              outdoorMode={outdoorMode}
+              options={sessionNumbers.map((n) => ({ value: String(n), label: `S${n}` }))}
+            />
+          )}
+          {eventNames.length > 1 && (
+            <FilterPillGroup
+              label="Event"
+              value={eventFilter}
+              onChange={setEventFilter}
+              outdoorMode={outdoorMode}
+              options={eventNames.map((n) => ({ value: n, label: n }))}
+            />
+          )}
+          <FilterPillGroup
+            label="Gender"
+            value={genderFilter}
+            onChange={setGenderFilter}
+            outdoorMode={outdoorMode}
+            options={[
+              { value: "male", label: "Men" },
+              { value: "female", label: "Women" },
+            ]}
+          />
           <div className="space-y-1.5">
-            <Label>Session</Label>
-            <Select
-              value={sessionId}
-              onValueChange={(value) => {
-                if (!value) return;
-                setSessionId(value);
-                const firstEvent = events.find((e) => e.sessionId === value);
-                if (firstEvent) setEventId(firstEvent.id);
-              }}
+            <Label>Show</Label>
+            <Button
+              type="button"
+              variant={unscoredOnly ? "default" : "outline"}
+              className="min-h-[48px]"
+              aria-pressed={unscoredOnly}
+              onClick={() => setUnscoredOnly((v) => !v)}
             >
-              <SelectTrigger className="min-h-[48px] w-full">
-                {/* Select.Value renders the raw value string by default —
-                    a render function is required to show the matching
-                    label instead (see Base UI Select docs). */}
-                <SelectValue>
-                  {(value: string) => sessions.find((s) => s.id === value)?.name ?? "Select session"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {sessions.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {s.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Event</Label>
-            <Select value={eventId} onValueChange={(value) => value && setEventId(value)}>
-              <SelectTrigger className="min-h-[48px] w-full">
-                <SelectValue>
-                  {(value: string) => sessionEvents.find((e) => e.id === value)?.name ?? "Select event"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {sessionEvents.map((e) => (
-                  <SelectItem key={e.id} value={e.id}>
-                    {e.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Heat</Label>
-            <Select value={heatId} onValueChange={(value) => value && setHeatId(value)}>
-              <SelectTrigger className="min-h-[48px] w-full" disabled={heats.length === 0}>
-                <SelectValue placeholder={heats.length === 0 ? "No heats seeded" : undefined}>
-                  {(value: string) => {
-                    const h = heats.find((heat) => heat.id === value);
-                    if (!h) return "No heats seeded";
-                    return `Heat ${h.heatNumber} ${h.status === "published" ? "(Published)" : "(Draft)"}`;
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {heats.map((h) => (
-                  <SelectItem key={h.id} value={h.id}>
-                    Heat {h.heatNumber}
-                    {heatGenderLabel(h.gender) ? ` — ${heatGenderLabel(h.gender)}` : ""}{" "}
-                    {h.status === "published" ? "(Published)" : "(Draft)"}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              Not yet published
+            </Button>
           </div>
         </CardContent>
       </Card>
 
-      {lanes.length === 0 ? (
+      {loadingDeck ? (
+        <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
+          <CardContent className="py-8 text-center">
+            <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
+              Loading the deck…
+            </p>
+          </CardContent>
+        </Card>
+      ) : visibleHeats.length === 0 ? (
         <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
           <CardContent className="space-y-2 py-8 text-center">
             <p className={cn("font-bold", outdoorMode && "text-yellow-300")}>
-              {heats.length === 0 ? "No heats seeded for this event yet" : "No lanes in this heat"}
+              {deck.length === 0 ? "No heats seeded yet" : "No heats match this filter"}
             </p>
             <p
               className={cn(
@@ -408,29 +338,28 @@ export default function RefereePage() {
                 outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
               )}
             >
-              {heats.length === 0
-                ? "Heats are generated once an admin approves the swimmers and confirms their entries. Nothing can be scored until then."
-                : "This heat has no lane assignments."}
+              {deck.length === 0
+                ? "Heats are generated once an admin confirms a swimmer's payment. Nothing can be scored until then."
+                : `${deck.length} heats in this meet — clear a filter to see them.`}
             </p>
           </CardContent>
         </Card>
       ) : (
-        <>
-          <HeatResultEntry
-            heatId={heatId}
-            heatLabel={
-              selectedHeat
-                ? `${sessionEvents.find((e) => e.id === eventId)?.name ?? "Event"} — ${
-                    heatGenderLabel(selectedHeat.gender)
-                      ? `${heatGenderLabel(selectedHeat.gender)} `
-                      : ""
-                  }Heat ${selectedHeat.heatNumber}`
-                : "Heat"
-            }
-            lanes={lanes}
-            outdoorMode={outdoorMode}
-          />
-        </>
+        <div className="space-y-4">
+          {visibleHeats.map((heat) => (
+            <HeatResultEntry
+              key={heat.heatId}
+              heatId={heat.heatId}
+              heatLabel={`${heat.eventName} — ${
+                heatGenderLabel(heat.gender) ? `${heatGenderLabel(heat.gender)} ` : ""
+              }Heat ${heat.heatNumber}${
+                heat.sessionNumber != null ? ` · Session ${heat.sessionNumber}` : ""
+              }`}
+              lanes={heat.lanes}
+              outdoorMode={outdoorMode}
+            />
+          ))}
+        </div>
       )}
       </main>
     </div>

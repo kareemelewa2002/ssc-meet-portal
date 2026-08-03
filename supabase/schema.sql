@@ -2769,38 +2769,77 @@ create trigger generate_heats_on_confirm_update
 --
 -- A view rather than a table: it is derived entirely from published results,
 -- so it can never drift out of sync the way a trigger-maintained copy would.
+-- Overall standings across every heat of an event.
+--
+-- CATEGORIES ARE NOT MUTUALLY EXCLUSIVE. "Open" means open to all ages, so a
+-- U14 or U17 swimmer is ranked in the Open standings against the Open field
+-- as well as in their own age group. Each result therefore produces up to two
+-- rows: one for the swimmer's own age group, and one for Open. An Open
+-- swimmer produces a single row, since Open already is their age group.
+--
+-- Ranking is rank(), so equal times share a place and skip the next (1,1,3).
 create or replace view public.event_results as
+with scored as (
+  select
+    ev.id                                             as event_id,
+    ev.name                                           as event_name,
+    ev.session_id,
+    s.meet_volume_id,
+    coalesce(en.age_group_at_entry, a.age_group)      as own_age_group,
+    a.gender,
+    a.id                                              as athlete_id,
+    u.full_name                                       as athlete_name,
+    t.name                                            as team_name,
+    h.heat_number,
+    hl.lane_number,
+    r.official_time_ms,
+    r.result_outcome,
+    r.dq_code
+  from public.results r
+  join public.heat_lanes hl on hl.id = r.heat_lane_id
+  join public.heats h       on h.id = hl.heat_id
+  join public.events ev     on ev.id = h.event_id
+  join public.sessions s    on s.id = ev.session_id
+  join public.entries en    on en.id = hl.entry_id
+  join public.athletes a    on a.id = en.athlete_id
+  join public.users u       on u.id = a.user_id
+  left join public.teams t  on t.id = a.team_id
+  where r.status = 'published'
+    and r.result_outcome = 'valid'
+    and r.official_time_ms is not null
+),
+categorised as (
+  select scored.*, cat.age_group, (cat.age_group <> scored.own_age_group) as is_open_entry
+  from scored
+  -- distinct collapses the duplicate for a swimmer whose own group IS Open.
+  cross join lateral (
+    select distinct unnest(array[scored.own_age_group, 'Open'::public.age_group]) as age_group
+  ) cat
+)
 select
-  ev.id                                             as event_id,
-  ev.name                                           as event_name,
-  ev.session_id,
-  s.meet_volume_id,
-  coalesce(en.age_group_at_entry, a.age_group)      as age_group,
-  a.gender,
-  a.id                                              as athlete_id,
-  u.full_name                                       as athlete_name,
-  t.name                                            as team_name,
-  h.heat_number,
-  hl.lane_number,
-  r.official_time_ms,
-  r.result_outcome,
-  r.dq_code,
+  event_id,
+  event_name,
+  session_id,
+  meet_volume_id,
+  age_group,
+  own_age_group,
+  -- True when this row is a younger swimmer appearing in the Open standings,
+  -- so the UI can say so rather than looking like a mis-categorised entry.
+  is_open_entry,
+  gender,
+  athlete_id,
+  athlete_name,
+  team_name,
+  heat_number,
+  lane_number,
+  official_time_ms,
+  result_outcome,
+  dq_code,
   rank() over (
-    partition by ev.id, coalesce(en.age_group_at_entry, a.age_group), a.gender
-    order by r.official_time_ms asc
+    partition by event_id, age_group, gender
+    order by official_time_ms asc
   )                                                 as event_place
-from public.results r
-join public.heat_lanes hl on hl.id = r.heat_lane_id
-join public.heats h       on h.id = hl.heat_id
-join public.events ev     on ev.id = h.event_id
-join public.sessions s    on s.id = ev.session_id
-join public.entries en    on en.id = hl.entry_id
-join public.athletes a    on a.id = en.athlete_id
-join public.users u       on u.id = a.user_id
-left join public.teams t  on t.id = a.team_id
-where r.status = 'published'
-  and r.result_outcome = 'valid'
-  and r.official_time_ms is not null;
+from categorised;
 
 comment on view public.event_results is
   'Overall per-event standings across ALL heats, partitioned by event x age '

@@ -117,6 +117,13 @@ function LaneRow({
         >
           Seed {lane.isNt ? "NT" : formatTimeMs(lane.seedTimeMs)}
         </p>
+        {lane.awaitingApproval && (
+          // A referee has entered a time; an admin has not published it. The
+          // time itself is deliberately not shown — it is not official yet.
+          <Badge variant="outline" className="mt-1 h-5 px-1.5 text-[10px]">
+            Awaiting approval
+          </Badge>
+        )}
         {lane.result && (
           <div className="mt-1">
             {lane.result.outcome === "dq" ? (
@@ -388,6 +395,20 @@ export function LiveEventsClient({
 
   const eventNames = useMemo(() => Array.from(new Set(events.map((e) => e.name))), [events]);
 
+  // The results view is driven by the ranked standings, not by heats — so the
+  // filters and the empty state have to key off these rows, or filtering to a
+  // combination with no swimmers would still render an empty rankings block.
+  const visibleEventResults = useMemo(
+    () =>
+      eventResults
+        .filter((r) => !eventFilterId || r.eventId === eventFilterId)
+        .filter((r) => !eventNameFilter || r.eventName === eventNameFilter)
+        .filter((r) => !genderFilter || r.gender === genderFilter)
+        .filter((r) => !ageFilter || r.ageGroup === ageFilter)
+        .filter((r) => !strokeFilter || events.find((e) => e.eventId === r.eventId)?.stroke === strokeFilter),
+    [eventResults, eventFilterId, eventNameFilter, genderFilter, ageFilter, strokeFilter, events],
+  );
+
   return (
     <div className={cn("min-h-screen", outdoorMode ? "bg-black text-yellow-300" : "bg-background")}>
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
@@ -542,7 +563,7 @@ export function LiveEventsClient({
               <SkeletonLane key={i} />
             ))}
           </div>
-        ) : filteredEvents.length === 0 ? (
+        ) : (isResults ? visibleEventResults.length === 0 : filteredEvents.length === 0) ? (
           <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
             <CardContent className="py-8 text-center">
               <Radio
@@ -554,23 +575,26 @@ export function LiveEventsClient({
               <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
                 {dataError
                   ? "Heat sheets couldn’t be loaded — see the error above."
-                  : events.length === 0
-                    ? isResults
-                      ? "No results published for this session yet."
-                      : "No heat sheets published for this session yet — check back soon."
-                    : isResults
-                      ? "No published results match the selected filters."
+                  : isResults
+                    ? eventResults.length === 0
+                      // A referee's entries are drafts until an admin publishes
+                      // them, so "nothing here" genuinely means nothing has been
+                      // approved — not that nothing has been swum.
+                      ? "No results published yet — times appear here once an admin approves the referee's heat card."
+                      : "No published results match the selected filters."
+                    : events.length === 0
+                      ? "No heat sheets published yet — check back soon."
                       : "No swimmers match the selected filters."}
               </p>
             </CardContent>
           </Card>
         ) : (
           <div className="space-y-6">
-            {isResults && eventResults.length > 0 && (
+            {isResults && visibleEventResults.length > 0 && (
               <section aria-label="Overall event standings" className="space-y-3">
                 <div>
                   <h2 className={cn("text-base font-bold", outdoorMode && "text-yellow-300")}>
-                    Overall standings
+                    Results by rank
                   </h2>
                   <p
                     className={cn(
@@ -578,15 +602,14 @@ export function LiveEventsClient({
                       outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
                     )}
                   >
-                    Ranked across every heat — heats are seeded by speed, so winning heat 1 is not
-                    the same as winning the event.
+                    Ranked across every heat of the event — heats are seeded by speed, so winning
+                    heat 1 is not the same as winning the event. Open is open to all ages, so U14
+                    and U17 swimmers are ranked there against the Open field as well as in their
+                    own age group.
                   </p>
                 </div>
                 {Object.entries(
-                  eventResults
-                    .filter((r) => !eventNameFilter || r.eventName === eventNameFilter)
-                    .filter((r) => !genderFilter || r.gender === genderFilter)
-                    .filter((r) => !ageFilter || r.ageGroup === ageFilter)
+                  visibleEventResults
                     .reduce<Record<string, EventResultView[]>>((acc, r) => {
                       const key = `${r.eventName} · ${r.ageGroup} · ${r.gender}`;
                       (acc[key] ??= []).push(r);
@@ -629,16 +652,15 @@ export function LiveEventsClient({
                               name={r.athleteName}
                               className={cn("truncate", outdoorMode && "text-yellow-300")}
                             />
-                            {r.teamName && (
-                              <p
-                                className={cn(
-                                  "truncate text-xs",
-                                  outdoorMode ? "text-yellow-100/60" : "text-muted-foreground",
-                                )}
-                              >
-                                {r.teamName} · heat {r.heatNumber}
-                              </p>
-                            )}
+                            <p
+                              className={cn(
+                                "truncate text-xs",
+                                outdoorMode ? "text-yellow-100/60" : "text-muted-foreground",
+                              )}
+                            >
+                              {r.teamName ? `${r.teamName} · ` : ""}heat {r.heatNumber}
+                              {r.isOpenEntry ? ` · ${AGE_GROUP_LABELS[r.ownAgeGroup]} swimmer` : ""}
+                            </p>
                           </div>
                           <span
                             className={cn(
@@ -656,7 +678,7 @@ export function LiveEventsClient({
               </section>
             )}
 
-            {filteredEvents.map((ev) => (
+            {!isResults && filteredEvents.map((ev) => (
               <div key={ev.eventId} className="space-y-2">
                 <h2
                   className={cn(

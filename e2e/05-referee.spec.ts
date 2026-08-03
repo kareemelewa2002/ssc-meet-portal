@@ -13,10 +13,10 @@ test.describe("Consolidated Referee deck", () => {
     await page.goto("/referee");
     await page.waitForTimeout(1500);
 
-    // The picker always renders. The lane cards only render once a heat has
-    // lanes — heats are generated when an admin confirms entries, so on a
+    // The filter bar always renders. Heat cards only appear once heats
+    // exist — they are generated when an admin confirms entries, so on a
     // freshly-seeded database there are legitimately none yet.
-    await expect(page.getByText("Session, event & heat")).toBeVisible();
+    await expect(page.getByText("Filter the deck")).toBeVisible();
     expect(errors.filter((e) => !/favicon/i.test(e))).toEqual([]);
   });
 

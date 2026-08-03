@@ -102,6 +102,10 @@ export interface LiveLaneView {
   ageGroup: AgeGroup;
   seedTimeMs: number | null;
   isNt: boolean;
+  /** A referee has entered something, but an admin has not published it. The
+   * time is deliberately NOT exposed here — an unapproved time must not be
+   * readable as a result just because the viewer's role can see the row. */
+  awaitingApproval: boolean;
   result: LiveResultView | null;
 }
 
@@ -153,9 +157,18 @@ export function transformLiveEvents(raw: RawEvent[]): LiveEventView[] {
             if (!entry || !athlete) return null;
             const user = firstOf(athlete.users);
             const team = firstOf(athlete.teams);
-            const result = firstOf(lane.results);
+            const rawResult = firstOf(lane.results);
+            // A DRAFT result is a referee's working entry, not a result. RLS
+            // hides drafts from spectators, but admins and referees CAN read
+            // them — so without this check their view of the heat sheet showed
+            // unapproved times rendered exactly like published ones, which is
+            // indistinguishable from the admin's approval step having been
+            // skipped. `awaitingApproval` keeps the lane honest: something has
+            // been entered, but it is not a result yet.
+            const result = rawResult?.status === "published" ? rawResult : null;
             return {
               laneNumber: lane.lane_number,
+              awaitingApproval: rawResult != null && rawResult.status !== "published",
               athleteId: athlete.id,
               athleteName: user?.full_name ?? "Unknown swimmer",
               teamName: team?.name ?? null,
@@ -207,6 +220,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
             ageGroup: "U14",
             seedTimeMs: null,
             isNt: true,
+            awaitingApproval: false,
             result: { outcome: "valid", officialTimeMs: 34210, finishPlace: 2, dqCode: null, status: "published" },
           },
           {
@@ -218,6 +232,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
             ageGroup: "U14",
             seedTimeMs: null,
             isNt: true,
+            awaitingApproval: false,
             result: { outcome: "valid", officialTimeMs: 33010, finishPlace: 1, dqCode: null, status: "published" },
           },
           {
@@ -229,6 +244,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
             ageGroup: "U14",
             seedTimeMs: null,
             isNt: true,
+            awaitingApproval: false,
             result: { outcome: "dq", officialTimeMs: null, finishPlace: null, dqCode: "false_start", status: "published" },
           },
         ],
@@ -249,6 +265,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
             ageGroup: "U17",
             seedTimeMs: 30500,
             isNt: false,
+            awaitingApproval: false,
             result: null,
           },
           {
@@ -260,6 +277,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
             ageGroup: "Open",
             seedTimeMs: 29200,
             isNt: false,
+            awaitingApproval: false,
             result: null,
           },
           {
@@ -271,6 +289,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
             ageGroup: "U17",
             seedTimeMs: 31000,
             isNt: false,
+            awaitingApproval: false,
             result: null,
           },
         ],
@@ -302,6 +321,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
             ageGroup: "Open",
             seedTimeMs: 68000,
             isNt: false,
+            awaitingApproval: false,
             result: { outcome: "valid", officialTimeMs: 66500, finishPlace: 1, dqCode: null, status: "published" },
           },
         ],
@@ -390,7 +410,13 @@ export async function fetchEventSessionNumber(eventId: string): Promise<number |
 export interface EventResultView {
   eventId: string;
   eventName: string;
+  /** The board this row belongs to — "Open" is open to all ages. */
   ageGroup: AgeGroup;
+  /** The swimmer's own age group; differs from ageGroup when a younger
+   * swimmer is ranked in the Open standings. */
+  ownAgeGroup: AgeGroup;
+  isOpenEntry: boolean;
+  sessionId: string | null;
   gender: Gender;
   athleteId: string;
   athleteName: string;
@@ -415,6 +441,9 @@ export async function fetchEventResultsForSession(
       event_id: string;
       event_name: string;
       age_group: AgeGroup;
+      own_age_group: AgeGroup;
+      is_open_entry: boolean;
+      session_id: string;
       gender: Gender;
       athlete_id: string;
       athlete_name: string;
@@ -430,7 +459,7 @@ export async function fetchEventResultsForSession(
       return supabase
         .from("event_results")
         .select(
-          "event_id, event_name, age_group, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, event_place",
+          "event_id, event_name, age_group, own_age_group, is_open_entry, session_id, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, event_place",
         )
         .eq("session_id", sessionId)
         .order("event_name", { ascending: true })
@@ -445,6 +474,9 @@ export async function fetchEventResultsForSession(
       eventId: r.event_id,
       eventName: r.event_name,
       ageGroup: r.age_group,
+      ownAgeGroup: r.own_age_group,
+      isOpenEntry: r.is_open_entry,
+      sessionId: r.session_id ?? null,
       gender: r.gender,
       athleteId: r.athlete_id,
       athleteName: r.athlete_name,
