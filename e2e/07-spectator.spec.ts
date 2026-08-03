@@ -186,3 +186,26 @@ test.describe("Leaderboards page carries every board", () => {
     await expect(page.getByLabel("Age group")).toBeVisible();
   });
 });
+
+test.describe("Every meet volume has its own points board", () => {
+  test("the meet leaderboard carries Best Performance scoped to that volume", async ({ page }) => {
+    await login(page, CREDENTIALS.parent1);
+    await page.goto("/events/1/leaderboard");
+    await page.waitForTimeout(1500);
+
+    // Meet-scoped boards only — the all-time boards live on their own page.
+    await expect(page.getByRole("tab", { name: "Champions" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Best Performance" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "All-Time" })).toHaveCount(0);
+
+    await page.getByRole("tab", { name: "Best Performance" }).click();
+    await page.waitForTimeout(1200);
+
+    // Scoped to this volume, and reusing the page's own gender/age filters
+    // rather than introducing a second pair.
+    const main = page.locator("main");
+    await expect(main).toContainText("Best Performance (World Aquatics points)");
+    const genderPickers = await page.getByLabel("Gender").count();
+    expect(genderPickers).toBe(1);
+  });
+});

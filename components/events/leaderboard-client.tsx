@@ -6,6 +6,7 @@ import { ArrowLeft, TrendingUp, Trophy } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { TeamLeaderboard } from "@/components/leaderboards/team-leaderboard";
+import { PointsBoard } from "@/components/leaderboards/points-board";
 import { cn } from "@/lib/utils";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
@@ -21,7 +22,7 @@ import { AthleteLink } from "@/components/athletes/athlete-link";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
 type Scope = "volume" | "series";
-type LeaderboardTab = "champions" | "progress" | "teams";
+type LeaderboardTab = "champions" | "progress" | "teams" | "points";
 
 function LeaderboardRow({
   rank,
@@ -225,7 +226,7 @@ export function LeaderboardClient({ volId }: { volId: string }) {
         </div>
 
         <Tabs value={tab} onValueChange={(v) => setTab(v as LeaderboardTab)}>
-          <TabsList className="grid h-auto w-full grid-cols-3 group-data-horizontal/tabs:h-auto">
+          <TabsList className="grid h-auto w-full grid-cols-2 gap-1 p-1 group-data-horizontal/tabs:h-auto sm:grid-cols-4">
             <TabsTrigger value="champions" className="h-auto min-h-[48px] text-sm">
               Champions
             </TabsTrigger>
@@ -234,6 +235,9 @@ export function LeaderboardClient({ volId }: { volId: string }) {
             </TabsTrigger>
             <TabsTrigger value="teams" className="h-auto min-h-[48px] text-sm">
               Teams
+            </TabsTrigger>
+            <TabsTrigger value="points" className="h-auto min-h-[48px] text-sm whitespace-normal">
+              Best Performance
             </TabsTrigger>
           </TabsList>
 
@@ -298,6 +302,20 @@ export function LeaderboardClient({ volId }: { volId: string }) {
                 club-level view of the same standings the athlete tabs show. */}
             <TeamLeaderboard className={cn(outdoorMode && "border-yellow-300/40 bg-black")} />
           </TabsContent>
+          <TabsContent value="points" className="mt-3 space-y-2">
+            {/* Scoped to this meet when the Scope filter says so, and to the
+                whole series when it does not — the same control that already
+                governs Champions and Progress. Gender and age come from the
+                page filters too, so this tab adds no second set. */}
+            <PointsBoard
+              gender={gender}
+              ageGroup={category}
+              meetVolumeId={scope === "volume" ? volume?.id ?? null : null}
+              scopeLabel={scope === "volume" ? volume?.name ?? "this meet" : "every volume"}
+              outdoorMode={outdoorMode}
+            />
+          </TabsContent>
+
         </Tabs>
       </main>
     </div>

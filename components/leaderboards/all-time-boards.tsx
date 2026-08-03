@@ -5,16 +5,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { FilterSelect } from "@/components/events/filter-select";
 import { AthleteLink } from "@/components/athletes/athlete-link";
-import { DataErrorBanner } from "@/components/ui/data-error-banner";
-import { PerformanceBadges } from "@/components/results/performance-badges";
+import { PointsBoard } from "@/components/leaderboards/points-board";
 import {
   DEMO_ALL_TIME_RACES,
   fetchAllTimePerformances,
-  fetchPointsPerformances,
   rankBestPerformances,
   rankBestPerformers,
-  rankPointsPerformances,
-  type PointsPerformance,
   type RacePerformance,
 } from "@/lib/all-time-rankings";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
@@ -35,8 +31,6 @@ type BoardTab = "performers" | "performances" | "points";
 
 export function AllTimeBoards() {
   const [races, setRaces] = useState<RacePerformance[]>(DEMO_ALL_TIME_RACES);
-  const [pointsRows, setPointsRows] = useState<PointsPerformance[]>([]);
-  const [pointsError, setPointsError] = useState<string | null>(null);
   const [tab, setTab] = useState<BoardTab>("performers");
   const [gender, setGender] = useState<Gender>("male");
   const [ageGroup, setAgeGroup] = useState<AgeGroup>("Open");
@@ -46,17 +40,9 @@ export function AllTimeBoards() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [data, points] = await Promise.all([
-        fetchAllTimePerformances(),
-        fetchPointsPerformances(),
-      ]);
+      const data = await fetchAllTimePerformances();
       if (cancelled) return;
       setRaces(data);
-      setPointsRows(points.data);
-      // Previously dropped: a missing performance_highlights view (a database
-      // still on an older schema) left the board silently empty and looking
-      // like nobody had swum anything.
-      setPointsError(points.error);
     })();
     return () => {
       cancelled = true;
@@ -85,10 +71,6 @@ export function AllTimeBoards() {
         10,
       ),
     [races, gender, ageGroup, stroke, distanceM],
-  );
-  const pointsPerformances = useMemo(
-    () => rankPointsPerformances(pointsRows, { gender, ageGroup }, 25),
-    [pointsRows, gender, ageGroup],
   );
   const performances = useMemo(
     () =>
@@ -242,53 +224,9 @@ export function AllTimeBoards() {
           </Card>
         </TabsContent>
         <TabsContent value="points" className="mt-4">
-          <DataErrorBanner error={pointsError} subject="the World Aquatics points ranking" />
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                Best Performance (World Aquatics points) — {AGE_GROUP_LABELS[ageGroup]} · {gender}
-              </CardTitle>
-              <CardDescription>
-                Ranked by World Aquatics points (short course), so swims in different events
-                compare directly — the higher the points, the better the swim. There is no event
-                filter here on purpose: comparing across events is the whole point of the board.
-                The 50m switch events have no points system and never appear.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {pointsPerformances.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  No scored performances yet for this filter.
-                </p>
-              )}
-              {pointsPerformances.map((row) => (
-                <div key={row.resultId} className="flex items-center gap-3 rounded-lg border p-3">
-                  <div className="flex size-9 items-center justify-center rounded-full bg-muted text-sm font-bold">
-                    {row.rank}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <AthleteLink athleteId={row.athleteId} name={row.athleteName} />
-                      <PerformanceBadges
-                        isBestOverall={row.isBestOverall}
-                        isBestInEvent={row.isBestInEvent}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {row.eventName} · {formatTimeMs(row.officialTimeMs)}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {row.teamName ?? "Unaffiliated"} · {row.volumeName}
-                    </p>
-                  </div>
-                  <p className="font-mono text-lg font-semibold tabular-nums">
-                    {row.waPoints}
-                    <span className="ml-1 text-xs font-normal text-muted-foreground">pts</span>
-                  </p>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          {/* Same board the meet page shows, unscoped — one component, so the
+              two can never drift apart. */}
+          <PointsBoard gender={gender} ageGroup={ageGroup} scopeLabel="every volume" />
         </TabsContent>
       </Tabs>
     </>

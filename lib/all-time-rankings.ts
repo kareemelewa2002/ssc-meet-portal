@@ -331,18 +331,23 @@ interface RawPointsRow {
   is_best_in_event: boolean;
 }
 
-export async function fetchPointsPerformances(): Promise<FetchResult<PointsPerformance[]>> {
+/** @param meetVolumeId scope to one meet; omit for the all-time board. */
+export async function fetchPointsPerformances(
+  meetVolumeId?: string,
+): Promise<FetchResult<PointsPerformance[]>> {
   return runQuery<PointsPerformance[]>(
     "Loading the World Aquatics points ranking",
     async () => {
       const supabase = createClient();
-      const { data, error } = await supabase
+      let query = supabase
         .from("performance_highlights")
         .select(
           "result_id, athlete_id, athlete_name, team_name, event_name, stroke, distance_m, age_group, gender, official_time_ms, wa_points, volume_name, is_best_overall, is_best_in_event",
         )
         .order("wa_points", { ascending: false })
         .limit(200);
+      if (meetVolumeId) query = query.eq("meet_volume_id", meetVolumeId);
+      const { data, error } = await query;
       if (error) return { data: null, error };
       const rows = (data ?? []) as unknown as RawPointsRow[];
       return {
