@@ -4,9 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
 import { HeatResultEntry } from "@/components/referee/heat-result-entry";
-import { FilterPillGroup } from "@/components/events/filter-pill-group";
+import { FilterSelect } from "@/components/events/filter-select";
 import { AppHeader } from "@/components/layout/app-header";
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
@@ -305,7 +304,7 @@ export default function RefereePage() {
         </CardHeader>
         <CardContent className="flex flex-wrap gap-4">
           {sessionNumbers.length > 1 && (
-            <FilterPillGroup
+            <FilterSelect
               label="Session"
               value={sessionFilter}
               onChange={setSessionFilter}
@@ -314,7 +313,7 @@ export default function RefereePage() {
             />
           )}
           {eventNames.length > 1 && (
-            <FilterPillGroup
+            <FilterSelect
               label="Event"
               value={eventFilter}
               onChange={setEventFilter}
@@ -322,7 +321,7 @@ export default function RefereePage() {
               options={eventNames.map((n) => ({ value: n, label: n }))}
             />
           )}
-          <FilterPillGroup
+          <FilterSelect
             label="Gender"
             value={genderFilter}
             onChange={setGenderFilter}
@@ -332,18 +331,13 @@ export default function RefereePage() {
               { value: "female", label: "Women" },
             ]}
           />
-          <div className="space-y-1.5">
-            <Label>Show</Label>
-            <Button
-              type="button"
-              variant={unscoredOnly ? "default" : "outline"}
-              className="min-h-[48px]"
-              aria-pressed={unscoredOnly}
-              onClick={() => setUnscoredOnly((v) => !v)}
-            >
-              Not yet published
-            </Button>
-          </div>
+          <FilterSelect
+            label="Status"
+            value={unscoredOnly ? "unpublished" : null}
+            onChange={(v) => setUnscoredOnly(v === "unpublished")}
+            outdoorMode={outdoorMode}
+            options={[{ value: "unpublished", label: "Not yet published" }]}
+          />
         </CardContent>
       </Card>
 

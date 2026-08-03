@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { FilterPillGroup } from "@/components/events/filter-pill-group";
+import { FilterSelect } from "@/components/events/filter-select";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { PerformanceBadges } from "@/components/results/performance-badges";
@@ -55,14 +55,19 @@ export function AllTimeClient() {
     };
   }, []);
 
-  const strokes = useMemo(
-    () => [...new Set(races.map((r) => r.stroke))].sort(),
-    [races],
-  );
-  const distances = useMemo(
-    () => [...new Set(races.map((r) => r.distanceM))].sort((a, b) => a - b),
-    [races],
-  );
+  // Stroke and distance are not independent choices here — together they ARE
+  // the event, and only their combination identifies a record ("50m
+  // Butterfly"). They were two separate pickers, which let you select a pair
+  // nobody has ever swum and see an empty board with no explanation. One
+  // Event dropdown, built from combinations that actually exist.
+  const eventOptions = useMemo(() => {
+    const seen = new Map<string, { value: string; label: string }>();
+    for (const r of races) {
+      const value = `${r.distanceM}|${r.stroke}`;
+      if (!seen.has(value)) seen.set(value, { value, label: `${r.distanceM}m ${r.stroke}` });
+    }
+    return [...seen.values()].sort((a, b) => a.label.localeCompare(b.label));
+  }, [races]);
 
   const performers = useMemo(
     () =>
@@ -106,7 +111,7 @@ export function AllTimeClient() {
       </header>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <FilterPillGroup<Gender>
+        <FilterSelect<Gender>
           label="Gender"
           value={gender}
           onChange={(v) => v && setGender(v)}
@@ -117,7 +122,7 @@ export function AllTimeClient() {
             { value: "female", label: "Female" },
           ]}
         />
-        <FilterPillGroup<AgeGroup>
+        <FilterSelect<AgeGroup>
           label="Age group"
           value={ageGroup}
           onChange={(v) => v && setAgeGroup(v)}
@@ -131,22 +136,18 @@ export function AllTimeClient() {
         />
       </div>
 
-      <FilterPillGroup<string>
-        label="Stroke"
-        value={stroke}
-        onChange={(v) => v && setStroke(v)}
+      <FilterSelect<string>
+        label="Event"
+        value={`${distanceM}|${stroke}`}
+        onChange={(v) => {
+          if (!v) return;
+          const [d, s] = v.split("|");
+          setDistanceM(Number(d));
+          setStroke(s);
+        }}
         outdoorMode={false}
         allowAll={false}
-        options={strokes.map((s) => ({ value: s, label: s }))}
-      />
-
-      <FilterPillGroup<string>
-        label="Distance"
-        value={String(distanceM)}
-        onChange={(v) => v && setDistanceM(Number(v))}
-        outdoorMode={false}
-        allowAll={false}
-        options={distances.map((d) => ({ value: String(d), label: `${d}m` }))}
+        options={eventOptions}
       />
 
       <Tabs defaultValue="performers">
@@ -166,7 +167,7 @@ export function AllTimeClient() {
           <Card>
             <CardHeader>
               <CardTitle>
-                Fastest swimmers — {distanceM} {stroke} · {AGE_GROUP_LABELS[ageGroup]} · {gender}
+                Fastest swimmers — {distanceM}m {stroke} · {AGE_GROUP_LABELS[ageGroup]} · {gender}
               </CardTitle>
               <CardDescription>
                 One entry per athlete (personal best). Ranked across all SSC meets.
@@ -203,7 +204,7 @@ export function AllTimeClient() {
           <Card>
             <CardHeader>
               <CardTitle>
-                Top 10 race times — {distanceM} {stroke} · {AGE_GROUP_LABELS[ageGroup]} · {gender}
+                Top 10 race times — {distanceM}m {stroke} · {AGE_GROUP_LABELS[ageGroup]} · {gender}
               </CardTitle>
               <CardDescription>
                 Individual race performances; the same swimmer may appear more than once.

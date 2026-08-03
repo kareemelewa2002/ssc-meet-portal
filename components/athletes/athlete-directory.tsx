@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { FilterPillGroup } from "@/components/events/filter-pill-group";
+import { FilterSelect } from "@/components/events/filter-select";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import {
@@ -69,7 +69,7 @@ export function AthleteDirectory() {
         />
       </div>
 
-      <FilterPillGroup<Gender>
+      <FilterSelect<Gender>
         label="Gender"
         value={gender}
         onChange={setGender}
@@ -80,7 +80,7 @@ export function AthleteDirectory() {
         ]}
       />
 
-      <FilterPillGroup<AgeGroup>
+      <FilterSelect<AgeGroup>
         label="Age group"
         value={ageGroup}
         onChange={setAgeGroup}

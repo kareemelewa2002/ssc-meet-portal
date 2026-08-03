@@ -4,13 +4,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, TrendingUp, Trophy } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { TeamLeaderboard } from "@/components/leaderboards/team-leaderboard";
 import { cn } from "@/lib/utils";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
-import { FilterPillGroup } from "@/components/events/filter-pill-group";
+import { FilterSelect } from "@/components/events/filter-select";
 import { fetchVolumeByNumber, isEarliestVolume } from "@/lib/volumes";
 import {
   fetchSeriesLeaderboard,
@@ -196,27 +195,19 @@ export function LeaderboardClient({ volId }: { volId: string }) {
           </p>
         </header>
 
-        <div className="flex gap-2">
-          <Button
-            type="button"
-            variant={scope === "volume" ? "default" : "outline"}
-            className="min-h-[48px] flex-1"
-            onClick={() => setScope("volume")}
-          >
-            This Volume
-          </Button>
-          <Button
-            type="button"
-            variant={scope === "series" ? "default" : "outline"}
-            className="min-h-[48px] flex-1"
-            onClick={() => setScope("series")}
-          >
-            Full Series
-          </Button>
-        </div>
-
         <div className="flex flex-wrap gap-4">
-          <FilterPillGroup
+          <FilterSelect
+            label="Scope"
+            allowAll={false}
+            value={scope}
+            onChange={(v) => v && setScope(v)}
+            outdoorMode={outdoorMode}
+            options={[
+              { value: "volume", label: "This Volume" },
+              { value: "series", label: "Full Series" },
+            ]}
+          />
+          <FilterSelect
             label="Gender"
             allowAll={false}
             value={gender}
@@ -227,7 +218,7 @@ export function LeaderboardClient({ volId }: { volId: string }) {
               { value: "female", label: "Female" },
             ]}
           />
-          <FilterPillGroup
+          <FilterSelect
             label="Age Bracket"
             allowAll={false}
             value={category}

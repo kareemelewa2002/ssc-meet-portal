@@ -12,7 +12,7 @@ import { heatTitle } from "@/lib/format";
 import { createClient } from "@/lib/supabase/client";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
-import { FilterPillGroup } from "@/components/events/filter-pill-group";
+import { FilterSelect } from "@/components/events/filter-select";
 import { fetchSessionsForVolume, fetchVolumeByNumber } from "@/lib/volumes";
 import {
   fetchEventResultsForSession,
@@ -261,7 +261,6 @@ export function LiveEventsClient({
 
   const [genderFilter, setGenderFilter] = useState<Gender | null>(null);
   const [ageFilter, setAgeFilter] = useState<AgeGroup | null>(null);
-  const [strokeFilter, setStrokeFilter] = useState<string | null>(null);
   const [eventNameFilter, setEventNameFilter] = useState<string | null>(null);
   const [highlights, setHighlights] = useState<Map<string, PerformanceHighlight>>(new Map());
   const [eventResults, setEventResults] = useState<EventResultView[]>([]);
@@ -366,12 +365,10 @@ export function LiveEventsClient({
     };
   }, [currentSession, loadEvents]);
 
-  const strokes = useMemo(() => Array.from(new Set(events.map((e) => e.stroke))), [events]);
 
   const filteredEvents = useMemo(() => {
     return events
       .filter((ev) => !eventFilterId || ev.eventId === eventFilterId)
-      .filter((ev) => !strokeFilter || ev.stroke === strokeFilter)
       .filter((ev) => !eventNameFilter || ev.name === eventNameFilter)
       .map((ev) => ({
         ...ev,
@@ -390,7 +387,7 @@ export function LiveEventsClient({
           .filter((heat) => heat.lanes.length > 0),
       }))
       .filter((ev) => ev.heats.length > 0);
-  }, [events, eventFilterId, strokeFilter, eventNameFilter, genderFilter, ageFilter, isResults]);
+  }, [events, eventFilterId, eventNameFilter, genderFilter, ageFilter, isResults]);
 
   const eventNames = useMemo(() => Array.from(new Set(events.map((e) => e.name))), [events]);
 
@@ -403,9 +400,8 @@ export function LiveEventsClient({
         .filter((r) => !eventFilterId || r.eventId === eventFilterId)
         .filter((r) => !eventNameFilter || r.eventName === eventNameFilter)
         .filter((r) => !genderFilter || r.gender === genderFilter)
-        .filter((r) => !ageFilter || r.ageGroup === ageFilter)
-        .filter((r) => !strokeFilter || events.find((e) => e.eventId === r.eventId)?.stroke === strokeFilter),
-    [eventResults, eventFilterId, eventNameFilter, genderFilter, ageFilter, strokeFilter, events],
+        .filter((r) => !ageFilter || r.ageGroup === ageFilter),
+    [eventResults, eventFilterId, eventNameFilter, genderFilter, ageFilter],
   );
 
   return (
@@ -514,7 +510,7 @@ export function LiveEventsClient({
         )}
 
         <div className="flex flex-wrap gap-4">
-          <FilterPillGroup
+          <FilterSelect
             label="Gender"
             value={genderFilter}
             onChange={setGenderFilter}
@@ -524,7 +520,7 @@ export function LiveEventsClient({
               { value: "female", label: "Female" },
             ]}
           />
-          <FilterPillGroup
+          <FilterSelect
             label="Age Group"
             value={ageFilter}
             onChange={setAgeFilter}
@@ -536,21 +532,12 @@ export function LiveEventsClient({
             ]}
           />
           {isResults && eventNames.length > 0 && (
-            <FilterPillGroup
+            <FilterSelect
               label="Event"
               value={eventNameFilter}
               onChange={setEventNameFilter}
               outdoorMode={outdoorMode}
               options={eventNames.map((n) => ({ value: n, label: n }))}
-            />
-          )}
-          {strokes.length > 0 && (
-            <FilterPillGroup
-              label="Stroke"
-              value={strokeFilter}
-              onChange={setStrokeFilter}
-              outdoorMode={outdoorMode}
-              options={strokes.map((s) => ({ value: s, label: s }))}
             />
           )}
         </div>

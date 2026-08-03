@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getErrorMessage } from "@/lib/utils";
 import { formatTimeMs, heatTitle, parseTimeToMs, CLOCK_TIME_ERROR } from "@/lib/format";
-import { FilterPillGroup } from "@/components/events/filter-pill-group";
+import { FilterSelect } from "@/components/events/filter-select";
 import { RESULT_OUTCOME_LABELS, DQ_REASON_LABELS } from "@/lib/results";
 import { useToast } from "@/hooks/use-toast";
 import { AthleteLink } from "@/components/athletes/athlete-link";
@@ -140,7 +140,7 @@ export function RefereeHeatCards({ className }: { className?: string }) {
         {heats.length > 1 && (
           <div className="flex flex-wrap gap-4">
             {sessionNumbers.length > 1 && (
-              <FilterPillGroup
+              <FilterSelect
                 label="Session"
                 value={sessionFilter}
                 onChange={setSessionFilter}
@@ -149,7 +149,7 @@ export function RefereeHeatCards({ className }: { className?: string }) {
               />
             )}
             {eventNames.length > 1 && (
-              <FilterPillGroup
+              <FilterSelect
                 label="Event"
                 value={eventFilter}
                 onChange={setEventFilter}
@@ -157,7 +157,7 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                 options={eventNames.map((n) => ({ value: n, label: n }))}
               />
             )}
-            <FilterPillGroup
+            <FilterSelect
               label="Gender"
               value={genderFilter}
               onChange={setGenderFilter}

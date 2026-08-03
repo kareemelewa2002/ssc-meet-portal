@@ -60,8 +60,11 @@ test.describe("Spectator, leaderboards & navigation", () => {
     expect(performancesText).toMatch(/\d{2}\.\d{2}/);
 
     // Switching filters (e.g. age group) must actually change the ranking,
-    // proving it's live-queried rather than a static fallback list.
-    await page.getByRole("button", { name: "U14" }).click();
+    // proving it's live-queried rather than a static fallback list. Filters
+    // are dropdowns now, so this opens the listbox and picks an option
+    // instead of clicking a pill.
+    await page.getByLabel("Age group").click();
+    await page.getByRole("option", { name: "14 & Under" }).click();
     await page.waitForTimeout(800);
     const u14Text = await page.locator("main").innerText();
     expect(u14Text).not.toBe(performancesText);
