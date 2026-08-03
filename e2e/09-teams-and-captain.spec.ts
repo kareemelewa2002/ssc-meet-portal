@@ -1,34 +1,50 @@
 import { test, expect } from "@playwright/test";
 import { CREDENTIALS, login, requireFixture, tryLogin } from "./helpers";
 
-test.describe("/coach route", () => {
-  test("coach.riptide reaches the Coach Dashboard, not a 404", async ({ page }) => {
+test.describe("/captain route", () => {
+  test("a team captain reaches the Captain Dashboard, not a 404", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
 
-    await login(page, CREDENTIALS.coachRiptide);
-    await page.goto("/coach");
-    await page.waitForTimeout(1200);
+    await login(page, CREDENTIALS.captainRiptide);
+    await page.goto("/captain");
+    await page.waitForTimeout(1500);
 
-    await expect(page.locator("main").getByRole("heading", { name: "Coach Dashboard" })).toBeVisible();
-    await expect(page.getByText(/only available to Coach accounts/i)).toHaveCount(0);
+    await expect(page.locator("main").getByRole("heading", { name: "Captain Dashboard" })).toBeVisible();
+    await expect(page.getByText(/No team currently lists you as its captain/i)).toHaveCount(0);
     await expect(page.getByText("404")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 
-  test("a non-coach (athlete) sees the role-gated message, never someone else's roster", async ({ page }) => {
+  test("a swimmer who captains nothing sees the gate, never someone else's roster", async ({ page }) => {
     await login(page, CREDENTIALS.approvedOpen);
-    await page.goto("/coach");
-    await page.waitForTimeout(1200);
+    await page.goto("/captain");
+    await page.waitForTimeout(1500);
 
-    await expect(page.locator("main").getByRole("heading", { name: "Coach Dashboard" })).toBeVisible();
-    await expect(page.getByText(/only available to Coach accounts/i)).toBeVisible();
-    // Must not leak a real team roster to a non-coach.
+    await expect(page.locator("main").getByRole("heading", { name: "Captain Dashboard" })).toBeVisible();
+    // Captaincy is teams.captain_id, so the gate is "does a team point at me",
+    // not "do you hold a role".
+    await expect(page.getByText(/No team currently lists you as its captain/i)).toBeVisible();
     await expect(page.getByText("Riptide Swim Club")).toHaveCount(0);
+  });
+
+  test("only the captain can build a relay squad", async ({ page }) => {
+    await login(page, CREDENTIALS.captainRiptide);
+    await page.goto("/captain");
+    await page.waitForTimeout(1500);
+
+    requireFixture(
+      (await page.getByText("Relay squads").count()) > 0,
+      "a team captained by this account",
+    );
+    await expect(page.getByText("Relay squads")).toBeVisible();
+    // The composition rule is stated up front rather than only on submit.
+    await expect(page.getByLabel("Relay")).toBeVisible();
+    await expect(page.getByLabel("Age group")).toBeVisible();
   });
 });
 
-test.describe("Team creation restriction (Open 18+ / Coach / Admin only)", () => {
+test.describe("Team creation restriction (Open 18+ / Admin only)", () => {
   test("a U14 athlete never sees the Create Team button", async ({ page }) => {
     await login(page, CREDENTIALS.approvedU14);
     await page.goto("/teams");
@@ -52,7 +68,7 @@ test.describe("Team creation restriction (Open 18+ / Coach / Admin only)", () =>
   });
 
   test("a coach sees the Create Team button", async ({ page }) => {
-    await login(page, CREDENTIALS.coachRiptide);
+    await login(page, CREDENTIALS.captainRiptide);
     await page.goto("/teams");
     await page.waitForTimeout(1500);
     await expect(page.getByRole("button", { name: "Create Team", exact: true })).toBeVisible();

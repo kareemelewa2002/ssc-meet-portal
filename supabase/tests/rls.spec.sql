@@ -56,7 +56,9 @@ returns uuid language sql stable as $$
 $$;
 
 -- =============================================================================
--- DB-01 — can_captain_team(): Open athletes, coaches and admins only.
+-- DB-01 — can_captain_team(): ELIGIBILITY to found a team (Open athletes and
+-- admins). Not the same question as "captains team X" — that is
+-- is_team_captain_of(), and it is what relay management checks.
 -- =============================================================================
 do $$
 declare v_expected boolean; v_actual boolean; rec record;
@@ -66,7 +68,10 @@ begin
       ('athlete01@ssc-demo.test', false, 'U14 athlete'),
       ('athlete13@ssc-demo.test', false, 'U17 athlete'),
       ('athlete25@ssc-demo.test', true,  'Open athlete'),
-      ('coach.riptide@ssc-demo.test', true, 'coach'),
+      -- Captains a team, but has no athlete profile, so cannot FOUND one.
+      -- Captaincy and eligibility-to-found are deliberately different things;
+      -- conflating them once broke team creation outright.
+      ('coach.riptide@ssc-demo.test', false, 'team captain with no athlete profile'),
       ('elewakareem2002@gmail.com', true, 'admin')
     ) as t(email, expected, label)
   loop
@@ -969,6 +974,121 @@ begin
     v_bad = 0, format('violations=%s', v_bad));
 exception when others then
   perform ssc_test.check('DB-21','seeding order / boards', false, sqlerrm);
+end $$;
+
+-- DB-22 — relay squads: composition rules and captain-only management.
+--
+-- Builds its OWN fixture rather than hunting for a team that happens to have
+-- the right roster. Earlier blocks move athletes between teams, so a search
+-- found a usable team on some runs and not others — the suite total wobbled,
+-- and worse, the "3 male + 1 female" case could pass because a null athlete
+-- id broke the insert rather than because the gender rule rejected it.
+do $$
+declare
+  v_team uuid; v_event uuid; v_captain uuid; v_other uuid;
+  v_m uuid[]; v_f uuid[]; v_squad uuid; v_err text;
+begin
+  perform set_config('role','postgres',true);
+
+  select t.id, t.captain_id into v_team, v_captain
+  from public.teams t where t.captain_id is not null order by t.id limit 1;
+  select id into v_event from public.events
+  where is_relay and name ilike '%Mixed%' order by id limit 1;
+
+  perform ssc_test.check('DB-22','precondition: a captained team and a mixed relay',
+    v_team is not null and v_event is not null, null);
+  if v_team is null or v_event is null then return; end if;
+
+  -- Guarantee 3 Open men and 2 Open women on that team.
+  update public.athletes set team_id = v_team, age_group = 'Open', gender = 'male'
+  where id in (select id from public.athletes where team_id is distinct from v_team order by id limit 3);
+  update public.athletes set team_id = v_team, age_group = 'Open', gender = 'female'
+  where id in (select id from public.athletes
+               where team_id is distinct from v_team order by id desc limit 2);
+
+  select array_agg(id) into v_m from (
+    select id from public.athletes
+    where team_id = v_team and age_group = 'Open' and gender = 'male' order by id limit 3) x;
+  select array_agg(id) into v_f from (
+    select id from public.athletes
+    where team_id = v_team and age_group = 'Open' and gender = 'female' order by id limit 2) x;
+
+  perform ssc_test.check('DB-22','precondition: 3 male + 2 female Open swimmers on the team',
+    array_length(v_m,1) = 3 and array_length(v_f,1) = 2,
+    format('male=%s female=%s', array_length(v_m,1), array_length(v_f,1)));
+  if coalesce(array_length(v_m,1),0) < 3 or coalesce(array_length(v_f,1),0) < 2 then return; end if;
+
+  -- Every relay swimmer must already be entered in the meet.
+  insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
+  select (select ev.id from public.events ev
+          join public.sessions se on se.id = ev.session_id
+          where ev.is_relay = false and ev.is_skins = false order by ev.id limit 1),
+         a, 30000, false, 'pending_payment'
+  from unnest(v_m || v_f) a
+  on conflict (event_id, athlete_id) do nothing;
+
+  -- 1. A valid 2 + 2 squad commits.
+  insert into public.relay_squads (event_id, team_id, age_group, squad_letter)
+  values (v_event, v_team, 'Open', 'T') returning id into v_squad;
+  insert into public.relay_legs (squad_id, leg_number, athlete_id) values
+    (v_squad, 1, v_m[1]), (v_squad, 2, v_f[1]), (v_squad, 3, v_m[2]), (v_squad, 4, v_f[2]);
+  set constraints all immediate;
+  perform ssc_test.check('DB-22','a valid 2 male + 2 female squad is accepted',
+    (select count(*) from public.relay_legs where squad_id = v_squad) = 4, null);
+
+  -- 2. A mixed relay refuses 3 + 1 — asserted on the MESSAGE, so a squad that
+  --    failed for some unrelated reason cannot pass this check.
+  begin
+    v_err := null;
+    insert into public.relay_squads (event_id, team_id, age_group, squad_letter)
+    values (v_event, v_team, 'Open', 'V') returning id into v_squad;
+    insert into public.relay_legs (squad_id, leg_number, athlete_id) values
+      (v_squad, 1, v_m[1]), (v_squad, 2, v_m[2]), (v_squad, 3, v_m[3]), (v_squad, 4, v_f[1]);
+    set constraints all immediate;
+  exception when others then
+    v_err := sqlerrm;
+  end;
+  perform ssc_test.check('DB-22','a mixed relay refuses 3 male + 1 female',
+    v_err like '%2 male and 2 female%', coalesce(v_err, 'no error raised'));
+
+  -- 3. One squad per swimmer per relay event.
+  begin
+    v_err := null;
+    insert into public.relay_squads (event_id, team_id, age_group, squad_letter)
+    values (v_event, v_team, 'Open', 'U') returning id into v_squad;
+    insert into public.relay_legs (squad_id, leg_number, athlete_id) values
+      (v_squad, 1, v_m[1]), (v_squad, 2, v_f[1]), (v_squad, 3, v_m[2]), (v_squad, 4, v_f[2]);
+    set constraints all immediate;
+  exception when others then
+    v_err := sqlerrm;
+  end;
+  perform ssc_test.check('DB-22','a swimmer cannot be in two squads for one relay',
+    v_err like '%one squad per relay event%', coalesce(v_err, 'no error raised'));
+
+  -- 4. RLS: only the captain may enter a squad for the team.
+  select a.user_id into v_other from public.athletes a
+  where a.team_id = v_team and a.user_id is distinct from v_captain order by a.id limit 1;
+  perform ssc_test.check('DB-22','precondition: a team member who is not the captain',
+    v_other is not null, null);
+
+  if v_other is not null then
+    begin
+      v_err := null;
+      perform ssc_test.act_as(v_other);
+      insert into public.relay_squads (event_id, team_id, age_group, squad_letter)
+      values (v_event, v_team, 'Open', 'W');
+    exception when others then
+      v_err := sqlerrm;
+    end;
+    perform set_config('role','postgres',true);
+    perform ssc_test.check('DB-22','a non-captain cannot enter a squad for the team',
+      v_err like '%row-level security%', coalesce(v_err, 'no error raised'));
+  end if;
+
+  delete from public.relay_squads where team_id = v_team;
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-22','relay squads', false, sqlerrm);
 end $$;
 
 -- =============================================================================

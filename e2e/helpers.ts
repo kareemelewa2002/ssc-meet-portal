@@ -38,7 +38,7 @@ export const CREDENTIALS = {
   // A single dedicated Referee account — seed-demo.sql no longer seeds a
   // pool of interchangeable referees.
   referee1: "referee1@ssc-demo.test",
-  coachRiptide: "coach.riptide@ssc-demo.test",
+  captainRiptide: "coach.riptide@ssc-demo.test",
   coachMarlins: "coach.marlins@ssc-demo.test",
   // The only seeded athlete with team_id = NULL. Every other athlete is on
   // a team, and the transfer lock blocks their join requests while a volume

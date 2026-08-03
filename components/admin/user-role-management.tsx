@@ -36,7 +36,7 @@ export interface UserRoleManagementProps {
 
 const DEMO_USERS: UserRow[] = [
   { id: "u1", email: "elewakareem2002@gmail.com", full_name: "Root Admin", phone: null, profile_image_url: null, role: "admin", created_at: "", updated_at: "" },
-  { id: "u2", email: "coach.reyes@ssc.dev", full_name: "Coach Reyes", phone: null, profile_image_url: null, role: "coach", created_at: "", updated_at: "" },
+  { id: "u2", email: "captain.reyes@ssc.dev", full_name: "Alex Reyes", phone: null, profile_image_url: null, role: "athlete", created_at: "", updated_at: "" },
   { id: "u3", email: "ref.alvi@ssc.dev", full_name: "Referee Alvi", phone: null, profile_image_url: null, role: "referee", created_at: "", updated_at: "" },
   { id: "u5", email: "swimmer.leo@ssc.dev", full_name: "Leo Fontaine", phone: null, profile_image_url: null, role: "athlete", created_at: "", updated_at: "" },
   { id: "u6", email: "parent.thompson@ssc.dev", full_name: "Grace Thompson", phone: null, profile_image_url: null, role: "parent", created_at: "", updated_at: "" },
@@ -47,7 +47,6 @@ const ELEVATABLE_ROLES: Extract<UserRole, "admin" | "referee">[] = ["admin", "re
 function roleBadgeVariant(role: UserRole): "default" | "secondary" | "outline" | "destructive" {
   if (role === "admin") return "destructive";
   if (role === "referee") return "default";
-  if (role === "coach") return "secondary";
   return "outline";
 }
 

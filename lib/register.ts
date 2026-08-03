@@ -9,7 +9,7 @@ import {
 } from "@/lib/age";
 import type { AgeGroup, Gender, ParentLinkStatus } from "@/lib/supabase/types";
 
-export type SignupRole = "athlete" | "coach" | "parent";
+export type SignupRole = "athlete" | "parent";
 
 export interface AccountFormInput {
   role: SignupRole;

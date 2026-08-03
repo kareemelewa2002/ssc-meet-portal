@@ -25,7 +25,6 @@ import type { Gender } from "@/lib/supabase/types";
 
 const ROLE_TABS: { value: SignupRole; label: string }[] = [
   { value: "athlete", label: "Athlete" },
-  { value: "coach", label: "Coach / Team Captain" },
   { value: "parent", label: "Parent" },
 ];
 

@@ -39,12 +39,12 @@ import { join } from "node:path";
 // Contract — must stay in sync with supabase/schema.sql section 1 (ENUM TYPES)
 // ---------------------------------------------------------------------------
 
-/** SCOPE LOCK: exactly these 5 roles exist. */
-const APPROVED_ROLES = ["admin", "referee", "coach", "athlete", "parent"] as const;
+/** SCOPE LOCK: exactly these 4 roles exist. */
+const APPROVED_ROLES = ["admin", "referee", "athlete", "parent"] as const;
 
 /** Folded into the 5 above by schema.sql's migration block. Postgres enums
  * can never shrink, so these must be absent from a correctly-migrated type. */
-const RETIRED_ROLES = ["usher", "entry_helper", "team_captain"] as const;
+const RETIRED_ROLES = ["usher", "entry_helper", "team_captain", "coach"] as const;
 
 interface RpcCheck {
   name: string;
@@ -94,6 +94,8 @@ const SMOKE_TABLES = [
   "heat_lanes",
   "results",
   "leaderboards",
+  "relay_squads",
+  "relay_legs",
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -119,6 +121,8 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "auth", table: "users", trigger: "on_auth_user_created" },
   { schema: "public", table: "athletes", trigger: "athletes_set_updated_at" },
   { schema: "public", table: "entries", trigger: "apply_historical_seed_time_trigger" },
+  { schema: "public", table: "relay_legs", trigger: "validate_relay_squad_trigger" },
+  { schema: "public", table: "relay_squads", trigger: "enforce_relay_status_change_trigger" },
   { schema: "public", table: "entries", trigger: "enforce_entry_status_change_trigger" },
   { schema: "public", table: "entries", trigger: "force_nt_for_switch_events_trigger" },
   { schema: "public", table: "entries", trigger: "enforce_no_direct_skins_entry_trigger" },

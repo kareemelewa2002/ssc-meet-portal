@@ -73,10 +73,10 @@ test.describe("Spectator, leaderboards & navigation", () => {
   test.describe("AppHeader dropdown works correctly across roles", () => {
     const roleChecks: { credEmail: string; roleLabel: string; dashboardHref: string | null }[] = [
       { credEmail: CREDENTIALS.admin, roleLabel: "Admin", dashboardHref: "/admin" },
-      // Scope lock: 'team_captain' no longer exists as a role — a coach
-      // stays 'coach' permanently even while also captaining their team
-      // (teams.captain_id tracks that independently of the role column).
-      { credEmail: CREDENTIALS.coachRiptide, roleLabel: "Coach", dashboardHref: "/coach" },
+      // The 'coach' role is retired. A captain is an ATHLETE whose team
+      // points at them, so they carry the Athlete badge and no role
+      // dashboard — /captain is gated on teams.captain_id, not on a role.
+      { credEmail: CREDENTIALS.captainRiptide, roleLabel: "Athlete", dashboardHref: null },
       { credEmail: CREDENTIALS.parent1, roleLabel: "Parent", dashboardHref: null },
       { credEmail: CREDENTIALS.approvedOpen, roleLabel: "Athlete", dashboardHref: null },
     ];

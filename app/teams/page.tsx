@@ -71,7 +71,7 @@ export default function TeamsPage() {
   const [view, setView] = useState<"teams" | "athletes">("teams");
 
   const canCaptainTeam =
-    user?.role === "coach" || user?.role === "admin" || (user?.role === "athlete" && myAthlete?.ageGroup === "Open");
+    user?.role === "admin" || (user?.role === "athlete" && myAthlete?.ageGroup === "Open");
 
   const openRoster = async (team: TeamRow) => {
     setRosterTeam(team);

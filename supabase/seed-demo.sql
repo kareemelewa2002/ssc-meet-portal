@@ -322,9 +322,12 @@ begin
   -- Coaches — one per team. Also each team's captain_id (assigned below),
   -- but that never changes their role away from 'coach' — teams.captain_id
   -- already tracks "who manages this team" independently of role.
-  perform public._seed_get_or_create_user('coach.riptide@ssc-demo.test', 'Coach Riley Adams', 'coach', '+1-555-0106');
-  perform public._seed_get_or_create_user('coach.marlins@ssc-demo.test', 'Coach Jordan Kim', 'coach', '+1-555-0130');
-  perform public._seed_get_or_create_user('coach.tidalwave@ssc-demo.test', 'Coach Alicia Moreno', 'coach', '+1-555-0131');
+  -- The 'coach' role is retired. These accounts remain, and remain the
+  -- captains of their teams (teams.captain_id below) — captaincy is the
+  -- relationship, so no role is needed to hold it.
+  perform public._seed_get_or_create_user('coach.riptide@ssc-demo.test', 'Riley Adams', 'athlete', '+1-555-0106');
+  perform public._seed_get_or_create_user('coach.marlins@ssc-demo.test', 'Jordan Kim', 'athlete', '+1-555-0130');
+  perform public._seed_get_or_create_user('coach.tidalwave@ssc-demo.test', 'Alicia Moreno', 'athlete', '+1-555-0131');
 
   -- Parents — linked to the U13-14 athletes below.
   perform public._seed_get_or_create_user('parent1@ssc-demo.test', 'Dana Whitfield', 'parent', '+1-555-0107');

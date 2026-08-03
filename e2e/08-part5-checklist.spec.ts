@@ -85,7 +85,7 @@ test.describe("Part 5 checklist — Parent Flow", () => {
 
 test.describe("Part 5 checklist — Coach Flow", () => {
   test("coach.riptide views their team roster with each swimmer's PBs reachable", async ({ page }) => {
-    await login(page, CREDENTIALS.coachRiptide);
+    await login(page, CREDENTIALS.captainRiptide);
     await page.goto("/dashboard");
     await page.waitForTimeout(1500);
 

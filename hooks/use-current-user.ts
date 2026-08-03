@@ -21,7 +21,6 @@ export interface UseCurrentUserResult {
 export const ROLE_LABELS: Record<UserRole, string> = {
   admin: "Admin",
   referee: "Referee",
-  coach: "Coach",
   athlete: "Athlete",
   parent: "Parent",
 };

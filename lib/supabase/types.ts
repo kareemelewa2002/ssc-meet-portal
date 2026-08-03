@@ -14,9 +14,12 @@
 // (teams.captain_id already tracks "who manages this team" independently
 // of the role column — a coach can be a team's captain without a distinct
 // role value for it).
-export type UserRole = "admin" | "referee" | "coach" | "athlete" | "parent";
+// 'coach' retired: captaincy is teams.captain_id, a relationship, not a role.
+export type UserRole = "admin" | "referee" | "athlete" | "parent";
 
-export type PublicSignupRole = "athlete" | "parent" | "coach" | "referee";
+// No 'coach': captaincy is granted by an admin setting teams.captain_id,
+// not claimed at signup.
+export type PublicSignupRole = "athlete" | "parent" | "referee";
 
 export type AgeGroup = "U14" | "U17" | "Open";
 
@@ -129,6 +132,27 @@ export type PerformanceHighlightRow = {
   swam_at: string;
   is_best_overall: boolean;
   is_best_in_event: boolean;
+};
+
+/** public.relay_squads — a team's four-swimmer entry for a relay event. */
+export type RelaySquadRow = {
+  id: string;
+  event_id: string;
+  team_id: string;
+  age_group: AgeGroup;
+  squad_letter: string;
+  status: EntryStatus;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RelayLegRow = {
+  id: string;
+  squad_id: string;
+  leg_number: number;
+  athlete_id: string;
+  created_at: string;
 };
 
 export type TeamMembershipRow = {
@@ -380,6 +404,8 @@ export type Database = {
       teams: Table<TeamRow>;
       team_memberships: Table<TeamMembershipRow>;
       event_results: Table<EventResultRow>;
+      relay_squads: Table<RelaySquadRow>;
+      relay_legs: Table<RelayLegRow>;
       performance_highlights: Table<PerformanceHighlightRow>;
       athletes: Table<AthleteRow>;
       volume_team_affiliations: Table<VolumeTeamAffiliationRow>;

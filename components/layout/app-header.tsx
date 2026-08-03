@@ -31,7 +31,6 @@ export interface AppHeaderProps {
 const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
   admin: "/admin",
   referee: "/referee",
-  coach: "/coach",
 };
 
 function initialsFor(fullName: string): string {

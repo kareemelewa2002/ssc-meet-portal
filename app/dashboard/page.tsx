@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { SkinsQualificationModal } from "@/components/dashboard/skins-qualification-modal";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { AppHeader } from "@/components/layout/app-header";
-import { useCurrentUser } from "@/hooks/use-current-user";
 import { useSkinsQualifiers } from "@/hooks/use-skins-qualifiers";
 import type { SkinsCandidate } from "@/lib/skins-qualification";
 import { formatTimeMs } from "@/lib/format";
@@ -35,25 +33,15 @@ const DEMO_INVITE: SkinsCandidate = {
 };
 
 export default function DashboardPage() {
-  const router = useRouter();
-  const { user, loading: userLoading } = useCurrentUser();
-  const isCoach = user?.role === "coach";
   const skinsEventId = process.env.NEXT_PUBLIC_SKINS_EVENT_ID ?? null;
   const { boards, candidates, loading, error, respond } = useSkinsQualifiers(skinsEventId);
   const [modalOpen, setModalOpen] = useState(false);
-
-  // Coaches have their own dedicated dashboard at /coach — Skins slot
-  // management below is athlete-only and doesn't apply to them.
-  useEffect(() => {
-    if (!userLoading && isCoach) router.replace("/coach");
-  }, [userLoading, isCoach, router]);
 
   const myInvite = useMemo(() => {
     const pending = candidates.find((c) => c.response === "pending");
     return pending ?? candidates[0] ?? DEMO_INVITE;
   }, [candidates]);
 
-  if (isCoach) return null;
 
   return (
     <div className="min-h-screen">

@@ -24,7 +24,6 @@ begin
     create type public.user_role as enum (
       'admin',
       'referee',
-      'coach',
       'athlete',
       'parent'
     );
@@ -32,7 +31,7 @@ begin
     if exists (
       select 1 from pg_enum
       where enumtypid = (select oid from pg_type where typname = 'user_role')
-        and enumlabel in ('usher', 'entry_helper', 'team_captain')
+        and enumlabel in ('usher', 'entry_helper', 'team_captain', 'coach')
     ) then
       -- Every RLS policy on public.users is recreated later in this script
       -- (idempotent drop-if-exists/create pattern) — safe to drop them all
@@ -45,13 +44,19 @@ begin
         end loop;
       end;
       alter type public.user_role rename to user_role_old;
-      create type public.user_role as enum ('admin', 'referee', 'coach', 'athlete', 'parent');
+      create type public.user_role as enum ('admin', 'referee', 'athlete', 'parent');
       alter table public.users alter column role drop default;
       alter table public.users alter column role type public.user_role using (
         case role::text
           when 'usher' then 'referee'
           when 'entry_helper' then 'referee'
-          when 'team_captain' then 'coach'
+          -- 'coach' and the older 'team_captain' both become plain athletes.
+          -- Captaincy is no longer a ROLE at all: it is teams.captain_id, a
+          -- relationship. A role said someone could captain in the abstract
+          -- while the actual team pointer said otherwise, which is two
+          -- sources of truth for one fact.
+          when 'team_captain' then 'athlete'
+          when 'coach' then 'athlete'
           else role::text
         end
       )::public.user_role;
@@ -65,13 +70,15 @@ end $$;
 
 -- Roles a member of the public may select for themselves at sign-up.
 -- 'admin' is intentionally excluded — grantable only by an existing admin.
+-- Signup no longer offers 'coach': captaincy is a relationship
+-- (teams.captain_id), not something you can claim at registration.
+drop type if exists public.public_signup_role;
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'public_signup_role') then
     create type public.public_signup_role as enum (
       'athlete',
       'parent',
-      'coach',
       'referee'
     );
   end if;
@@ -1181,11 +1188,19 @@ security definer
 stable
 set search_path = public
 as $$
+  -- ELIGIBILITY to found and captain a team — deliberately NOT the same
+  -- question as "does this person captain team X", which is
+  -- is_team_captain_of() and is what relay management checks.
+  --
+  -- Conflating them breaks team creation outright: requiring that you already
+  -- captain a team in order to create one means nobody can ever create the
+  -- first. 'coach' is gone from the list because the role is retired; an
+  -- Open-age athlete founding a team remains the route in.
   select exists (
     select 1 from public.users u
     where u.id = auth.uid()
       and (
-        u.role in ('coach', 'admin')
+        u.role = 'admin'
         or exists (
           select 1 from public.athletes a
           where a.user_id = u.id and a.age_group = 'Open'
@@ -2487,6 +2502,267 @@ select
   (overall_rank = 1) as is_best_overall,
   (event_rank = 1)   as is_best_in_event
 from ranked;
+
+-- ---------------------------------------------------------------------------
+-- RELAY SQUADS
+-- ---------------------------------------------------------------------------
+-- An athlete can compete individually without a team, but a relay is a TEAM
+-- entry: four swimmers from one team. public.entries is strictly one athlete
+-- per event and cannot express that, which is why relay events have always
+-- been schedule-only.
+--
+-- Composition rules, all enforced below rather than in the UI:
+--   * exactly four legs, numbered 1-4
+--   * all four swimmers are on the squad's team
+--   * all four share the squad's age group (a squad is single-category)
+--   * gender comes from the event: (Male) -> four men, (Female) -> four
+--     women, (Mixed) -> exactly two of each
+--   * a swimmer may appear in at most ONE squad per event, across every team
+--   * every swimmer must already be entered in this meet volume
+--
+-- Medley relays swim a fixed Back / Breast / Fly / Free order, so leg_number
+-- IS the stroke and the captain's choice is who takes each leg. Freestyle
+-- relays have no stroke, and leg_number is just swim order.
+create table if not exists public.relay_squads (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events (id) on delete cascade,
+  team_id uuid not null references public.teams (id) on delete cascade,
+  age_group public.age_group not null,
+  -- A, B, C... in creation order within (event, team). A team may enter as
+  -- many squads as it can fill.
+  squad_letter text not null,
+  status public.entry_status not null default 'pending_payment',
+  created_by uuid references public.users (id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (event_id, team_id, squad_letter)
+);
+
+create table if not exists public.relay_legs (
+  id uuid primary key default gen_random_uuid(),
+  squad_id uuid not null references public.relay_squads (id) on delete cascade,
+  leg_number integer not null check (leg_number between 1 and 4),
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  -- One swimmer per leg, and one leg per swimmer within a squad.
+  unique (squad_id, leg_number),
+  unique (squad_id, athlete_id)
+);
+
+create index if not exists relay_squads_event_idx on public.relay_squads (event_id);
+create index if not exists relay_legs_athlete_idx on public.relay_legs (athlete_id);
+
+alter table public.relay_squads enable row level security;
+alter table public.relay_legs enable row level security;
+
+-- The medley stroke for a leg, or null when the event is not a medley.
+create or replace function public.relay_leg_stroke(p_event_stroke text, p_leg integer)
+returns text
+language sql
+immutable
+as $$
+  select case
+    when p_event_stroke not ilike '%medley%' then null
+    when p_leg = 1 then 'Backstroke'
+    when p_leg = 2 then 'Breaststroke'
+    when p_leg = 3 then 'Butterfly'
+    when p_leg = 4 then 'Freestyle'
+  end;
+$$;
+
+comment on function public.relay_leg_stroke(text, integer) is
+  'Medley relays swim a fixed Back/Breast/Fly/Free order, so the leg number '
+  'determines the stroke. Returns null for freestyle relays, where the leg '
+  'number is only swim order.';
+
+-- How many swimmers of each gender an event requires. Read from the event
+-- NAME because that is where the programme states it: "(Male)", "(Female)",
+-- "(Mixed)". Every mixed relay is exactly 2 + 2.
+create or replace function public.relay_gender_requirement(p_event_name text)
+returns table (male_count integer, female_count integer)
+language sql
+immutable
+as $$
+  select case
+    when p_event_name ilike '%(male%' then 4
+    when p_event_name ilike '%(female%' then 0
+    else 2
+  end,
+  case
+    when p_event_name ilike '%(male%' then 0
+    when p_event_name ilike '%(female%' then 4
+    else 2
+  end;
+$$;
+
+-- Validates a squad's roster. Runs as a CONSTRAINT TRIGGER deferred to
+-- commit, because the rules are about the squad as a whole (four legs, two of
+-- each gender) and cannot be judged while the legs are still being inserted
+-- one at a time.
+create or replace function public.validate_relay_squad()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_squad_id uuid;
+  v_squad public.relay_squads%rowtype;
+  v_event public.events%rowtype;
+  v_legs integer;
+  v_male integer;
+  v_female integer;
+  v_need_male integer;
+  v_need_female integer;
+  v_wrong_team integer;
+  v_wrong_age integer;
+  v_not_entered integer;
+  v_volume_id uuid;
+begin
+  v_squad_id := coalesce(new.squad_id, old.squad_id);
+
+  select * into v_squad from public.relay_squads where id = v_squad_id;
+  -- Squad deleted in the same transaction: its legs go with it, nothing to check.
+  if v_squad.id is null then
+    return null;
+  end if;
+
+  select * into v_event from public.events where id = v_squad.event_id;
+
+  if not coalesce(v_event.is_relay, false) then
+    raise exception 'Relay squads can only be entered for relay events.';
+  end if;
+
+  select s.meet_volume_id into v_volume_id
+  from public.sessions s where s.id = v_event.session_id;
+
+  select count(*) into v_legs from public.relay_legs where squad_id = v_squad_id;
+  if v_legs <> 4 then
+    raise exception 'A relay squad needs exactly 4 swimmers (this one has %).', v_legs;
+  end if;
+
+  select
+    count(*) filter (where a.gender = 'male'),
+    count(*) filter (where a.gender = 'female'),
+    count(*) filter (where a.team_id is distinct from v_squad.team_id),
+    count(*) filter (where a.age_group <> v_squad.age_group)
+  into v_male, v_female, v_wrong_team, v_wrong_age
+  from public.relay_legs rl
+  join public.athletes a on a.id = rl.athlete_id
+  where rl.squad_id = v_squad_id;
+
+  if v_wrong_team > 0 then
+    raise exception 'Every swimmer in a relay squad must be on that team (% are not).', v_wrong_team;
+  end if;
+
+  if v_wrong_age > 0 then
+    raise exception 'All four swimmers must be in the squad''s age group (% are not).', v_wrong_age;
+  end if;
+
+  select male_count, female_count into v_need_male, v_need_female
+  from public.relay_gender_requirement(v_event.name);
+
+  if v_male <> v_need_male or v_female <> v_need_female then
+    raise exception
+      '% needs % male and % female swimmers (this squad has % male, % female).',
+      v_event.name, v_need_male, v_need_female, v_male, v_female;
+  end if;
+
+  -- Already entered in this meet: a relay swimmer must be competing in it,
+  -- not brought in for the relay alone.
+  select count(*) into v_not_entered
+  from public.relay_legs rl
+  where rl.squad_id = v_squad_id
+    and not exists (
+      select 1
+      from public.entries en
+      join public.events ev on ev.id = en.event_id
+      join public.sessions se on se.id = ev.session_id
+      where en.athlete_id = rl.athlete_id
+        and se.meet_volume_id = v_volume_id
+    );
+  if v_not_entered > 0 then
+    raise exception
+      '% swimmer(s) are not entered in this meet. Relay swimmers must already have an individual entry.',
+      v_not_entered;
+  end if;
+
+  -- One squad per swimmer per event, across every team — checked here rather
+  -- than with a unique index because the event lives on the squad, not the leg.
+  if exists (
+    select 1
+    from public.relay_legs rl
+    join public.relay_squads rs on rs.id = rl.squad_id
+    join public.relay_legs mine on mine.athlete_id = rl.athlete_id
+    where mine.squad_id = v_squad_id
+      and rs.event_id = v_squad.event_id
+      and rs.id <> v_squad_id
+  ) then
+    raise exception 'A swimmer can only be in one squad per relay event.';
+  end if;
+
+  return null;
+end;
+$$;
+
+drop trigger if exists validate_relay_squad_trigger on public.relay_legs;
+create constraint trigger validate_relay_squad_trigger
+  after insert or update or delete on public.relay_legs
+  deferrable initially deferred
+  for each row execute function public.validate_relay_squad();
+
+-- Only the team's captain (or an admin) may enter or change that team's
+-- squads. Everyone can read them: a heat sheet is public.
+drop policy if exists "public_read_relay_squads" on public.relay_squads;
+create policy "public_read_relay_squads" on public.relay_squads for select using (true);
+
+drop policy if exists "captain_manages_relay_squads" on public.relay_squads;
+create policy "captain_manages_relay_squads" on public.relay_squads
+  for all
+  using (public.is_admin() or public.is_team_captain_of(team_id))
+  with check (public.is_admin() or public.is_team_captain_of(team_id));
+
+drop policy if exists "public_read_relay_legs" on public.relay_legs;
+create policy "public_read_relay_legs" on public.relay_legs for select using (true);
+
+drop policy if exists "captain_manages_relay_legs" on public.relay_legs;
+create policy "captain_manages_relay_legs" on public.relay_legs
+  for all
+  using (
+    public.is_admin()
+    or exists (
+      select 1 from public.relay_squads rs
+      where rs.id = squad_id and public.is_team_captain_of(rs.team_id)
+    )
+  )
+  with check (
+    public.is_admin()
+    or exists (
+      select 1 from public.relay_squads rs
+      where rs.id = squad_id and public.is_team_captain_of(rs.team_id)
+    )
+  );
+
+-- Only an admin may confirm a relay squad's payment, mirroring
+-- enforce_entry_status_change for individual entries.
+create or replace function public.enforce_relay_status_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.status = 'confirmed' and not public.is_admin() then
+    raise exception 'Only an admin may confirm relay payment.';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_relay_status_change_trigger on public.relay_squads;
+create trigger enforce_relay_status_change_trigger
+  before insert or update on public.relay_squads
+  for each row execute function public.enforce_relay_status_change();
 
 -- ---------------------------------------------------------------------------
 -- SKINS LANES

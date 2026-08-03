@@ -18,7 +18,7 @@ import { DataErrorBanner } from "@/components/ui/data-error-banner";
  * athlete profile (/athletes/[id]), which already renders the full career
  * ledger (PBs and every entry).
  */
-export function CoachRoster({ className }: { className?: string }) {
+export function TeamRoster({ className }: { className?: string }) {
   const [team, setTeam] = useState<TeamRow | null>(null);
   const [detail, setDetail] = useState<TeamDetail | null>(null);
   const [loading, setLoading] = useState(true);
