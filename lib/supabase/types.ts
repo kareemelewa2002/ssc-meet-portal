@@ -255,6 +255,12 @@ export type HeatRow = {
   heat_number: number;
   heat_order: number;
   status: PublishStatus;
+  /** Skins only. A Skins board is (age category x gender), which heat_group
+   * cannot express because it folds U17 in with Open — so these three carry
+   * the board and round identity, and are null on every ordinary heat. */
+  skins_category: AgeGroup | null;
+  skins_round: number | null;
+  skins_swim_off: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -467,6 +473,10 @@ export type Database = {
           p_category: AgeGroup;
           p_gender: Gender;
           p_athlete_ids: string[];
+          /** Positional with p_athlete_ids: index i is that swimmer's lane. */
+          p_lane_numbers: number[];
+          p_round: number;
+          p_swim_off: boolean;
         };
         Returns: {
           athlete_id: string;

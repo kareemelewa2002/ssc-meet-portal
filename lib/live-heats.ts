@@ -63,6 +63,9 @@ export interface RawHeat {
   heat_group: HeatGroup;
   gender: Gender | null;
   status: PublishStatus;
+  /** Skins only — null on every ordinary heat. */
+  skins_round?: number | null;
+  skins_swim_off?: boolean | null;
   heat_lanes: RawHeatLane[];
 }
 
@@ -116,6 +119,9 @@ export interface LiveHeatView {
   /** null only for legacy heats seeded before male/female were split. */
   gender: Gender | null;
   status: PublishStatus;
+  /** Skins only: which round of the bracket this heat is. */
+  skinsRound: number | null;
+  skinsSwimOff: boolean;
   lanes: LiveLaneView[];
 }
 
@@ -150,6 +156,8 @@ export function transformLiveEvents(raw: RawEvent[]): LiveEventView[] {
         heatGroup: heat.heat_group,
         gender: heat.gender ?? null,
         status: heat.status,
+        skinsRound: heat.skins_round ?? null,
+        skinsSwimOff: heat.skins_swim_off ?? false,
         lanes: [...heat.heat_lanes]
           .map((lane): LiveLaneView | null => {
             const entry = firstOf(lane.entries);
@@ -207,6 +215,8 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
       {
         heatId: "demo-heat-1",
         heatNumber: 1,
+        skinsRound: null,
+        skinsSwimOff: false,
         heatGroup: "U13_14",
         gender: "female",
         status: "published",
@@ -252,6 +262,8 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
       {
         heatId: "demo-heat-2",
         heatNumber: 2,
+        skinsRound: null,
+        skinsSwimOff: false,
         heatGroup: "U17_OPEN",
         gender: "male",
         status: "published",
@@ -308,6 +320,8 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
       {
         heatId: "demo-heat-3",
         heatNumber: 1,
+        skinsRound: null,
+        skinsSwimOff: false,
         heatGroup: "U17_OPEN",
         gender: "female",
         status: "published",
@@ -333,7 +347,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
 const LIVE_EVENT_SELECT = `
   id, name, stroke, distance_m, is_skins, session_id, event_order,
   heats (
-    id, heat_number, heat_group, gender, status,
+    id, heat_number, heat_group, gender, status, skins_round, skins_swim_off,
     heat_lanes (
       lane_number,
       entries (

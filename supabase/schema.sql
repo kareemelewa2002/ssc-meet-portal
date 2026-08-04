@@ -617,6 +617,37 @@ begin
   end if;
 end $$;
 
+-- ---------------------------------------------------------------------------
+-- Skins heats carry their own identity: which board, which round.
+-- ---------------------------------------------------------------------------
+-- A Skins board is (age category x gender) — six of them. But heat_group has
+-- only two values and folds U17 in with Open, so the 17 & Under board and the
+-- Open board of the same gender resolved to the SAME heat row, and whichever
+-- was materialised second collided on heat_lanes (heat_id, lane_number).
+-- That is the "duplicate key value violates unique constraint
+-- heat_lanes_heat_id_lane_number_key" the Skins bracket reported; it was
+-- never male-specific, it just needed both categories of a gender to be
+-- populated. U14 escaped only because U13_14 is its own heat group.
+--
+-- Rounds collided the same way, and worse: all three rounds reused
+-- heat_number 1, and results key on heat_lane_id, so publishing the Round of
+-- 4 overwrote the Round of 6's results in place rather than recording a
+-- second round. Per-round publishing is impossible until each round is its
+-- own heat.
+alter table public.heats
+  add column if not exists skins_category public.age_group,
+  add column if not exists skins_round integer,
+  add column if not exists skins_swim_off boolean not null default false;
+
+-- Partial, so ordinary heats are untouched. Adding these columns to the base
+-- constraint instead would have been actively harmful: NULLs compare as
+-- distinct, so every non-Skins heat would have silently lost its uniqueness.
+create unique index if not exists heats_skins_board_round_key
+  on public.heats (event_id, skins_category, gender, skins_round, skins_swim_off)
+  where skins_round is not null;
+
+-- (Legacy Skins heats are cleaned up further down, once results exists —
+-- deciding which of them are safe to drop requires reading their results.)
 
 create index if not exists heat_lanes_heat_id_idx on public.heat_lanes (heat_id);
 
@@ -665,6 +696,21 @@ create table if not exists public.results (
 
 create index if not exists results_status_idx on public.results (status);
 create index if not exists results_outcome_idx on public.results (result_outcome);
+
+-- Legacy Skins heats predate per-board/per-round identity and are
+-- unsalvageable: one row stood for two boards and all three rounds at once.
+-- Unscored ones are pure derived data, so drop them and let the bracket
+-- rebuild cleanly. Scored ones are left alone — they hold real results, and
+-- destroying those to tidy up the schema would be the worse trade.
+delete from public.heats h
+where h.skins_round is null
+  and exists (select 1 from public.events e where e.id = h.event_id and e.is_skins)
+  and not exists (
+    select 1
+    from public.heat_lanes hl
+    join public.results r on r.heat_lane_id = hl.id
+    where hl.heat_id = h.id and r.result_outcome is not null
+  );
 
 -- ---------------------------------------------------------------------------
 -- skins_qualifications — accept / decline responses for Session 3 Skins.
@@ -2248,10 +2294,23 @@ set search_path = public
 as $$
 declare
   v_heat_id uuid;
+  v_is_skins_round boolean;
   v_max_points numeric := 6;
 begin
   select heat_id into v_heat_id from public.heat_lanes where id = new.heat_lane_id;
   if v_heat_id is null then
+    return new;
+  end if;
+
+  -- Skins is placed by eye, not timed: the referee records who touched
+  -- first, second, third, and there is no official_time_ms at all. Ranking
+  -- this heat by time would therefore order it by a column that is null for
+  -- every swimmer — rank() over (order by null) is 1 for everyone — and
+  -- overwrite the referee's finish order with a six-way tie for first.
+  -- The entered places ARE the result here, so leave them alone.
+  select (h.skins_round is not null) into v_is_skins_round
+  from public.heats h where h.id = v_heat_id;
+  if coalesce(v_is_skins_round, false) then
     return new;
   end if;
 
@@ -2778,11 +2837,37 @@ create trigger enforce_relay_status_change_trigger
 -- entries for the Skins event, a heat, and its lanes. Idempotent — re-running
 -- returns the same heat and lanes rather than duplicating them, so an admin
 -- reopening the bracket does not create a second field.
+-- Heat numbers must stay unique within (event, heat_group, gender) even
+-- though a Skins board's real identity is (category, round, swim-off). Encode
+-- all three into one number rather than widening the base constraint:
+-- category tens, round units, +5 for the swim-off that settles it.
+create or replace function public.skins_heat_number(
+  p_category public.age_group,
+  p_round integer,
+  p_swim_off boolean
+)
+returns integer
+language sql
+immutable
+as $$
+  select (case p_category when 'U14' then 1 when 'U17' then 2 else 3 end) * 10
+       + (case p_round when 6 then 1 when 4 then 2 else 3 end)
+       + (case when p_swim_off then 5 else 0 end);
+$$;
+
+comment on function public.skins_heat_number(public.age_group, integer, boolean) is
+  'Stable heat_number for one Skins board+round, so the per-bucket heat '
+  'number constraint holds without U17 and Open colliding.';
+
+drop function if exists public.materialise_skins_heat(uuid, public.age_group, public.gender, uuid[]);
 create or replace function public.materialise_skins_heat(
   p_skins_event_id uuid,
   p_category public.age_group,
   p_gender public.gender,
-  p_athlete_ids uuid[]
+  p_athlete_ids uuid[],
+  p_lane_numbers integer[],
+  p_round integer,
+  p_swim_off boolean
 )
 returns table (athlete_id uuid, entry_id uuid, heat_lane_id uuid, lane_number integer)
 language plpgsql
@@ -2798,10 +2883,13 @@ as $$
 declare
   v_heat_group public.heat_group;
   v_heat_id uuid;
-  v_lane_seq integer[] := array[4,3,5,2,1,6];
+  v_heat_number integer;
   v_athlete uuid;
   v_entry uuid;
   v_index integer := 0;
+  v_count integer;
+  v_matches_request boolean;
+  v_already_scored boolean;
 begin
   if not public.is_admin_or_referee() then
     raise exception 'Only admins or referees may set up a Skins heat.';
@@ -2811,40 +2899,100 @@ begin
     raise exception 'materialise_skins_heat expects a Skins event (is_skins = true)';
   end if;
 
-  v_heat_group := case when p_category = 'U14' then 'U13_14' else 'U17_OPEN' end;
+  if p_round not in (6, 4, 2) then
+    raise exception 'Skins rounds are 6, 4 and 2 — got %', p_round;
+  end if;
 
+  v_count := coalesce(array_length(p_athlete_ids, 1), 0);
+  if v_count = 0 then
+    raise exception 'A Skins round needs at least one swimmer.';
+  end if;
+
+  if coalesce(array_length(p_lane_numbers, 1), 0) <> v_count then
+    raise exception 'Every Skins swimmer needs exactly one lane (% swimmers, % lanes).',
+      v_count, coalesce(array_length(p_lane_numbers, 1), 0);
+  end if;
+
+  if exists (select 1 from unnest(p_lane_numbers) ln where ln < 1 or ln > 6) then
+    raise exception 'Skins lanes must be between 1 and 6.';
+  end if;
+
+  if exists (select 1 from unnest(p_lane_numbers) ln group by ln having count(*) > 1) then
+    raise exception 'Two Skins swimmers cannot be put in the same lane.';
+  end if;
+
+  if exists (select 1 from unnest(p_athlete_ids) aid group by aid having count(*) > 1) then
+    raise exception 'A swimmer cannot occupy two lanes in the same Skins round.';
+  end if;
+
+  v_heat_group := case when p_category = 'U14' then 'U13_14' else 'U17_OPEN' end;
+  v_heat_number := public.skins_heat_number(p_category, p_round, p_swim_off);
+
+  -- Keyed on the BOARD and the ROUND, not on heat_group: heat_group cannot
+  -- tell U17 from Open, and every round of a board is its own heat.
   select h.id into v_heat_id
   from public.heats h
   where h.event_id = p_skins_event_id
-    and h.heat_group = v_heat_group
+    and h.skins_category = p_category
     and h.gender is not distinct from p_gender
-    and h.heat_number = 1;
+    and h.skins_round = p_round
+    and h.skins_swim_off = p_swim_off;
 
   if v_heat_id is null then
-    insert into public.heats (event_id, heat_group, gender, heat_number, heat_order, status)
-    values (p_skins_event_id, v_heat_group, p_gender, 1, 1, 'published')
+    insert into public.heats (
+      event_id, heat_group, gender, heat_number, heat_order, status,
+      skins_category, skins_round, skins_swim_off
+    )
+    values (
+      p_skins_event_id, v_heat_group, p_gender, v_heat_number, v_heat_number, 'published',
+      p_category, p_round, p_swim_off
+    )
     returning id into v_heat_id;
   end if;
 
-  foreach v_athlete in array p_athlete_ids loop
-    v_index := v_index + 1;
-    exit when v_index > array_length(v_lane_seq, 1);
+  -- Is the field already exactly as asked for? Re-rendering the bracket calls
+  -- this on every mount, and a re-seed that is really a no-op must not touch
+  -- the lanes — deleting them cascades results away.
+  select coalesce(
+    (select array_agg(hl.lane_number || ':' || en.athlete_id::text order by hl.lane_number)
+     from public.heat_lanes hl
+     join public.entries en on en.id = hl.entry_id
+     where hl.heat_id = v_heat_id),
+    array[]::text[]
+  ) = coalesce(
+    (select array_agg(t.lane || ':' || t.aid::text order by t.lane)
+     from unnest(p_lane_numbers, p_athlete_ids) as t(lane, aid)),
+    array[]::text[]
+  ) into v_matches_request;
 
-    -- Skins entries are always NT: there is no seed time for a knockout.
-    insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
-    values (p_skins_event_id, v_athlete, null, true, 'confirmed')
-    on conflict (event_id, athlete_id) do update set status = 'confirmed'
-    returning id into v_entry;
+  if not v_matches_request then
+    select exists (
+      select 1
+      from public.results r
+      join public.heat_lanes hl on hl.id = r.heat_lane_id
+      where hl.heat_id = v_heat_id and r.result_outcome is not null
+    ) into v_already_scored;
 
-    if v_entry is null then
-      select e.id into v_entry from public.entries e
-      where e.event_id = p_skins_event_id and e.athlete_id = v_athlete;
+    -- Somebody has already scored this round. Re-seeding would delete their
+    -- work by cascade, so the existing field stands and the caller gets it
+    -- back unchanged; changing a scored round is an explicit reopen.
+    if not v_already_scored then
+      delete from public.heat_lanes where heat_id = v_heat_id;
+
+      foreach v_athlete in array p_athlete_ids loop
+        v_index := v_index + 1;
+
+        -- Skins entries are always NT: there is no seed time for a knockout.
+        insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
+        values (p_skins_event_id, v_athlete, null, true, 'confirmed')
+        on conflict (event_id, athlete_id) do update set status = 'confirmed'
+        returning id into v_entry;
+
+        insert into public.heat_lanes (heat_id, lane_number, entry_id)
+        values (v_heat_id, p_lane_numbers[v_index], v_entry);
+      end loop;
     end if;
-
-    insert into public.heat_lanes (heat_id, lane_number, entry_id)
-    values (v_heat_id, v_lane_seq[v_index], v_entry)
-    on conflict (heat_id, entry_id) do update set lane_number = excluded.lane_number;
-  end loop;
+  end if;
 
   return query
   select a.id, en.id, hl.id, hl.lane_number
@@ -2856,10 +3004,11 @@ begin
 end;
 $$;
 
-comment on function public.materialise_skins_heat(uuid, public.age_group, public.gender, uuid[]) is
-  'Creates (or returns) the entries, heat and lanes for one Skins board so a '
-  'round can actually be scored. Skins swimmers have no entry of their own '
-  'because qualification comes from results, and results need a heat_lane.';
+comment on function public.materialise_skins_heat(uuid, public.age_group, public.gender, uuid[], integer[], integer, boolean) is
+  'Creates (or returns) the entries, heat and lanes for ONE ROUND of one '
+  'Skins board so that round can be scored and published on its own. Skins '
+  'swimmers have no entry of their own because qualification comes from '
+  'results, and results need a heat_lane.';
 
 -- ---------------------------------------------------------------------------
 -- SEED TIMES FROM MEET HISTORY (volume 2 onward)

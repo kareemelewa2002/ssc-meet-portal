@@ -237,18 +237,27 @@ export interface SkinsLane {
 }
 
 /**
- * Creates (or returns) the real entries, heat and lanes for one Skins board.
+ * Creates (or returns) the real entries, heat and lanes for ONE ROUND of one
+ * Skins board.
  *
  * Without this the bracket had only placeholder ids, and publishing a round
  * silently wrote nothing because every lane failed the UUID check on the way
- * to heat_lanes. Idempotent, so reopening a board does not build a second
- * field.
+ * to heat_lanes. The round is part of the identity: each round is its own
+ * heat, so it can be scored, submitted and published on its own without
+ * overwriting the round before it.
+ *
+ * `athleteIds` and `laneNumbers` are positional — index i is that swimmer's
+ * lane. Idempotent: called again with the same field it changes nothing, and
+ * it will not re-seed a round that has already been scored.
  */
 export async function materialiseSkinsHeat(
   skinsEventId: string,
   category: AgeGroup,
   gender: Gender,
   athleteIds: string[],
+  laneNumbers: number[],
+  round: number,
+  swimOff: boolean = false,
 ): Promise<FetchResult<SkinsLane[]>> {
   const result = await runQuery<
     { athlete_id: string; entry_id: string; heat_lane_id: string; lane_number: number }[]
@@ -261,6 +270,9 @@ export async function materialiseSkinsHeat(
         p_category: category,
         p_gender: gender,
         p_athlete_ids: athleteIds,
+        p_lane_numbers: laneNumbers,
+        p_round: round,
+        p_swim_off: swimOff,
       });
     },
     { empty: [] },

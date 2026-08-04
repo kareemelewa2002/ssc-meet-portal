@@ -109,8 +109,20 @@ export function heatTitle(heat: {
   heatGroup: "U13_14" | "U17_OPEN";
   gender: "male" | "female" | null | undefined;
   heatNumber: number;
+  /** Skins only: 6, 4 or 2. Set means this heat is one round of a bracket. */
+  skinsRound?: number | null;
+  skinsSwimOff?: boolean | null;
 }): string {
   const board = heat.heatGroup === "U13_14" ? "14 & Under" : "17 & Under / Open";
   const gender = heatGenderLabel(heat.gender);
+
+  // A Skins heat's number encodes its board and round so the per-bucket
+  // uniqueness constraint holds (see skins_heat_number). It is not a heat
+  // number anybody should read — name the round instead.
+  if (heat.skinsRound != null) {
+    const round = heat.skinsRound === 2 ? "Final 2" : `Round of ${heat.skinsRound}`;
+    return [board, gender, heat.skinsSwimOff ? `${round} swim-off` : round].filter(Boolean).join(" ");
+  }
+
   return [board, gender, `Heat ${heat.heatNumber}`].filter(Boolean).join(" ");
 }

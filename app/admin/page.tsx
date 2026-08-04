@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { resolveSkinsEventId } from "@/lib/skins-qualification";
-import { SkinsBoardRunner } from "@/components/admin/skins-board-runner";
+import { SkinsApprovals } from "@/components/admin/skins-approvals";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
@@ -17,13 +17,13 @@ const TABS = [
   { id: "teams", label: "Pending Team Approvals", shortLabel: "Teams" },
   { id: "heatcards", label: "Referee Heat Cards", shortLabel: "Heat Cards" },
   { id: "cash", label: "Cash Payments", shortLabel: "Cash" },
-  { id: "skins", label: "Skins Knockout", shortLabel: "Skins" },
+  { id: "skins", label: "Skins Approvals", shortLabel: "Skins" },
   { id: "users", label: "User & Role Management", shortLabel: "Users" },
 ] as const;
 
 export default function AdminPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("cash");
-  // The Skins bracket queries uuid columns, so it can only ever be mounted
+  // The Skins rounds query uuid columns, so this can only ever be mounted
   // with a real event UUID — never the old "50m-freestyle-skins" slug.
   const [skinsEventId, setSkinsEventId] = useState<string | null>(null);
   const [skinsError, setSkinsError] = useState<string | null>(null);
@@ -87,7 +87,7 @@ export default function AdminPage() {
           {skinsResolving ? (
             <p className="text-sm text-muted-foreground">Resolving the Skins event…</p>
           ) : skinsEventId ? (
-            <SkinsBoardRunner eventId={skinsEventId} eventName="Skins" />
+            <SkinsApprovals eventId={skinsEventId} eventName="Skins" />
           ) : (
             !skinsError && (
               <p className="text-sm text-muted-foreground">

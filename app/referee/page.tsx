@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { HeatResultEntry } from "@/components/referee/heat-result-entry";
 import { FilterSelect } from "@/components/events/filter-select";
 import { AppHeader } from "@/components/layout/app-header";
+import { SkinsBoardRunner } from "@/components/referee/skins-board-runner";
+import { resolveSkinsEventId } from "@/lib/skins-qualification";
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
 import type { Gender, HeatGroup, PublishStatus, SessionRow } from "@/lib/supabase/types";
@@ -86,6 +88,12 @@ interface RefereeLane {
  */
 export default function RefereePage() {
   const [outdoorMode, setOutdoorMode] = useState(false);
+  // Skins is scored on the deck like anything else, but it is a bracket
+  // rather than a heat sheet, so it gets its own view instead of being
+  // squeezed into the stacked deck.
+  const [view, setView] = useState<"deck" | "skins">("deck");
+  const [skinsEventId, setSkinsEventId] = useState<string | null>(null);
+  const [skinsError, setSkinsError] = useState<string | null>(null);
 
   const [deck, setDeck] = useState<RefereeDeckHeat[]>([]);
   const [loadingDeck, setLoadingDeck] = useState(true);
@@ -129,6 +137,11 @@ export default function RefereePage() {
       const { data: heatRows, error: heatError } = await supabase
         .from("heats")
         .select("id, heat_number, heat_group, gender, status, event_id, events ( name, event_order, session_id, stroke, distance_m, is_skins )")
+        // Skins rounds are heats, but they are placed by eye rather than
+        // timed and they belong to a bracket. Listing them here would offer
+        // a time entry box for a round that has no times, and duplicate the
+        // Skins view's job. They are scored under "Skins knockout".
+        .is("skins_round", null)
         .order("heat_number", { ascending: true });
 
       if (heatError || !heatRows?.length) {
@@ -245,6 +258,17 @@ export default function RefereePage() {
     })();
   }, [loadSchedule, loadDeck]);
 
+  // Resolved once, on demand: the bracket queries uuid columns and can only
+  // be mounted with a real event UUID.
+  useEffect(() => {
+    if (view !== "skins" || skinsEventId) return;
+    void (async () => {
+      const result = await resolveSkinsEventId();
+      setSkinsEventId(result.data);
+      setSkinsError(result.error);
+    })();
+  }, [view, skinsEventId]);
+
   const sessionNumbers = useMemo(
     () => [...new Set(deck.map((h) => h.sessionNumber).filter((n): n is number => n != null))].sort(),
     [deck],
@@ -294,6 +318,43 @@ export default function RefereePage() {
         </Button>
       </div>
 
+      <div className="flex flex-wrap gap-2">
+        {(
+          [
+            { id: "deck", label: "Heat entry" },
+            { id: "skins", label: "Skins knockout" },
+          ] as const
+        ).map((option) => (
+          <Button
+            key={option.id}
+            type="button"
+            variant={view === option.id ? "default" : "outline"}
+            className="min-h-[48px]"
+            aria-pressed={view === option.id}
+            onClick={() => setView(option.id)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+
+      {view === "skins" ? (
+        <>
+          {skinsError && (
+            <p className="text-sm text-destructive">{skinsError}</p>
+          )}
+          {skinsEventId ? (
+            <SkinsBoardRunner eventId={skinsEventId} eventName="Skins" />
+          ) : (
+            !skinsError && (
+              <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
+                Resolving the Skins event…
+              </p>
+            )
+          )}
+        </>
+      ) : (
+        <>
       <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
         <CardHeader>
           <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>Filter the deck</CardTitle>
@@ -382,6 +443,8 @@ export default function RefereePage() {
             />
           ))}
         </div>
+      )}
+        </>
       )}
       </main>
     </div>

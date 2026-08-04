@@ -1091,6 +1091,138 @@ exception when others then
   perform ssc_test.check('DB-22','relay squads', false, sqlerrm);
 end $$;
 
+
+-- DB-23 — Skins rounds: board identity, per-round publishing, entered places.
+--
+-- The bracket used to key its heat on heat_group, which cannot tell U17 from
+-- Open, so the second board of a gender collided on heat_lanes
+-- (heat_id, lane_number) and the whole board failed to open. All three rounds
+-- also shared heat_number 1, so publishing one round overwrote the one
+-- before it. Builds its own fixture: earlier blocks move athletes around.
+do $$
+declare
+  v_event uuid; v_admin uuid;
+  v_u17 uuid[]; v_open uuid[]; v_four uuid[];
+  v_r6 uuid; v_r4 uuid; v_heats int; v_places int; v_err text;
+  v_plain_heat uuid; v_fast uuid; v_slow uuid; v_fast_place int; v_slow_place int;
+begin
+  perform set_config('role','postgres',true);
+
+  select id into v_event from public.events where is_skins order by id limit 1;
+  select id into v_admin from public.users where role = 'admin' order by id limit 1;
+  perform ssc_test.check('DB-23','precondition: a Skins event and an admin',
+    v_event is not null and v_admin is not null, null);
+  if v_event is null or v_admin is null then return; end if;
+
+  -- Start from nothing so counts do not depend on what ran before.
+  delete from public.heats where event_id = v_event;
+  perform set_config('request.jwt.claim.sub', v_admin::text, true);
+
+  -- Guarantee six U17 men and six Open men.
+  update public.athletes set age_group = 'U17', gender = 'male'
+  where id in (select id from public.athletes order by id limit 6);
+  update public.athletes set age_group = 'Open', gender = 'male'
+  where id in (select id from public.athletes order by id desc limit 6);
+
+  select array_agg(id) into v_u17 from
+    (select id from public.athletes where age_group='U17' and gender='male' order by id limit 6) x;
+  select array_agg(id) into v_open from
+    (select id from public.athletes where age_group='Open' and gender='male' order by id limit 6) x;
+
+  perform ssc_test.check('DB-23','precondition: six U17 men and six Open men',
+    coalesce(array_length(v_u17,1),0) = 6 and coalesce(array_length(v_open,1),0) = 6,
+    format('u17=%s open=%s', array_length(v_u17,1), array_length(v_open,1)));
+  if coalesce(array_length(v_u17,1),0) < 6 or coalesce(array_length(v_open,1),0) < 6 then return; end if;
+
+  -- 1. The reported bug: both boards of one gender must open.
+  perform public.materialise_skins_heat(v_event,'U17','male',v_u17,array[4,3,5,2,1,6],6,false);
+  begin
+    perform public.materialise_skins_heat(v_event,'Open','male',v_open,array[4,3,5,2,1,6],6,false);
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform ssc_test.check('DB-23','U17 and Open boards of one gender do not collide on lanes',
+    v_err is null, coalesce(v_err,'ok'));
+
+  -- 2. Each round of a board is its own heat.
+  v_four := array[v_u17[1], v_u17[2], v_u17[3], v_u17[4]];
+  perform public.materialise_skins_heat(v_event,'U17','male',v_four,array[2,3,4,5],4,false);
+  select count(*) into v_heats from public.heats
+  where event_id = v_event and skins_category='U17' and gender='male';
+  perform ssc_test.check('DB-23','each Skins round is a separate heat', v_heats = 2,
+    format('%s heats for the U17 male board', v_heats));
+
+  select id into v_r6 from public.heats where event_id=v_event
+    and skins_category='U17' and gender='male' and skins_round=6 and not skins_swim_off;
+  select id into v_r4 from public.heats where event_id=v_event
+    and skins_category='U17' and gender='male' and skins_round=4 and not skins_swim_off;
+
+  -- 3. Skins is placed by eye. The entered order must survive the trigger
+  --    that derives finish places from times, because there are no times.
+  insert into public.results (heat_lane_id, result_outcome, finish_place, placement_points, status)
+  select hl.id, 'valid', hl.lane_number, 0, 'draft'
+  from public.heat_lanes hl where hl.heat_id = v_r6;
+  select count(distinct r.finish_place) into v_places
+  from public.results r join public.heat_lanes hl on hl.id = r.heat_lane_id
+  where hl.heat_id = v_r6;
+  perform ssc_test.check('DB-23','referee-entered Skins places are not overwritten by time ranking',
+    v_places = 6, format('%s distinct places recorded, expected 6', v_places));
+
+  -- 4. Negative control: an ordinary heat MUST still derive places from times.
+  select hl.heat_id into v_plain_heat from public.heat_lanes hl
+  join public.heats h on h.id = hl.heat_id
+  where h.skins_round is null
+    and not exists (select 1 from public.results r2 where r2.heat_lane_id = hl.id)
+  group by hl.heat_id having count(*) >= 2 order by hl.heat_id limit 1;
+  if v_plain_heat is not null then
+    select id into v_fast from public.heat_lanes where heat_id = v_plain_heat order by lane_number limit 1;
+    select id into v_slow from public.heat_lanes where heat_id = v_plain_heat and id <> v_fast
+      order by lane_number limit 1;
+    insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+    values (v_fast,'valid',30000,'draft'), (v_slow,'valid',31000,'draft');
+    select finish_place into v_fast_place from public.results where heat_lane_id = v_fast;
+    select finish_place into v_slow_place from public.results where heat_lane_id = v_slow;
+  end if;
+  perform ssc_test.check('DB-23','an ordinary heat still has its places derived from times',
+    v_plain_heat is null or (v_fast_place = 1 and v_slow_place = 2),
+    format('fast=%s slow=%s', v_fast_place, v_slow_place));
+
+  -- 5. Publishing one round leaves the others alone.
+  insert into public.results (heat_lane_id, result_outcome, finish_place, placement_points, status)
+  select hl.id, 'valid', hl.lane_number, 0, 'draft'
+  from public.heat_lanes hl where hl.heat_id = v_r4;
+  update public.results set status = 'published'
+  where heat_lane_id in (select id from public.heat_lanes where heat_id = v_r6);
+  perform ssc_test.check('DB-23','publishing a Skins round does not publish another',
+    (select count(*) from public.results r join public.heat_lanes hl on hl.id = r.heat_lane_id
+     where hl.heat_id = v_r4 and r.status = 'published') = 0,
+    'the Round of 4 stayed unpublished');
+  perform ssc_test.check('DB-23','the published round really is published',
+    (select count(*) from public.results r join public.heat_lanes hl on hl.id = r.heat_lane_id
+     where hl.heat_id = v_r6 and r.status = 'published') = 6, null);
+
+  -- 6. Re-seeding a round that has been scored must not destroy the scores.
+  perform public.materialise_skins_heat(v_event,'U17','male',v_four,array[2,3,4,5],6,false);
+  perform ssc_test.check('DB-23','re-seeding a scored round does not delete its results',
+    (select count(*) from public.results r join public.heat_lanes hl on hl.id = r.heat_lane_id
+     where hl.heat_id = v_r6) = 6, null);
+
+  -- 7. Lane guards.
+  begin
+    perform public.materialise_skins_heat(v_event,'U17','male',
+      array[v_u17[1], v_u17[2]], array[3,3], 2, false);
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform ssc_test.check('DB-23','two Skins swimmers cannot share a lane',
+    v_err like '%same lane%', v_err);
+
+  delete from public.heats where event_id = v_event;
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-23','Skins rounds', false, sqlerrm);
+end $$;
+
 -- =============================================================================
 -- Report
 -- =============================================================================
