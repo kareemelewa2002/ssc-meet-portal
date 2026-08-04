@@ -116,7 +116,11 @@ export function SkinsApprovals({ eventId, eventName }: { eventId: string; eventN
             </CardHeader>
             <CardContent className="space-y-3">
               {boardRounds.map((round) => (
-                <div key={round.heatId} className="space-y-2 rounded-xl border-2 border-black p-3">
+                <div
+                  key={round.heatId}
+                  data-testid="skins-approval-round"
+                  className="space-y-2 rounded-xl border-2 border-black p-3"
+                >
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-bold">{skinsRoundTitle(round)}</p>
                     <RoundStateBadge state={round.publishState} />

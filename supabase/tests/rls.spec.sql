@@ -1223,6 +1223,201 @@ exception when others then
   perform ssc_test.check('DB-23','Skins rounds', false, sqlerrm);
 end $$;
 
+
+-- DB-24 — a REFEREE can open a Skins board.
+--
+-- The bracket moved from the Admin dashboard to the Referee deck, which
+-- exposed two guards that had only ever been exercised by admins:
+-- enforce_no_direct_skins_entry required is_admin(), and
+-- enforce_entry_status_change refused the 'confirmed' status that a Skins
+-- entry needs. SECURITY DEFINER does not change auth.uid(), so a referee
+-- opening a board hit both as themselves and the board never appeared.
+do $$
+declare
+  v_event uuid; v_referee uuid; v_athlete uuid; v_ids uuid[];
+  v_plain_event uuid; v_err text; v_lanes int;
+begin
+  perform set_config('role','postgres',true);
+
+  select id into v_event from public.events where is_skins order by id limit 1;
+  select id into v_referee from public.users where role = 'referee' order by id limit 1;
+  select id into v_athlete from public.users where role = 'athlete' order by id limit 1;
+  select id into v_plain_event from public.events
+  where is_skins = false and is_relay = false order by id limit 1;
+
+  perform ssc_test.check('DB-24','precondition: a Skins event, a referee and an athlete',
+    v_event is not null and v_referee is not null and v_athlete is not null, null);
+  if v_event is null or v_referee is null or v_athlete is null then return; end if;
+
+  delete from public.heats where event_id = v_event;
+  select array_agg(id) into v_ids from
+    (select id from public.athletes where gender='male' order by id limit 4) x;
+
+  -- 1. The failure this fixes: a referee opens a board on the deck.
+  perform ssc_test.act_as(v_referee);
+  begin
+    perform public.materialise_skins_heat(v_event,'Open','male',v_ids,array[4,3,5,2],6,false);
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-24','a referee can open a Skins board', v_err is null,
+    coalesce(v_err,'ok'));
+
+  select count(*) into v_lanes from public.heat_lanes hl
+  join public.heats h on h.id = hl.heat_id
+  where h.event_id = v_event and h.skins_round = 6;
+  perform ssc_test.check('DB-24','the referee''s board really has lanes', v_lanes = 4,
+    format('%s lanes', v_lanes));
+
+  -- 2. The guard still does its job: an athlete cannot self-enter Skins.
+  perform ssc_test.act_as(v_athlete);
+  begin
+    insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
+    values (v_event, (select id from public.athletes where user_id = v_athlete), null, true, 'pending_payment');
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-24','an athlete still cannot self-enter Skins',
+    v_err <> 'no error raised', v_err);
+
+  -- 3. And the payment guard still holds everywhere it should: the Skins
+  --    exemption must not let a referee confirm an ordinary paid entry.
+  if v_plain_event is not null then
+    perform ssc_test.act_as(v_referee);
+    begin
+      insert into public.entries (event_id, athlete_id, seed_time_ms, is_nt, status)
+      values (v_plain_event, (select id from public.athletes order by id desc limit 1),
+              30000, false, 'confirmed');
+      v_err := 'no error raised';
+    exception when others then v_err := sqlerrm;
+    end;
+    perform set_config('role','postgres',true);
+    perform ssc_test.check('DB-24','a referee still cannot confirm payment on a normal entry',
+      v_err like '%Only an admin may confirm entry payment%', v_err);
+  end if;
+
+  delete from public.heats where event_id = v_event;
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-24','referee Skins access', false, sqlerrm);
+end $$;
+
+
+-- DB-25 — the full Skins round trip under RLS: referee scores, admin approves.
+--
+-- DB-23 proves the data rules but runs as postgres. This walks the actual
+-- path the two dashboards take, as the two real roles, so an RLS policy that
+-- blocks the referee from writing a draft result — or lets them publish it —
+-- fails here rather than on the deck.
+do $$
+declare
+  v_event uuid; v_referee uuid; v_admin uuid; v_ids uuid[];
+  v_r6 uuid; v_r4 uuid; v_err text; v_drafts int; v_published int;
+begin
+  perform set_config('role','postgres',true);
+
+  select id into v_event from public.events where is_skins order by id limit 1;
+  select id into v_referee from public.users where role='referee' order by id limit 1;
+  select id into v_admin   from public.users where role='admin'   order by id limit 1;
+  perform ssc_test.check('DB-25','precondition: Skins event, referee and admin',
+    v_event is not null and v_referee is not null and v_admin is not null, null);
+  if v_event is null or v_referee is null or v_admin is null then return; end if;
+
+  delete from public.heats where event_id = v_event;
+  select array_agg(id) into v_ids from
+    (select id from public.athletes where gender='female' order by id limit 4) x;
+
+  -- Referee opens the board and scores it.
+  perform ssc_test.act_as(v_referee);
+  begin
+    perform public.materialise_skins_heat(v_event,'Open','female',v_ids,array[4,3,5,2],6,false);
+    perform set_config('role','postgres',true);
+    select id into v_r6 from public.heats
+    where event_id=v_event and skins_round=6 and skins_category='Open' and gender='female';
+    perform ssc_test.act_as(v_referee);
+    insert into public.results (heat_lane_id, result_outcome, finish_place, placement_points, status)
+    select hl.id,'valid',hl.lane_number,0,'draft' from public.heat_lanes hl where hl.heat_id = v_r6;
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-25','a referee can score a Skins round as draft', v_err is null,
+    coalesce(v_err,'ok'));
+
+  select count(*) into v_drafts from public.results r
+  join public.heat_lanes hl on hl.id=r.heat_lane_id where hl.heat_id=v_r6 and r.status='draft';
+  perform ssc_test.check('DB-25','the round is sitting in draft awaiting approval', v_drafts = 4,
+    format('%s draft lanes', v_drafts));
+
+  -- A referee must NOT be able to publish their own round.
+  perform ssc_test.act_as(v_referee);
+  begin
+    update public.results set status='published'
+    where heat_lane_id in (select id from public.heat_lanes where heat_id=v_r6);
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-25','a referee cannot publish their own Skins round',
+    v_err like '%Only an admin may publish results%', v_err);
+
+  -- The admin approves it.
+  perform ssc_test.act_as(v_admin);
+  begin
+    update public.results set status='published'
+    where heat_lane_id in (select id from public.heat_lanes where heat_id=v_r6)
+      and result_outcome is not null;
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-25','an admin can publish the Skins round', v_err is null,
+    coalesce(v_err,'ok'));
+
+  select count(*) into v_published from public.results r
+  join public.heat_lanes hl on hl.id=r.heat_lane_id where hl.heat_id=v_r6 and r.status='published';
+  perform ssc_test.check('DB-25','every lane of the approved round is published', v_published = 4,
+    format('%s published lanes', v_published));
+
+  -- Referee advances to the next round while the first stays published.
+  perform ssc_test.act_as(v_referee);
+  begin
+    perform public.materialise_skins_heat(v_event,'Open','female',
+      array[v_ids[1],v_ids[2]], array[3,4], 4, false);
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-25','a referee can advance the board without waiting for approval',
+    v_err is null, coalesce(v_err,'ok'));
+
+  select id into v_r4 from public.heats
+  where event_id=v_event and skins_round=4 and skins_category='Open' and gender='female';
+  perform ssc_test.check('DB-25','the earlier round survives the advance',
+    v_r4 is not null and v_r4 <> v_r6
+    and (select count(*) from public.results r join public.heat_lanes hl on hl.id=r.heat_lane_id
+         where hl.heat_id=v_r6 and r.status='published') = 4, null);
+
+  -- Admin reopens the published round to correct it.
+  perform ssc_test.act_as(v_admin);
+  begin
+    update public.results set status='draft'
+    where heat_lane_id in (select id from public.heat_lanes where heat_id=v_r6);
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-25','an admin can reopen a published round', v_err is null,
+    coalesce(v_err,'ok'));
+
+  delete from public.heats where event_id = v_event;
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-25','Skins round trip', false, sqlerrm);
+end $$;
+
 -- =============================================================================
 -- Report
 -- =============================================================================

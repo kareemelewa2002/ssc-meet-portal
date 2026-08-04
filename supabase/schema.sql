@@ -1640,10 +1640,16 @@ security definer
 set search_path = public
 as $$
 begin
+  -- admin_or_referee, not admin: the point of this guard is that an ATHLETE
+  -- cannot self-register for Skins, and the referee running the bracket on
+  -- the deck is not self-registration. materialise_skins_heat is the only
+  -- route in, and it applies the same admin-or-referee check itself.
+  -- SECURITY DEFINER does not change auth.uid(), so a referee opening a
+  -- board hits this trigger as themselves.
   if exists (
     select 1 from public.events e
     where e.id = new.event_id and e.is_skins = true
-  ) and not public.is_admin() then
+  ) and not public.is_admin_or_referee() then
     raise exception
       'Skins entries cannot be submitted during registration. '
       'Qualification is assigned automatically from official meet results.';
@@ -1725,6 +1731,18 @@ security definer
 set search_path = public
 as $$
 begin
+  -- A Skins entry is not a paid registration. Qualification is assigned from
+  -- published results, there is no fee, and there is therefore no payment for
+  -- an admin to confirm — the entry row exists only because results hang off
+  -- heat_lanes -> entries. Referees run the bracket on the deck, and
+  -- SECURITY DEFINER does not change auth.uid(), so without this exemption
+  -- materialise_skins_heat fails for exactly the people meant to use it.
+  -- This opens nothing: enforce_no_direct_skins_entry still restricts who may
+  -- create a Skins entry at all, and the exemption is scoped to Skins events.
+  if exists (select 1 from public.events e where e.id = new.event_id and e.is_skins) then
+    return new;
+  end if;
+
   if new.status = 'confirmed' and not public.is_admin() then
     raise exception 'Only an admin may confirm entry payment.';
   end if;

@@ -144,7 +144,10 @@ export function SkinsRoundCard({
   };
 
   return (
-    <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
+    <Card
+      data-testid="skins-round-card"
+      className={cn(outdoorMode && "border-yellow-300/40 bg-black")}
+    >
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>{title}</CardTitle>
@@ -220,12 +223,16 @@ function LaneRow({
   const eliminated = isEliminated(lane);
   return (
     <div
+      data-testid="skins-lane-row"
       className={cn(
         "flex flex-wrap items-center gap-3 rounded-lg border p-3",
         outdoorMode ? "border-yellow-300/30" : "border-border",
       )}
     >
-      <div className="flex min-w-[48px] items-center justify-center rounded-md bg-muted px-2 py-1 text-sm font-bold">
+      <div
+        data-testid="skins-lane-number"
+        className="flex min-w-[48px] items-center justify-center rounded-md bg-muted px-2 py-1 text-sm font-bold"
+      >
         L{lane.laneNumber}
       </div>
       <div className="min-w-0 flex-1">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Loader2, Pause, Play, RotateCcw, Sun, Trophy } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -114,11 +114,25 @@ export function SkinsBoardRunner({ eventId, eventName }: { eventId: string; even
 
   const hasOpeningRound = boardRounds.some((r) => r.round === 6 && !r.swimOff);
 
+  // One attempt per board. Guarding on `busy`/`loading` instead looked
+  // equivalent but deadlocked: neither was a dependency, so the effect ran
+  // once while qualifiers were still loading, bailed, and never re-ran — the
+  // board picker rendered and no lanes ever appeared.
+  const openAttempted = useRef<string | null>(null);
+
   useEffect(() => {
-    if (activeBoard && !hasOpeningRound && !busy && !loading) void openBoard();
-    // Only when the board changes or its opening round is missing.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeBoard?.category, activeBoard?.gender, hasOpeningRound]);
+    if (!activeBoard || hasOpeningRound) return;
+    const key = `${activeBoard.category}-${activeBoard.gender}`;
+    if (openAttempted.current === key) return;
+    openAttempted.current = key;
+    void openBoard();
+  }, [activeBoard, hasOpeningRound, openBoard]);
+
+  /** Retry after a failure — the ref above otherwise allows only one attempt. */
+  const retryOpen = useCallback(() => {
+    openAttempted.current = null;
+    void reloadRounds();
+  }, [reloadRounds]);
 
   const advance = useCallback(async () => {
     if (!activeBoard) return;
@@ -194,7 +208,7 @@ export function SkinsBoardRunner({ eventId, eventName }: { eventId: string; even
       )}
     >
       <DataErrorBanner error={error} subject="Skins qualifiers" onRetry={() => void refresh()} />
-      <DataErrorBanner error={roundsError} subject="the Skins rounds" onRetry={() => void reloadRounds()} />
+      <DataErrorBanner error={roundsError} subject="the Skins rounds" onRetry={retryOpen} />
 
       <div className="flex items-center justify-between gap-2">
         <h2 className={cn("text-lg font-bold sm:text-xl", outdoorMode && "text-yellow-300")}>
