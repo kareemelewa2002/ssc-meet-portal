@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Loader2, Send } from "lucide-react";
+import { Loader2, Lock, Pencil, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import { CLOCK_TIME_ERROR, formatTimeMs, timeDropSeconds } from "@/lib/format";
 import { useToast } from "@/hooks/use-toast";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import type { DqReason, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 
@@ -82,6 +83,7 @@ export function HeatResultEntry({
   className,
 }: HeatResultEntryProps) {
   const toast = useToast();
+  const { user } = useCurrentUser();
   const [drafts, setDrafts] = useState<Record<string, LaneDraft>>(() =>
     Object.fromEntries(lanes.map((l) => [l.heatLaneId, emptyDraft()])),
   );
@@ -91,6 +93,10 @@ export function HeatResultEntry({
   const [saved, setSaved] = useState(false);
   const [alreadySubmitted, setAlreadySubmitted] = useState(false);
   const [alreadyPublished, setAlreadyPublished] = useState(false);
+  // A submitted card presents as submitted until the user explicitly chooses
+  // to edit it, so re-submitting is always a decision rather than a side
+  // effect of tapping a lane.
+  const [editing, setEditing] = useState(false);
   type ResultRow = {
     heat_lane_id: string;
     result_outcome: ResultOutcome | null;
@@ -99,6 +105,19 @@ export function HeatResultEntry({
     dq_code: DqReason | null;
     status?: PublishStatus;
   };
+
+  // WHO MAY EDIT WHAT
+  // ------------------
+  // A published result is locked to admins, and that is enforced by
+  // enforce_result_publish in supabase/schema.sql — not merely by hiding this
+  // button. A referee who gets past the UI is refused by the database.
+  //
+  // Before publication both the referee and an admin may correct the card:
+  // the referee who took the times is usually the one who spots the error,
+  // and nothing is public yet.
+  const isAdmin = user?.role === "admin";
+  const canEditPublished = isAdmin;
+  const readOnly = (alreadyPublished && !canEditPublished) || (alreadySubmitted && !editing);
 
   const applyResultRow = useCallback((row: ResultRow) => {
     if (!row.result_outcome) return;
@@ -116,10 +135,17 @@ export function HeatResultEntry({
     }
   }, []);
 
+  // Keyed on the lane IDS, not the `lanes` array. The array is a fresh
+  // identity on every render of the deck, so depending on it tore the
+  // realtime channel down and resubscribed constantly — and an event landing
+  // in that gap was simply lost, which is how a second device could miss a
+  // colleague's saved time entirely.
+  const laneKey = lanes.map((l) => l.heatLaneId).join(",");
+
   // Hydrate any results already saved (e.g. on page reload or by another
   // referee looking at the same heat), then keep receiving live updates.
   useEffect(() => {
-    const laneIds = lanes.map((l) => l.heatLaneId);
+    const laneIds = laneKey ? laneKey.split(",") : [];
     // Demo/placeholder lane ids (e.g. "hl-1") are never real database keys —
     // querying with one always 400s ("invalid input syntax for type uuid").
     // This fires on first mount, before a real heat's lanes replace the
@@ -173,7 +199,7 @@ export function HeatResultEntry({
       cancelled = true;
       void supabase.removeChannel(channel);
     };
-  }, [heatId, lanes, applyResultRow]);
+  }, [heatId, laneKey, applyResultRow]);
 
   const readyLanes = useMemo(
     () =>
@@ -257,6 +283,13 @@ export function HeatResultEntry({
       }
 
       setSaved(true);
+      if (allReady) {
+        // A complete card is now with Admin, so it collapses back to the
+        // submitted state. Editing it again has to be chosen again — a card
+        // left silently open is how the same heat gets re-sent by accident.
+        setAlreadySubmitted(true);
+        setEditing(false);
+      }
       toast.success(
         allReady ? "Heat card submitted" : "Progress saved",
         allReady ? `${lanes.length} lanes sent to the Admin review queue.` : undefined,
@@ -273,6 +306,7 @@ export function HeatResultEntry({
 
   return (
     <Card
+      data-testid={`heat-card-${heatId}`}
       className={cn(
         outdoorMode && "border-yellow-300/40 bg-black text-yellow-300",
         className,
@@ -343,6 +377,7 @@ export function HeatResultEntry({
                         draft.outcome === "no_show" &&
                         "bg-amber-600 text-white hover:bg-amber-600",
                     )}
+                    disabled={readOnly}
                     onClick={() => setOutcome(lane.heatLaneId, outcome)}
                   >
                     {RESULT_OUTCOME_LABELS[outcome]}
@@ -357,6 +392,7 @@ export function HeatResultEntry({
                     label="Official time"
                     value={timeInputs[lane.heatLaneId] ?? ""}
                     outdoorMode={outdoorMode}
+                    disabled={readOnly}
                     onChange={(raw, ms) => {
                       setTimeInputs((prev) => ({ ...prev, [lane.heatLaneId]: raw }));
                       setDrafts((prev) => ({
@@ -466,42 +502,77 @@ export function HeatResultEntry({
           </p>
         )}
 
-        {alreadyPublished ? (
-          <p className="rounded-md border-2 border-black bg-neon-lime/15 p-3 text-sm">
-            <span className="font-bold">Already published by Admin.</span> These times are live on
-            the results page and leaderboards. Ask an Admin to correct a time from the review
-            queue — re-submitting here would overwrite a published result.
-          </p>
-        ) : (
-          <>
-            {alreadySubmitted && !saved && (
-              // Sent before. Re-submitting is still allowed (a referee may be
-              // correcting a lane), but it must be a decision, not an accident.
-              <p className="rounded-md border-2 border-black bg-neon-orange/15 p-3 text-sm">
-                <span className="font-bold">This card was already sent to Admin.</span> Submitting
-                again replaces what they are reviewing — only do that if you are correcting a lane.
-              </p>
-            )}
+        {alreadyPublished && !canEditPublished ? (
+          // Published, and this user may not change it. The control is present
+          // but disabled rather than absent: a missing button reads as "not
+          // loaded yet", whereas a greyed one with a reason reads as a rule.
+          <div className="space-y-2">
+            <p className="rounded-md border-2 border-black bg-neon-lime/15 p-3 text-sm">
+              <span className="font-bold">Already published by Admin.</span> These times are live on
+              the results page and leaderboards. Ask an Admin to correct a time from the review
+              queue.
+            </p>
             <Button
               type="button"
-              className="min-h-[54px] w-full text-base font-bold sm:w-auto"
-              disabled={saving || readyLanes.length === 0}
-              onClick={() => void handleSave()}
+              disabled
+              aria-disabled="true"
+              title="Published results can only be changed by an admin."
+              className="min-h-[54px] w-full cursor-not-allowed text-base font-bold opacity-50 sm:w-auto"
             >
-              {saving ? (
-                <Loader2 className="mr-2 size-4 animate-spin" />
-              ) : (
-                <Send className="mr-2 size-4" />
-              )}
-              {saved && allReady
-                ? "Heat card submitted to Admin"
-                : alreadySubmitted && allReady
-                  ? "Re-submit Heat Card to Admin"
-                  : allReady
-                    ? "Submit Heat Card to Admin"
-                    : `Save Progress (${readyLanes.length}/${lanes.length} lanes)`}
+              <Lock className="mr-2 size-4" />
+              Submitted — Contact Admin to Edit
             </Button>
-          </>
+          </div>
+        ) : alreadySubmitted && !editing ? (
+          // Sent, not yet published. Editing is allowed but deliberate: the
+          // card reads as submitted until the user chooses to reopen it.
+          <div className="space-y-2">
+            <p className="rounded-md border-2 border-black bg-neon-orange/15 p-3 text-sm">
+              <span className="font-bold">
+                {alreadyPublished
+                  ? "Published, and live on the results page."
+                  : "This card is with Admin for review."}
+              </span>{" "}
+              {alreadyPublished
+                ? "Editing it changes a result the public can already see."
+                : "Editing it replaces what they are reviewing — only do that to correct a lane."}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-[54px] w-full text-base font-bold sm:w-auto"
+              onClick={() => {
+                setEditing(true);
+                // Reopening means this is no longer "just submitted": the
+                // action below must invite a re-submit, not keep claiming the
+                // card has already been sent.
+                setSaved(false);
+              }}
+            >
+              <Pencil className="mr-2 size-4" />
+              Edit Heat Card
+            </Button>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            className="min-h-[54px] w-full text-base font-bold sm:w-auto"
+            disabled={saving || readyLanes.length === 0}
+            onClick={() => void handleSave()}
+          >
+            {saving ? (
+              <Loader2 className="mr-2 size-4 animate-spin" />
+            ) : (
+              <Send className="mr-2 size-4" />
+            )}
+            {saved && allReady
+              ? "Heat card submitted to Admin"
+              : alreadySubmitted && allReady
+                ? "Re-submit Heat Card to Admin"
+                : allReady
+                  ? "Submit Heat Card to Admin"
+                  : `Save Progress (${readyLanes.length}/${lanes.length} lanes)`}
+          </Button>
         )}
       </CardContent>
     </Card>

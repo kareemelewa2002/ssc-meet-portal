@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { CREDENTIALS, login, requireFixture } from "./helpers";
+import { createRefereeHeatFixture } from "./fixtures/heat-fixture";
 
 /**
  * Part 5's explicit six-flow checklist, verified end to end against the
@@ -108,29 +109,34 @@ test.describe("Part 5 checklist — Coach Flow", () => {
 
 test.describe("Part 5 checklist — Referee Flow", () => {
   test("referee1 marks presence, enters lane time 28.50, submits heat card to Admin", async ({ page }) => {
-    await login(page, CREDENTIALS.referee1);
-    await page.goto("/referee");
-    await page.waitForTimeout(1500);
+    // Builds its own heat: reaching for the first card in the deck asserted on
+    // whatever the previous run left behind, and a card that is already
+    // submitted renders locked controls rather than an empty time box.
+    const fixture = await createRefereeHeatFixture();
+    requireFixture(fixture !== null, "an event with entries to build a scratch heat from");
+    if (!fixture) return;
 
-    const presentButtons = page.getByRole("button", { name: "Present" });
-    if (await presentButtons.count()) {
-      await presentButtons.first().click();
-      await page.waitForTimeout(800);
+    try {
+      await login(page, CREDENTIALS.referee1);
+      await page.goto("/referee");
+      const card = page.getByTestId(`heat-card-${fixture.heatId}`);
+      await expect(card).toBeVisible({ timeout: 20_000 });
+      await card.scrollIntoViewIfNeeded();
+
+      await card.getByRole("button", { name: "Valid Time" }).first().click();
+      await card.locator('input[id^="time-"]').first().fill("28.50");
+
+      await card.getByRole("button", { name: /Save Progress|Submit Heat Card to Admin/ }).click();
+      // The save toast's heading is the unambiguous confirmation signal — the
+      // button's own label also matches this text once saved.
+      await expect(
+        page.getByRole("heading", { name: /Heat card submitted|Progress saved/ }),
+      ).toBeVisible({
+        timeout: 8_000,
+      });
+    } finally {
+      await fixture.cleanup();
     }
-
-    const validButtons = page.getByRole("button", { name: "Valid Time" });
-    requireFixture((await validButtons.count()) > 0, "a seeded heat with lanes to score");
-    await expect(validButtons.first()).toBeVisible();
-    await validButtons.first().click();
-    await page.locator('input[id^="time-"]').first().fill("28.50");
-
-    const saveButton = page.getByRole("button", { name: /Save Progress|Submit Heat Card to Admin|Heat card submitted/ });
-    await saveButton.click();
-    // The save toast's heading is the unambiguous confirmation signal — the
-    // button's own label also matches this text once saved.
-    await expect(page.getByRole("heading", { name: /Heat card submitted|Progress saved/ })).toBeVisible({
-      timeout: 8_000,
-    });
   });
 });
 

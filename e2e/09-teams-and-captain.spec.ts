@@ -33,11 +33,12 @@ test.describe("/captain route", () => {
     await page.goto("/captain");
     await page.waitForTimeout(1500);
 
-    requireFixture(
-      (await page.getByText("Relay squads").count()) > 0,
-      "a team captained by this account",
-    );
-    await expect(page.getByText("Relay squads")).toBeVisible();
+    // Scoped to the heading: "Relay squads" also appears in the card's
+    // description, and two matches is a strict-mode violation rather than a
+    // pass.
+    const heading = page.getByRole("heading", { name: "Relay squads" });
+    requireFixture((await heading.count()) > 0, "a team captained by this account");
+    await expect(heading).toBeVisible();
     // The composition rule is stated up front rather than only on submit.
     await expect(page.getByLabel("Relay")).toBeVisible();
     await expect(page.getByLabel("Age group")).toBeVisible();
@@ -67,11 +68,16 @@ test.describe("Team creation restriction (Open 18+ / Admin only)", () => {
     await expect(page.getByRole("button", { name: "Create Team", exact: true })).toBeVisible();
   });
 
-  test("a coach sees the Create Team button", async ({ page }) => {
+  test("an account with no swimmer profile never sees the Create Team button", async ({ page }) => {
+    // This asserted that "a coach sees the Create Team button". The coach role
+    // is retired: that account is now an athlete-role user with NO athletes
+    // row at all, so can_captain_team() is false and the button is correctly
+    // absent. Founding a team requires being an Open (18+) swimmer or an
+    // admin — having once been a coach is not a qualification.
     await login(page, CREDENTIALS.captainRiptide);
     await page.goto("/teams");
     await page.waitForTimeout(1500);
-    await expect(page.getByRole("button", { name: "Create Team", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create Team", exact: true })).toHaveCount(0);
   });
 });
 

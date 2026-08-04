@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
-import type { DqReason, Gender, HeatGroup, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
+import type { AgeGroup, DqReason, Gender, HeatGroup, PublishStatus, ResultOutcome } from "@/lib/supabase/types";
 
 export interface PendingReviewLane {
   heatLaneId: string;
@@ -27,6 +27,7 @@ export interface PendingReviewHeat {
    * than timed, so they have no time to correct. */
   skinsRound: number | null;
   skinsSwimOff: boolean;
+  skinsCategory: AgeGroup | null;
   /** Publish state of the heat as a whole. 'partial' means some lanes are
    * published and some are not, which should never happen but is worth
    * surfacing rather than rounding to one or the other. */
@@ -42,8 +43,8 @@ interface RawHeatLane {
   id: string;
   lane_number: number;
   heats:
-    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; skins_swim_off: boolean; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }
-    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; skins_swim_off: boolean; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }[]
+    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; skins_swim_off: boolean; skins_category: AgeGroup | null; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }
+    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; skins_swim_off: boolean; skins_category: AgeGroup | null; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }[]
     | null;
   entries:
     | {
@@ -77,7 +78,7 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
       .select(
         // Qualify the FK — athletes has two (user_id and parent_id), so a
         // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-        "id, lane_number, heats ( id, heat_number, heat_group, gender, event_id, skins_round, skins_swim_off, events ( name, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
+        "id, lane_number, heats ( id, heat_number, heat_group, gender, event_id, skins_round, skins_swim_off, skins_category, events ( name, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
       )
       .order("lane_number", { ascending: true });
     if (error || !data) return [];
@@ -108,6 +109,7 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
         gender: heat.gender ?? null,
         skinsRound: heat.skins_round ?? null,
         skinsSwimOff: heat.skins_swim_off ?? false,
+        skinsCategory: heat.skins_category ?? null,
         publishState: "published",
         lanes: [],
         complete: true,

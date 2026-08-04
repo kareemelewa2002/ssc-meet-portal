@@ -2290,6 +2290,40 @@ begin
   if new.status = 'published' and old.status is distinct from 'published' and not public.is_admin() then
     raise exception 'Only an admin may publish results.';
   end if;
+
+  -- A PUBLISHED result is locked to admins. Guarding only the transition into
+  -- 'published' left the far bigger hole wide open: referees hold
+  -- `for all using (is_referee())` on results, so once a row was published a
+  -- referee could still rewrite its time, or set status back to 'draft' and
+  -- quietly unpublish it. The UI hid the button; nothing enforced it.
+  --
+  -- Derived columns are deliberately excluded. recompute_heat_finish_places
+  -- re-ranks every valid lane of a heat whenever any lane changes — including
+  -- lanes that are already published — so blocking finish_place/
+  -- placement_points here would stop a referee drafting a new lane in a heat
+  -- that has any published result at all. Those columns are computed by the
+  -- system from official_time_ms, which is itself locked below, so they are
+  -- not a route to changing a published result.
+  if tg_op = 'UPDATE' and old.status = 'published' and not public.is_admin() then
+    if new.official_time_ms is distinct from old.official_time_ms
+       or new.result_outcome is distinct from old.result_outcome
+       or new.dq_code is distinct from old.dq_code
+       or new.status is distinct from old.status
+       -- Skins is placed by eye: finish_place IS the result there, and
+       -- recompute_heat_finish_places skips Skins heats, so no cascade can
+       -- legitimately touch it.
+       or (new.finish_place is distinct from old.finish_place
+           and exists (
+             select 1
+             from public.heat_lanes hl
+             join public.heats h on h.id = hl.heat_id
+             where hl.id = new.heat_lane_id and h.skins_round is not null
+           ))
+    then
+      raise exception 'Only an admin may change a published result.';
+    end if;
+  end if;
+
   return new;
 end;
 $$;

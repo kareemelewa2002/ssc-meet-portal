@@ -112,6 +112,10 @@ export function heatTitle(heat: {
   /** Skins only: 6, 4 or 2. Set means this heat is one round of a bracket. */
   skinsRound?: number | null;
   skinsSwimOff?: boolean | null;
+  /** Skins only. heat_group cannot tell 17 & Under from Open — it folds them
+   * together — so without this the two boards of a gender render the SAME
+   * title and are indistinguishable in a list. */
+  skinsCategory?: "U14" | "U17" | "Open" | null;
 }): string {
   const board = heat.heatGroup === "U13_14" ? "14 & Under" : "17 & Under / Open";
   const gender = heatGenderLabel(heat.gender);
@@ -121,7 +125,12 @@ export function heatTitle(heat: {
   // number anybody should read — name the round instead.
   if (heat.skinsRound != null) {
     const round = heat.skinsRound === 2 ? "Final 2" : `Round of ${heat.skinsRound}`;
-    return [board, gender, heat.skinsSwimOff ? `${round} swim-off` : round].filter(Boolean).join(" ");
+    const skinsBoard = heat.skinsCategory
+      ? { U14: "14 & Under", U17: "17 & Under", Open: "Open" }[heat.skinsCategory]
+      : board;
+    return [skinsBoard, gender, heat.skinsSwimOff ? `${round} swim-off` : round]
+      .filter(Boolean)
+      .join(" ");
   }
 
   return [board, gender, `Heat ${heat.heatNumber}`].filter(Boolean).join(" ");

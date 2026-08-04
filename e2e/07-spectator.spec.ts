@@ -71,18 +71,37 @@ test.describe("Spectator, leaderboards & navigation", () => {
   });
 
   test.describe("AppHeader dropdown works correctly across roles", () => {
-    const roleChecks: { credEmail: string; roleLabel: string; dashboardHref: string | null }[] = [
-      { credEmail: CREDENTIALS.admin, roleLabel: "Admin", dashboardHref: "/admin" },
+    // `who` exists to keep the generated test titles unique. Retiring the
+    // 'coach' role left two accounts carrying the Athlete badge, and two
+    // tests with identical titles is a hard collection error in Playwright —
+    // it aborted the entire run, not just this file.
+    const roleChecks: {
+      credEmail: string;
+      who: string;
+      roleLabel: string;
+      dashboardHref: string | null;
+    }[] = [
+      { credEmail: CREDENTIALS.admin, who: "Admin", roleLabel: "Admin", dashboardHref: "/admin" },
       // The 'coach' role is retired. A captain is an ATHLETE whose team
       // points at them, so they carry the Athlete badge and no role
       // dashboard — /captain is gated on teams.captain_id, not on a role.
-      { credEmail: CREDENTIALS.captainRiptide, roleLabel: "Athlete", dashboardHref: null },
-      { credEmail: CREDENTIALS.parent1, roleLabel: "Parent", dashboardHref: null },
-      { credEmail: CREDENTIALS.approvedOpen, roleLabel: "Athlete", dashboardHref: null },
+      {
+        credEmail: CREDENTIALS.captainRiptide,
+        who: "Team captain",
+        roleLabel: "Athlete",
+        dashboardHref: null,
+      },
+      { credEmail: CREDENTIALS.parent1, who: "Parent", roleLabel: "Parent", dashboardHref: null },
+      {
+        credEmail: CREDENTIALS.approvedOpen,
+        who: "Unattached athlete",
+        roleLabel: "Athlete",
+        dashboardHref: null,
+      },
     ];
 
-    for (const { credEmail, roleLabel, dashboardHref } of roleChecks) {
-      test(`${roleLabel} account: avatar opens the menu with name, role badge, Profile/Settings/Sign Out (+ Role Dashboard if applicable)`, async ({ page }) => {
+    for (const { credEmail, who, roleLabel, dashboardHref } of roleChecks) {
+      test(`${who} account: avatar opens the menu with name, ${roleLabel} badge, Profile/Settings/Sign Out (+ Role Dashboard if applicable)`, async ({ page }) => {
         const errors: string[] = [];
         page.on("pageerror", (e) => errors.push(e.message));
         page.on("console", (m) => {
@@ -163,7 +182,9 @@ test.describe("Leaderboards page carries every board", () => {
 
     // Meet standings plus the cross-volume boards, all on one screen.
     // The index offers both kinds of board rather than redirecting to one.
-    await expect(page.getByRole("heading", { name: "Leaderboards" })).toBeVisible();
+    // Scoped to main: the AppHeader carries the same title, and two matches
+    // is a strict-mode violation rather than a pass.
+    await expect(page.locator("main").getByRole("heading", { name: "Leaderboards" })).toBeVisible();
     await expect(page.getByText("All-Time Records")).toBeVisible();
 
     await page.getByText("All-Time Records").click();

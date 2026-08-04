@@ -1418,6 +1418,111 @@ exception when others then
   perform ssc_test.check('DB-25','Skins round trip', false, sqlerrm);
 end $$;
 
+
+-- DB-26 — a published result is locked to admins.
+--
+-- enforce_result_publish used to guard only the transition INTO 'published'.
+-- Referees hold `for all using (is_referee())` on results, so once a row was
+-- published a referee could still rewrite its time or set status back to
+-- 'draft'. The UI hid the button; nothing enforced it.
+--
+-- The cascade case is the reason this is not a blanket lock:
+-- recompute_heat_finish_places re-ranks EVERY valid lane of a heat whenever
+-- any lane changes, published ones included. Blocking derived columns here
+-- would stop a referee drafting a new lane in a heat that has any published
+-- result at all — assertion 3 is the regression guard for that.
+do $$
+declare
+  v_ref uuid; v_admin uuid; v_event uuid; v_heat uuid;
+  v_entry_a uuid; v_entry_b uuid; v_lane_a uuid; v_lane_b uuid;
+  v_err text; v_time int; v_status public.publish_status;
+begin
+  perform set_config('role','postgres',true);
+
+  select id into v_ref   from public.users where role='referee' order by id limit 1;
+  select id into v_admin from public.users where role='admin'   order by id limit 1;
+  select en.id, en.event_id into v_entry_a, v_event
+  from public.entries en join public.events e on e.id = en.event_id
+  where e.is_skins = false and e.is_relay = false order by en.id limit 1;
+  select en.id into v_entry_b
+  from public.entries en
+  where en.event_id = v_event and en.id <> v_entry_a order by en.id limit 1;
+
+  perform ssc_test.check('DB-26','precondition: a referee, an admin and two entries in one event',
+    v_ref is not null and v_admin is not null and v_entry_a is not null and v_entry_b is not null, null);
+  if v_ref is null or v_admin is null or v_entry_a is null or v_entry_b is null then return; end if;
+
+  insert into public.heats (event_id, heat_group, gender, heat_number, heat_order, status)
+  values (v_event,'U17_OPEN','male',94,94,'published') returning id into v_heat;
+  insert into public.heat_lanes (heat_id, lane_number, entry_id)
+  values (v_heat,1,v_entry_a) returning id into v_lane_a;
+  insert into public.heat_lanes (heat_id, lane_number, entry_id)
+  values (v_heat,2,v_entry_b) returning id into v_lane_b;
+
+  -- Lane A is published by an admin.
+  perform ssc_test.act_as(v_admin);
+  insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+  values (v_lane_a,'valid',30000,'published');
+  perform set_config('role','postgres',true);
+
+  -- 1. A referee cannot rewrite a published time.
+  perform ssc_test.act_as(v_ref);
+  begin
+    update public.results set official_time_ms = 99999 where heat_lane_id = v_lane_a;
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  select official_time_ms into v_time from public.results where heat_lane_id = v_lane_a;
+  perform ssc_test.check('DB-26','a referee cannot rewrite a published time',
+    v_err like '%Only an admin may change a published result%' and v_time = 30000,
+    format('%s (stored %s)', v_err, v_time));
+
+  -- 2. A referee cannot quietly unpublish it either.
+  perform ssc_test.act_as(v_ref);
+  begin
+    update public.results set status = 'draft' where heat_lane_id = v_lane_a;
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  select status into v_status from public.results where heat_lane_id = v_lane_a;
+  perform ssc_test.check('DB-26','a referee cannot unpublish a result',
+    v_err like '%Only an admin may change a published result%' and v_status = 'published',
+    format('%s (status %s)', v_err, v_status));
+
+  -- 3. REGRESSION GUARD: the lock must not stop a referee drafting a NEW lane
+  --    in a heat that already has a published one. The finish-place recompute
+  --    cascades across every valid lane in the heat, published included.
+  perform ssc_test.act_as(v_ref);
+  begin
+    insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+    values (v_lane_b,'valid',31000,'draft');
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-26','a referee can still draft a lane in a heat with a published lane',
+    v_err is null, coalesce(v_err,'ok'));
+
+  -- 4. The admin route still works.
+  perform ssc_test.act_as(v_admin);
+  begin
+    update public.results set official_time_ms = 29500 where heat_lane_id = v_lane_a;
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  select official_time_ms into v_time from public.results where heat_lane_id = v_lane_a;
+  perform ssc_test.check('DB-26','an admin can still correct a published time',
+    v_err is null and v_time = 29500, format('%s (stored %s)', coalesce(v_err,'ok'), v_time));
+
+  delete from public.heats where id = v_heat;
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-26','published-result lock', false, sqlerrm);
+end $$;
+
 -- =============================================================================
 -- Report
 -- =============================================================================

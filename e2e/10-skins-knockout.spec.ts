@@ -91,18 +91,31 @@ test.describe("Skins knockout", () => {
     await page.getByRole("button", { name: /Referee Heat Cards/ }).click();
     await page.waitForTimeout(3000);
 
-    const queued = page
+    // Earlier runs leave published rounds in the queue, and a published card
+    // offers Reopen rather than Publish — so find one still awaiting review,
+    // then re-locate it by TITLE. A locator carrying `hasNotText: Published`
+    // stops matching the moment it is published, and would silently retarget
+    // a different card.
+    const awaiting = page
       .locator('[data-testid="review-heat-card"]')
       .filter({ hasText: "Round of 6" })
+      .filter({ hasNotText: "Published" })
       .first();
-    await expect(queued).toBeVisible({ timeout: 10_000 });
-    await queued.getByRole("button", { name: /Publish Heat Card/ }).click();
+    await expect(awaiting).toBeVisible({ timeout: 10_000 });
+    const title = (await awaiting.locator("p.font-semibold").first().innerText()).trim();
 
+    await awaiting.getByRole("button", { name: /Publish Heat Card/ }).click();
+    await page.waitForTimeout(2500);
+
+    const settled = page
+      .locator('[data-testid="review-heat-card"]')
+      .filter({ hasText: title })
+      .first();
     // Published once, and says so instead of offering a second publish.
-    await expect(queued.getByRole("button", { name: /Reopen to correct/ })).toBeVisible({
+    await expect(settled.getByRole("button", { name: /Reopen to correct/ })).toBeVisible({
       timeout: 10_000,
     });
-    await expect(queued.getByRole("button", { name: /Publish Heat Card/ })).toHaveCount(0);
+    await expect(settled.getByRole("button", { name: /Publish Heat Card/ })).toHaveCount(0);
   });
 
   test("advancing re-seeds the survivors into the centred lanes", async ({ page }) => {

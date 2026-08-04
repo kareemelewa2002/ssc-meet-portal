@@ -268,10 +268,32 @@ describe("heatTitle for Skins heats", () => {
     // 21 is skins_heat_number('U17', 6, false) — an internal key, not
     // something a spectator or referee should ever be shown.
     expect(
-      heatTitle({ heatGroup: "U17_OPEN", gender: "male", heatNumber: 21, skinsRound: 6 }),
-    ).toBe("17 & Under / Open Men Round of 6");
+      heatTitle({
+        heatGroup: "U17_OPEN",
+        gender: "male",
+        heatNumber: 21,
+        skinsRound: 6,
+        skinsCategory: "U17",
+      }),
+    ).toBe("17 & Under Men Round of 6");
+    // The pair that heat_group cannot separate must read differently.
     expect(
-      heatTitle({ heatGroup: "U13_14", gender: "female", heatNumber: 13, skinsRound: 2 }),
+      heatTitle({
+        heatGroup: "U17_OPEN",
+        gender: "male",
+        heatNumber: 31,
+        skinsRound: 6,
+        skinsCategory: "Open",
+      }),
+    ).toBe("Open Men Round of 6");
+    expect(
+      heatTitle({
+        heatGroup: "U13_14",
+        gender: "female",
+        heatNumber: 13,
+        skinsRound: 2,
+        skinsCategory: "U14",
+      }),
     ).toBe("14 & Under Women Final 2");
     expect(
       heatTitle({
@@ -280,8 +302,9 @@ describe("heatTitle for Skins heats", () => {
         heatNumber: 26,
         skinsRound: 6,
         skinsSwimOff: true,
+        skinsCategory: "Open",
       }),
-    ).toBe("17 & Under / Open Men Round of 6 swim-off");
+    ).toBe("Open Men Round of 6 swim-off");
   });
 
   it("leaves ordinary heats alone", () => {

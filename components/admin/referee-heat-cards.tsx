@@ -27,6 +27,8 @@ export function RefereeHeatCards({ className }: { className?: string }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyHeatId, setBusyHeatId] = useState<string | null>(null);
+  /** Card the admin has explicitly opened for editing. */
+  const [editingHeatId, setEditingHeatId] = useState<string | null>(null);
   const [editingLaneId, setEditingLaneId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [savingLane, setSavingLane] = useState(false);
@@ -239,15 +241,12 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                     )}
                   </Badge>
                 </div>
-                {heat.publishState === "published" ? (
-                  // Already published. The button is gone rather than disabled
-                  // with a tooltip, because a disabled Publish button next to a
-                  // published card is the exact ambiguity that led to the same
-                  // heat being published repeatedly.
-                  heat.skinsRound != null ? (
-                    // A Skins round has no times to edit, so correcting it
-                    // means sending it back to the referee deliberately —
-                    // never a silent second publish over live results.
+                <div className="flex flex-wrap items-center gap-2">
+                  {heat.publishState === "published" && heat.skinsRound != null ? (
+                    // A Skins round is placed by eye and has no time to
+                    // correct, so putting it right means sending it back to
+                    // the referee — never a silent second publish over a
+                    // result the public can already see.
                     <Button
                       type="button"
                       variant="outline"
@@ -263,26 +262,50 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                       Reopen to correct
                     </Button>
                   ) : (
-                  <p className="max-w-[16rem] text-xs text-muted-foreground">
-                    These results are live on the results page and leaderboards. Edit a time below
-                    to correct and re-publish.
-                  </p>
-                  )
-                ) : (
-                  <Button
-                    type="button"
-                    className="min-h-[48px] gap-2"
-                    disabled={!heat.complete || busyHeatId === heat.heatId}
-                    onClick={() => void publish(heat.heatId)}
-                  >
-                    {busyHeatId === heat.heatId ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <Send className="size-4" />
-                    )}
-                    {heat.publishState === "partial" ? "Publish remaining lanes" : "Publish Heat Card"}
-                  </Button>
-                )}
+                    <>
+                      {/* Editing is an explicit choice rather than a row of
+                          always-live pencils, so a stray tap on a card under
+                          review cannot change a time. */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-[48px] gap-2"
+                        onClick={() =>
+                          setEditingHeatId((prev) => (prev === heat.heatId ? null : heat.heatId))
+                        }
+                      >
+                        <Pencil className="size-4" />
+                        {editingHeatId === heat.heatId ? "Done editing" : "Edit Heat Card"}
+                      </Button>
+
+                      {heat.publishState === "published" ? (
+                        // Published. No second Publish button: offering one
+                        // next to a published card is the exact ambiguity that
+                        // led to the same heat being published repeatedly.
+                        <p className="max-w-[16rem] text-xs text-muted-foreground">
+                          Live on the results page and leaderboards. Correcting a time here
+                          re-publishes it.
+                        </p>
+                      ) : (
+                        <Button
+                          type="button"
+                          className="min-h-[48px] gap-2"
+                          disabled={!heat.complete || busyHeatId === heat.heatId}
+                          onClick={() => void publish(heat.heatId)}
+                        >
+                          {busyHeatId === heat.heatId ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Send className="size-4" />
+                          )}
+                          {heat.publishState === "partial"
+                            ? "Publish remaining lanes"
+                            : "Publish Heat Card"}
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -357,6 +380,7 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                       </Badge>
                     )}
                     {editingLaneId !== lane.heatLaneId &&
+                      editingHeatId === heat.heatId &&
                       lane.resultOutcome === "valid" &&
                       heat.skinsRound == null && (
                       // An admin reviewing a card is the person who spots a

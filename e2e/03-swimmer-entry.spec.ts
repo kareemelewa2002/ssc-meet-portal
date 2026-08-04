@@ -46,8 +46,28 @@ test.describe.serial("Swimmer & meet entry", () => {
       "a free event slot for athlete37 (they are at the 4-event cap for this meet)",
     );
 
-    await selectButtons.first().click();
+    // Not simply the first enabled Select: the 50m switch events and the
+    // 100 IM seed as NT, so selecting one renders no seed-time field at all
+    // and this test would time out on an input that is correctly absent.
+    // Walk the enabled buttons until one asks for a time.
     const timeInput = page.locator('input[placeholder="mm:ss.cc or ss.cc"]').first();
+    const total = await selectButtons.count();
+    let opened = false;
+    for (let i = 0; i < total; i += 1) {
+      const button = selectButtons.nth(i);
+      if (await button.isDisabled()) continue;
+      await button.click();
+      await page.waitForTimeout(500);
+      if ((await timeInput.count()) > 0) {
+        opened = true;
+        break;
+      }
+      // Not a timed event — deselect and try the next one.
+      await button.click();
+      await page.waitForTimeout(300);
+    }
+    requireFixture(opened, "a free slot in an event that asks for a seed time");
+
     await timeInput.fill("1:04.12");
     await expect(timeInput).toHaveValue("1:04.12");
 

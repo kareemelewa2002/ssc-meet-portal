@@ -66,6 +66,7 @@ export interface RawHeat {
   /** Skins only — null on every ordinary heat. */
   skins_round?: number | null;
   skins_swim_off?: boolean | null;
+  skins_category?: AgeGroup | null;
   heat_lanes: RawHeatLane[];
 }
 
@@ -122,6 +123,7 @@ export interface LiveHeatView {
   /** Skins only: which round of the bracket this heat is. */
   skinsRound: number | null;
   skinsSwimOff: boolean;
+  skinsCategory: AgeGroup | null;
   lanes: LiveLaneView[];
 }
 
@@ -158,6 +160,7 @@ export function transformLiveEvents(raw: RawEvent[]): LiveEventView[] {
         status: heat.status,
         skinsRound: heat.skins_round ?? null,
         skinsSwimOff: heat.skins_swim_off ?? false,
+        skinsCategory: heat.skins_category ?? null,
         lanes: [...heat.heat_lanes]
           .map((lane): LiveLaneView | null => {
             const entry = firstOf(lane.entries);
@@ -217,6 +220,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
         heatNumber: 1,
         skinsRound: null,
         skinsSwimOff: false,
+        skinsCategory: null,
         heatGroup: "U13_14",
         gender: "female",
         status: "published",
@@ -264,6 +268,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
         heatNumber: 2,
         skinsRound: null,
         skinsSwimOff: false,
+        skinsCategory: null,
         heatGroup: "U17_OPEN",
         gender: "male",
         status: "published",
@@ -322,6 +327,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
         heatNumber: 1,
         skinsRound: null,
         skinsSwimOff: false,
+        skinsCategory: null,
         heatGroup: "U17_OPEN",
         gender: "female",
         status: "published",
@@ -347,7 +353,7 @@ export const DEMO_LIVE_EVENTS: LiveEventView[] = [
 const LIVE_EVENT_SELECT = `
   id, name, stroke, distance_m, is_skins, session_id, event_order,
   heats (
-    id, heat_number, heat_group, gender, status, skins_round, skins_swim_off,
+    id, heat_number, heat_group, gender, status, skins_round, skins_swim_off, skins_category,
     heat_lanes (
       lane_number,
       entries (
