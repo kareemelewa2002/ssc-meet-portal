@@ -549,7 +549,14 @@ export function LiveEventsClient({
               <SkeletonLane key={i} />
             ))}
           </div>
-        ) : (isResults ? visibleEventResults.length === 0 : filteredEvents.length === 0) ? (
+        ) : (
+            isResults
+              ? visibleEventResults.length === 0 &&
+                // Skins results live outside the time-ranked standings, so a
+                // meet where only Skins has been published is not empty.
+                filteredEvents.filter((ev) => ev.isSkins).length === 0
+              : filteredEvents.length === 0
+          ) ? (
           <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
             <CardContent className="py-8 text-center">
               <Radio
@@ -664,7 +671,11 @@ export function LiveEventsClient({
               </section>
             )}
 
-            {!isResults && filteredEvents.map((ev) => (
+            {/* Skins is placed by eye and has no times, so it can never appear
+                in the time-ranked standings above — it would be missing from
+                the results page entirely. Its rounds are listed here instead,
+                in the same running order as every other race. */}
+            {(isResults ? filteredEvents.filter((ev) => ev.isSkins) : filteredEvents).map((ev) => (
               <div key={ev.eventId} className="space-y-2">
                 <h2
                   className={cn(

@@ -61,9 +61,13 @@ export function SkinsRoundCard({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Reset from the server whenever the round's stored state changes, so a
-  // reopened round comes back with what was actually recorded rather than
-  // whatever was last typed into this browser.
+  // Reset only when the STORED state actually changes — not on every refetch.
+  // Keying this on the `view` object meant any background reload handed us a
+  // new identity and blew away places the referee had just tapped in.
+  const storedSignature = view.lanes
+    .map((l) => `${l.heatLaneId}:${l.outcome ?? ""}:${l.finishPlace ?? ""}:${l.dqCode ?? ""}:${l.status ?? ""}`)
+    .join("|");
+
   useEffect(() => {
     setLanes(
       view.lanes.map((l) => ({
@@ -77,7 +81,8 @@ export function SkinsRoundCard({
         dqCode: l.dqCode ?? undefined,
       })),
     );
-  }, [view]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storedSignature]);
 
   const locked = view.publishState === "published";
 

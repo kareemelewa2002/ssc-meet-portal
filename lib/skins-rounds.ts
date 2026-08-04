@@ -34,6 +34,12 @@ export interface SkinsRoundLane {
 
 export interface SkinsRoundView {
   heatId: string;
+  /** Event/session context, so a round can be listed in running order
+   * alongside every other heat instead of in a tab of its own. */
+  eventId: string;
+  eventName: string;
+  eventOrder: number;
+  sessionNumber: number | null;
   category: AgeGroup;
   gender: Gender;
   round: SkinsRound;
@@ -56,6 +62,12 @@ export function skinsRoundTitle(view: {
     : `${who} — ${roundLabel(view.round)}`;
 }
 
+interface RawSkinsEvent {
+  name: string;
+  event_order: number;
+  sessions: { session_number: number } | { session_number: number }[] | null;
+}
+
 interface RawSkinsLane {
   id: string;
   lane_number: number;
@@ -66,6 +78,8 @@ interface RawSkinsLane {
         skins_round: number | null;
         skins_swim_off: boolean;
         gender: Gender | null;
+        event_id: string;
+        events: RawSkinsEvent | RawSkinsEvent[] | null;
       }
     | {
         id: string;
@@ -73,6 +87,8 @@ interface RawSkinsLane {
         skins_round: number | null;
         skins_swim_off: boolean;
         gender: Gender | null;
+        event_id: string;
+        events: RawSkinsEvent | RawSkinsEvent[] | null;
       }[]
     | null;
   entries:
@@ -114,7 +130,7 @@ export async function fetchSkinsRounds(eventId: string): Promise<FetchResult<Ski
         .from("heat_lanes")
         .select(
           // athletes has two FKs to users, so the embed must name the one it means.
-          "id, lane_number, heats!inner ( id, skins_category, skins_round, skins_swim_off, gender, event_id ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, finish_place, dq_code, status )",
+          "id, lane_number, heats!inner ( id, skins_category, skins_round, skins_swim_off, gender, event_id, events ( name, event_order, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, finish_place, dq_code, status )",
         )
         .eq("heats.event_id", eventId)
         .not("heats.skins_round", "is", null)
@@ -137,8 +153,13 @@ export async function fetchSkinsRounds(eventId: string): Promise<FetchResult<Ski
     if (!athlete || !user) continue;
     const result = firstOf(lane.results);
 
+    const event = firstOf(heat.events);
     const view = byHeat.get(heat.id) ?? {
       heatId: heat.id,
+      eventId: heat.event_id,
+      eventName: event?.name ?? "Skins",
+      eventOrder: event?.event_order ?? 0,
+      sessionNumber: firstOf(event?.sessions)?.session_number ?? null,
       category: heat.skins_category,
       gender: heat.gender,
       round: heat.skins_round as SkinsRound,

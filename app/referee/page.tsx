@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { HeatResultEntry } from "@/components/referee/heat-result-entry";
 import { FilterSelect } from "@/components/events/filter-select";
 import { AppHeader } from "@/components/layout/app-header";
-import { SkinsBoardRunner } from "@/components/referee/skins-board-runner";
+import { SkinsDeckSection } from "@/components/referee/skins-deck-section";
 import { resolveSkinsEventId } from "@/lib/skins-qualification";
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
@@ -88,11 +88,15 @@ interface RefereeLane {
  */
 export default function RefereePage() {
   const [outdoorMode, setOutdoorMode] = useState(false);
-  // Skins is scored on the deck like anything else, but it is a bracket
-  // rather than a heat sheet, so it gets its own view instead of being
-  // squeezed into the stacked deck.
-  const [view, setView] = useState<"deck" | "skins">("deck");
-  const [skinsEventId, setSkinsEventId] = useState<string | null>(null);
+  // Skins is a race in Session 3 like any other, so it is listed in the deck
+  // in running order rather than hidden behind a tab of its own. Its position
+  // comes from the event itself, so reordering the programme moves it too.
+  const [skins, setSkins] = useState<{
+    eventId: string;
+    eventName: string;
+    sessionNumber: number | null;
+    eventOrder: number;
+  } | null>(null);
   const [skinsError, setSkinsError] = useState<string | null>(null);
 
   const [deck, setDeck] = useState<RefereeDeckHeat[]>([]);
@@ -137,10 +141,10 @@ export default function RefereePage() {
       const { data: heatRows, error: heatError } = await supabase
         .from("heats")
         .select("id, heat_number, heat_group, gender, status, event_id, events ( name, event_order, session_id, stroke, distance_m, is_skins )")
-        // Skins rounds are heats, but they are placed by eye rather than
-        // timed and they belong to a bracket. Listing them here would offer
-        // a time entry box for a round that has no times, and duplicate the
-        // Skins view's job. They are scored under "Skins knockout".
+        // Skins rounds ARE listed on this deck, but they are rendered by
+        // SkinsDeckSection rather than as time-entry cards: they are placed by
+        // eye and have no times, so a time box would be meaningless. Excluded
+        // here so they are not drawn twice.
         .is("skins_round", null)
         .order("heat_number", { ascending: true });
 
@@ -258,16 +262,39 @@ export default function RefereePage() {
     })();
   }, [loadSchedule, loadDeck]);
 
-  // Resolved once, on demand: the bracket queries uuid columns and can only
-  // be mounted with a real event UUID.
+  // The bracket queries uuid columns and can only be mounted with a real
+  // event UUID; its session/order place it correctly in the running order.
   useEffect(() => {
-    if (view !== "skins" || skinsEventId) return;
     void (async () => {
       const result = await resolveSkinsEventId();
-      setSkinsEventId(result.data);
       setSkinsError(result.error);
+      if (!result.data) return;
+      try {
+        const supabase = createClient();
+        const { data } = (await supabase
+          .from("events")
+          .select("id, name, event_order, sessions ( session_number )")
+          .eq("id", result.data)
+          .single()) as unknown as {
+          data: {
+            id: string;
+            name: string;
+            event_order: number | null;
+            sessions: { session_number: number } | { session_number: number }[] | null;
+          } | null;
+        };
+        if (!data) return;
+        setSkins({
+          eventId: data.id,
+          eventName: data.name,
+          eventOrder: data.event_order ?? 0,
+          sessionNumber: firstOf(data.sessions)?.session_number ?? null,
+        });
+      } catch {
+        // resolveSkinsEventId already reported anything worth surfacing.
+      }
     })();
-  }, [view, skinsEventId]);
+  }, []);
 
   const sessionNumbers = useMemo(
     () => [...new Set(deck.map((h) => h.sessionNumber).filter((n): n is number => n != null))].sort(),
@@ -287,6 +314,29 @@ export default function RefereePage() {
         .filter((h) => !unscoredOnly || h.status !== "published"),
     [deck, sessionFilter, eventFilter, genderFilter, unscoredOnly],
   );
+
+  // Where Skins sits in the running order. Heats swum before it render above
+  // the bracket, heats swum after it below — so the deck reads top to bottom
+  // as the meet is actually run.
+  const skinsRank = skins ? (skins.sessionNumber ?? 0) * 1000 + skins.eventOrder : null;
+  const rankOf = (h: RefereeDeckHeat) => (h.sessionNumber ?? 0) * 1000 + h.eventOrder;
+
+  const heatsBeforeSkins = useMemo(
+    () => (skinsRank == null ? visibleHeats : visibleHeats.filter((h) => rankOf(h) < skinsRank)),
+    [visibleHeats, skinsRank],
+  );
+  const heatsAfterSkins = useMemo(
+    () => (skinsRank == null ? [] : visibleHeats.filter((h) => rankOf(h) >= skinsRank)),
+    [visibleHeats, skinsRank],
+  );
+
+  // Skins qualification comes from published results, not from confirmed
+  // payments, so the bracket can have rounds to score even when the filters
+  // leave no ordinary heats standing.
+  const skinsVisible =
+    skins != null &&
+    (!sessionFilter || String(skins.sessionNumber) === sessionFilter) &&
+    (!eventFilter || eventFilter === skins.eventName);
 
   return (
     <div className={cn("min-h-screen", outdoorMode && "bg-black text-yellow-300")}>
@@ -318,43 +368,8 @@ export default function RefereePage() {
         </Button>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {(
-          [
-            { id: "deck", label: "Heat entry" },
-            { id: "skins", label: "Skins knockout" },
-          ] as const
-        ).map((option) => (
-          <Button
-            key={option.id}
-            type="button"
-            variant={view === option.id ? "default" : "outline"}
-            className="min-h-[48px]"
-            aria-pressed={view === option.id}
-            onClick={() => setView(option.id)}
-          >
-            {option.label}
-          </Button>
-        ))}
-      </div>
+      {skinsError && <p className="text-sm text-destructive">{skinsError}</p>}
 
-      {view === "skins" ? (
-        <>
-          {skinsError && (
-            <p className="text-sm text-destructive">{skinsError}</p>
-          )}
-          {skinsEventId ? (
-            <SkinsBoardRunner eventId={skinsEventId} eventName="Skins" />
-          ) : (
-            !skinsError && (
-              <p className={cn("text-sm", outdoorMode ? "text-yellow-100/70" : "text-muted-foreground")}>
-                Resolving the Skins event…
-              </p>
-            )
-          )}
-        </>
-      ) : (
-        <>
       <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
         <CardHeader>
           <CardTitle className={outdoorMode ? "text-yellow-300" : undefined}>Filter the deck</CardTitle>
@@ -410,7 +425,7 @@ export default function RefereePage() {
             </p>
           </CardContent>
         </Card>
-      ) : visibleHeats.length === 0 ? (
+      ) : visibleHeats.length === 0 && !skinsVisible ? (
         <Card className={cn(outdoorMode && "border-yellow-300/40 bg-black")}>
           <CardContent className="space-y-2 py-8 text-center">
             <p className={cn("font-bold", outdoorMode && "text-yellow-300")}>
@@ -430,7 +445,35 @@ export default function RefereePage() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {visibleHeats.map((heat) => (
+          {/* Skins sits at its own place in the running order, not in a tab
+              and not bolted onto the end: `before` are the heats swum ahead
+              of it, `after` the ones swum later. */}
+          {heatsBeforeSkins.map((heat) => (
+            <HeatResultEntry
+              key={heat.heatId}
+              heatId={heat.heatId}
+              heatLabel={`${heat.eventName} — ${heatTitle(heat)}${
+                heat.sessionNumber != null ? ` · Session ${heat.sessionNumber}` : ""
+              }`}
+              lanes={heat.lanes}
+              outdoorMode={outdoorMode}
+              feedsSkins={heat.feedsSkins}
+            />
+          ))}
+
+          {skinsVisible && skins && (
+            <SkinsDeckSection
+              eventId={skins.eventId}
+              eventName={`${skins.eventName}${
+                skins.sessionNumber != null ? ` · Session ${skins.sessionNumber}` : ""
+              }`}
+              outdoorMode={outdoorMode}
+              genderFilter={(genderFilter as Gender | null) ?? null}
+              unscoredOnly={unscoredOnly}
+            />
+          )}
+
+          {heatsAfterSkins.map((heat) => (
             <HeatResultEntry
               key={heat.heatId}
               heatId={heat.heatId}
@@ -443,8 +486,6 @@ export default function RefereePage() {
             />
           ))}
         </div>
-      )}
-        </>
       )}
       </main>
     </div>

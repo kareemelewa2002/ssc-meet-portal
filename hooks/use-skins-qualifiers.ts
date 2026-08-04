@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { getErrorMessage } from "@/lib/utils";
 import {
@@ -112,7 +112,11 @@ export function useSkinsQualifiers(skinsEventId: string | null): UseSkinsQualifi
     return data ?? 0;
   }, [skinsEventId, refresh]);
 
-  const boards = buildSkinsQualifierBoards(candidates);
+  // Memoised: this is a derived array, and rebuilding it on every render gave
+  // every consumer a new identity each time. Any effect keyed on `boards` then
+  // re-ran forever — which is exactly what made the referee deck reseed in a
+  // loop and wipe a half-entered Skins card.
+  const boards = useMemo(() => buildSkinsQualifierBoards(candidates), [candidates]);
 
   const buildHeatSheets = useCallback(() => {
     const accepted = candidates.filter((c) => c.response === "accepted");

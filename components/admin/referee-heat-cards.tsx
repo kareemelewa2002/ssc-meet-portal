@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Loader2, Pencil, RefreshCcw, Send } from "lucide-react";
+import { CheckCircle2, Loader2, Pencil, RefreshCcw, RotateCcw, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +19,7 @@ import {
   updateLaneTime,
   type PendingReviewHeat,
 } from "@/lib/admin-referee-review";
+import { reopenSkinsRound } from "@/lib/skins-rounds";
 
 export function RefereeHeatCards({ className }: { className?: string }) {
   const toast = useToast();
@@ -81,15 +82,40 @@ export function RefereeHeatCards({ className }: { className?: string }) {
     try {
       const res = await publishHeatResults(heatId);
       if (!res.success) throw new Error(res.error ?? "Failed to publish heat card.");
-      setHeats((prev) => prev.filter((h) => h.heatId !== heatId));
+      // A Skins round stays in the list once published so it can be reopened;
+      // an ordinary card drops out, since correcting it is a time edit.
+      if (heat?.skinsRound != null) {
+        await load();
+      } else {
+        setHeats((prev) => prev.filter((h) => h.heatId !== heatId));
+      }
       toast.success(
         "Heat card published",
-        heat ? `${heat.eventName} — Heat ${heat.heatNumber} is now live on spectator heat sheets.` : undefined,
+        heat
+          ? `${heat.eventName} — ${heatTitle(heat)} is now live on spectator heat sheets.`
+          : undefined,
       );
     } catch (err) {
       const message = getErrorMessage(err, "Failed to publish heat card.");
       setError(message);
       toast.error("Failed to publish", message);
+    } finally {
+      setBusyHeatId(null);
+    }
+  };
+
+  const reopen = async (heatId: string) => {
+    setBusyHeatId(heatId);
+    setError(null);
+    try {
+      const res = await reopenSkinsRound(heatId);
+      if (!res.success) throw new Error(res.error ?? "Failed to reopen the round.");
+      await load();
+      toast.success("Round reopened", "It is back with the referee until it is approved again.");
+    } catch (err) {
+      const message = getErrorMessage(err, "Failed to reopen the round.");
+      setError(message);
+      toast.error("Failed to reopen", message);
     } finally {
       setBusyHeatId(null);
     }
@@ -178,7 +204,11 @@ export function RefereeHeatCards({ className }: { className?: string }) {
           </p>
         ) : (
           visibleHeats.map((heat) => (
-            <div key={heat.heatId} className="space-y-3 rounded-lg border p-3">
+            <div
+              key={heat.heatId}
+              data-testid="review-heat-card"
+              className="space-y-3 rounded-lg border p-3"
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-semibold">
@@ -214,10 +244,30 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                   // with a tooltip, because a disabled Publish button next to a
                   // published card is the exact ambiguity that led to the same
                   // heat being published repeatedly.
+                  heat.skinsRound != null ? (
+                    // A Skins round has no times to edit, so correcting it
+                    // means sending it back to the referee deliberately —
+                    // never a silent second publish over live results.
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="min-h-[48px] gap-2"
+                      disabled={busyHeatId === heat.heatId}
+                      onClick={() => void reopen(heat.heatId)}
+                    >
+                      {busyHeatId === heat.heatId ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <RotateCcw className="size-4" />
+                      )}
+                      Reopen to correct
+                    </Button>
+                  ) : (
                   <p className="max-w-[16rem] text-xs text-muted-foreground">
                     These results are live on the results page and leaderboards. Edit a time below
                     to correct and re-publish.
                   </p>
+                  )
                 ) : (
                   <Button
                     type="button"
@@ -292,7 +342,9 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                         className="shrink-0"
                       >
                         {lane.resultOutcome === "valid"
-                          ? formatTimeMs(lane.officialTimeMs)
+                          ? heat.skinsRound != null
+                            ? `#${lane.finishPlace ?? "—"}`
+                            : formatTimeMs(lane.officialTimeMs)
                           : lane.resultOutcome === "dq"
                             ? lane.dqCode
                               ? DQ_REASON_LABELS[lane.dqCode]
@@ -304,7 +356,9 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                         Not entered yet
                       </Badge>
                     )}
-                    {editingLaneId !== lane.heatLaneId && lane.resultOutcome === "valid" && (
+                    {editingLaneId !== lane.heatLaneId &&
+                      lane.resultOutcome === "valid" &&
+                      heat.skinsRound == null && (
                       // An admin reviewing a card is the person who spots a
                       // mistyped time; without this their only options were
                       // publish it wrong or send the referee back to the deck.
@@ -321,7 +375,7 @@ export function RefereeHeatCards({ className }: { className?: string }) {
                         <Pencil className="size-3" />
                         Edit
                       </Button>
-                    )}
+                      )}
                     {lane.finishPlace != null && (
                       <Badge variant="secondary" className="shrink-0 gap-1">
                         <CheckCircle2 className="size-3" />#{lane.finishPlace}

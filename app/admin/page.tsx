@@ -1,11 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { DataErrorBanner } from "@/components/ui/data-error-banner";
-import { resolveSkinsEventId } from "@/lib/skins-qualification";
-import { SkinsApprovals } from "@/components/admin/skins-approvals";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
@@ -17,38 +14,11 @@ const TABS = [
   { id: "teams", label: "Pending Team Approvals", shortLabel: "Teams" },
   { id: "heatcards", label: "Referee Heat Cards", shortLabel: "Heat Cards" },
   { id: "cash", label: "Cash Payments", shortLabel: "Cash" },
-  { id: "skins", label: "Skins Approvals", shortLabel: "Skins" },
   { id: "users", label: "User & Role Management", shortLabel: "Users" },
 ] as const;
 
 export default function AdminPage() {
   const [tab, setTab] = useState<(typeof TABS)[number]["id"]>("cash");
-  // The Skins rounds query uuid columns, so this can only ever be mounted
-  // with a real event UUID — never the old "50m-freestyle-skins" slug.
-  const [skinsEventId, setSkinsEventId] = useState<string | null>(null);
-  const [skinsError, setSkinsError] = useState<string | null>(null);
-  const [skinsResolving, setSkinsResolving] = useState(false);
-  // A ref, not state: setSkinsResolving(true) inside the effect would retrigger
-  // it if `skinsResolving` were a dependency, and the resulting cleanup would
-  // cancel the in-flight lookup before it ever resolved.
-  const skinsRequested = useRef(false);
-
-  useEffect(() => {
-    if (tab !== "skins" || skinsRequested.current) return;
-    skinsRequested.current = true;
-    let cancelled = false;
-    setSkinsResolving(true);
-    (async () => {
-      const result = await resolveSkinsEventId();
-      if (cancelled) return;
-      setSkinsEventId(result.data);
-      setSkinsError(result.error);
-      setSkinsResolving(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [tab]);
 
   return (
     <div className="min-h-screen">
@@ -81,24 +51,6 @@ export default function AdminPage() {
       {tab === "teams" && <PendingTeamApprovals />}
       {tab === "heatcards" && <RefereeHeatCards />}
       {tab === "cash" && <CashPayments />}
-      {tab === "skins" && (
-        <>
-          <DataErrorBanner error={skinsError} subject="the Skins event" />
-          {skinsResolving ? (
-            <p className="text-sm text-muted-foreground">Resolving the Skins event…</p>
-          ) : skinsEventId ? (
-            <SkinsApprovals eventId={skinsEventId} eventName="Skins" />
-          ) : (
-            !skinsError && (
-              <p className="text-sm text-muted-foreground">
-                No Skins event found for this meet. Seed an event with{" "}
-                <code className="font-mono">is_skins = true</code>, or set{" "}
-                <code className="font-mono">NEXT_PUBLIC_SKINS_EVENT_ID</code> to its UUID.
-              </p>
-            )
-          )}
-        </>
-      )}
       {tab === "users" && <UserRoleManagement />}
       </main>
     </div>

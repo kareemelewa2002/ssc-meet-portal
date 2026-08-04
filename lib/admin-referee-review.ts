@@ -22,6 +22,11 @@ export interface PendingReviewHeat {
   sessionNumber: number | null;
   heatGroup: HeatGroup;
   gender: Gender | null;
+  /** Skins only: which round of the bracket this heat is. Skins rounds are
+   * reviewed here with every other heat card — they are just placed rather
+   * than timed, so they have no time to correct. */
+  skinsRound: number | null;
+  skinsSwimOff: boolean;
   /** Publish state of the heat as a whole. 'partial' means some lanes are
    * published and some are not, which should never happen but is worth
    * surfacing rather than rounding to one or the other. */
@@ -37,8 +42,8 @@ interface RawHeatLane {
   id: string;
   lane_number: number;
   heats:
-    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }
-    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }[]
+    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; skins_swim_off: boolean; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }
+    | { id: string; heat_number: number; heat_group: HeatGroup; gender: Gender | null; event_id: string; skins_round: number | null; skins_swim_off: boolean; events: { name: string; sessions?: { session_number: number } | { session_number: number }[] | null } | { name: string; sessions?: { session_number: number } | { session_number: number }[] | null }[] | null }[]
     | null;
   entries:
     | {
@@ -72,7 +77,7 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
       .select(
         // Qualify the FK — athletes has two (user_id and parent_id), so a
         // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-        "id, lane_number, heats ( id, heat_number, heat_group, gender, event_id, skins_round, events ( name, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
+        "id, lane_number, heats ( id, heat_number, heat_group, gender, event_id, skins_round, skins_swim_off, events ( name, sessions ( session_number ) ) ), entries ( athletes ( id, users!athletes_user_id_fkey ( full_name ), teams ( name ) ) ), results ( result_outcome, official_time_ms, finish_place, dq_code, status )",
       )
       .order("lane_number", { ascending: true });
     if (error || !data) return [];
@@ -86,11 +91,6 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
     for (const lane of data as unknown as RawHeatLane[]) {
       const heat = firstOf(lane.heats);
       if (!heat) continue;
-      // Skins rounds are approved on the Skins board, where the bracket shows
-      // which round is which and reopening one is possible. Listing them here
-      // too would give an admin two different places to approve the same
-      // round, with only "Heat 21" to tell them what they were looking at.
-      if (heat.skins_round != null) continue;
       const event = firstOf(heat.events);
       const entry = firstOf(lane.entries);
       const athlete = entry ? firstOf(entry.athletes) : null;
@@ -106,6 +106,8 @@ export async function fetchPendingReviewHeats(): Promise<PendingReviewHeat[]> {
         sessionNumber: firstOf(event?.sessions)?.session_number ?? null,
         heatGroup: heat.heat_group,
         gender: heat.gender ?? null,
+        skinsRound: heat.skins_round ?? null,
+        skinsSwimOff: heat.skins_swim_off ?? false,
         publishState: "published",
         lanes: [],
         complete: true,
