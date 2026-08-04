@@ -1,6 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { CREDENTIALS, login, requireFixture } from "./helpers";
-import { createRefereeHeatFixture } from "./fixtures/heat-fixture";
+import {
+  acceptSafetyFixture,
+  createRefereeHeatFixture,
+  findAthleteWithCapacity,
+  freeRegistrationSlots,
+} from "./fixtures/heat-fixture";
 
 /**
  * Part 5's explicit six-flow checklist, verified end to end against the
@@ -9,7 +14,27 @@ import { createRefereeHeatFixture } from "./fixtures/heat-fixture";
 
 test.describe("Part 5 checklist — Athlete Flow", () => {
   test("athlete01 views PBs, registers for 2 races, itemized total is 600 EGP cash on deck", async ({ page }) => {
-    await login(page, CREDENTIALS.approvedU14);
+    // Registers every run and never removed the entries, so the swimmer
+    // drifted into the 4-event cap and this skipped from then on.
+    // The RULE is under test (a U14 enters two races and owes 600 EGP), not
+    // one account. Naming a swimmer meant that once their four slots held
+    // real published swims there was no non-destructive way to free them, and
+    // the spec could only skip.
+    const swimmer = await findAthleteWithCapacity("U14", 2);
+    requireFixture(swimmer !== null, "a U14 demo swimmer with two free entry slots");
+    if (!swimmer) return;
+
+    const slots = await freeRegistrationSlots(swimmer.email);
+    requireFixture(slots !== null, "a swimmer profile for the entry fixture");
+    if (!slots) return;
+    // U14 registration is blocked until a parent accepts the safety
+    // acknowledgement; a database where that was cleared makes this unrunnable.
+    const safety = await acceptSafetyFixture(swimmer.email);
+    requireFixture(safety !== null, "the swimmer's safety acknowledgement");
+    if (!safety) return;
+
+    try {
+    await login(page, swimmer.email);
 
     // View PBs — the athlete's own career ledger on their public profile.
     await page.goto("/athletes");
@@ -35,15 +60,27 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
     );
     requireFixture(available >= 2, "at least 2 free event slots for athlete01");
 
-    await selectButtons.nth(0).click();
-    await page.waitForTimeout(300);
-    await page.locator('input[placeholder="mm:ss.cc or ss.cc"]').first().fill("1:04.12");
-
-    // Re-query — the first "Select" button is now "Selected" and no longer
-    // matches this locator, so index 0 is always the next unentered event.
-    await page.getByRole("button", { name: "Select" }).first().click();
-    await page.waitForTimeout(300);
-    await page.locator('input[placeholder="mm:ss.cc or ss.cc"]').nth(1).fill("2:14.50");
+    // Pick two events that actually ASK for a seed time. The 50m switch
+    // events and the 100 IM are entered as NT — selecting one renders no time
+    // field at all, and this timed out on an input that is correctly absent.
+    const timeInputs = page.locator('input[placeholder="mm:ss.cc or ss.cc"]');
+    const total = await selectButtons.count();
+    let picked = 0;
+    for (let i = 0; i < total && picked < 2; i += 1) {
+      const button = selectButtons.nth(i);
+      if (await button.isDisabled()) continue;
+      await button.click();
+      await page.waitForTimeout(400);
+      if ((await timeInputs.count()) > picked) {
+        await timeInputs.nth(picked).fill(picked === 0 ? "1:04.12" : "35.10");
+        picked += 1;
+      } else {
+        // Not a timed event — deselect and keep looking.
+        await button.click();
+        await page.waitForTimeout(300);
+      }
+    }
+    requireFixture(picked === 2, "two free slots in events that ask for a seed time");
 
     await expect(page.getByText("2 races × 300 EGP")).toBeVisible();
     await expect(page.getByText("600 EGP", { exact: false }).first()).toBeVisible();
@@ -55,6 +92,10 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
     await expect(page.getByText("Entries submitted!")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Cash Payment Pending on Deck")).toBeVisible();
     await expect(page.getByText(/600 EGP in cash/)).toBeVisible();
+    } finally {
+      await slots.cleanup();
+      await safety.cleanup();
+    }
   });
 });
 
@@ -84,26 +125,26 @@ test.describe("Part 5 checklist — Parent Flow", () => {
   });
 });
 
-test.describe("Part 5 checklist — Coach Flow", () => {
-  test("coach.riptide views their team roster with each swimmer's PBs reachable", async ({ page }) => {
+test.describe("Part 5 checklist — Team Captain Flow", () => {
+  test("the Riptide captain views their team roster with each swimmer's PBs reachable", async ({
+    page,
+  }) => {
+    // Was the "Coach Flow", looking for a Coach Dashboard at /dashboard. The
+    // coach role is retired: captaincy is teams.captain_id, the dashboard
+    // lives at /captain, and it is gated on captaining a team rather than on
+    // holding a role.
     await login(page, CREDENTIALS.captainRiptide);
-    await page.goto("/dashboard");
-    await page.waitForTimeout(1500);
+    await page.goto("/captain");
+    await page.waitForTimeout(2000);
 
-    const coachHeading = page.locator("main").getByText("Coach Dashboard");
-    // coach.riptide's live role may still be the stale pre-scope-lock
-    // 'team_captain' value until schema.sql is re-applied — the dashboard
-    // correctly falls back to the athlete view rather than misrendering.
-    requireFixture((await coachHeading.count()) > 0, "coach.riptide resolving as role='coach'");
+    await expect(page.locator("main").getByText("Captain Dashboard").first()).toBeVisible();
+    await expect(page.getByText("Riptide Swim Club").first()).toBeVisible();
 
-    await expect(coachHeading).toBeVisible();
-    await expect(page.getByText("Riptide Swim Club")).toBeVisible();
-
-    const firstSwimmer = page.locator("a.font-medium").first();
+    const firstSwimmer = page.locator('main a[href^="/athletes/"]').first();
     requireFixture((await firstSwimmer.count()) > 0, "roster rows for Riptide Swim Club");
     await firstSwimmer.click();
     await page.waitForURL("**/athletes/**");
-    await expect(page.getByText("PB")).toBeVisible();
+    await expect(page.getByText("PB").first()).toBeVisible();
   });
 });
 
@@ -121,8 +162,7 @@ test.describe("Part 5 checklist — Referee Flow", () => {
       await page.goto("/referee");
       const card = page.getByTestId(`heat-card-${fixture.heatId}`);
       await expect(card).toBeVisible({ timeout: 20_000 });
-      await card.scrollIntoViewIfNeeded();
-
+    
       await card.getByRole("button", { name: "Valid Time" }).first().click();
       await card.locator('input[id^="time-"]').first().fill("28.50");
 

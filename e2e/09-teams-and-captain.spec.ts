@@ -33,12 +33,12 @@ test.describe("/captain route", () => {
     await page.goto("/captain");
     await page.waitForTimeout(1500);
 
-    // Scoped to the heading: "Relay squads" also appears in the card's
-    // description, and two matches is a strict-mode violation rather than a
-    // pass.
-    const heading = page.getByRole("heading", { name: "Relay squads" });
-    requireFixture((await heading.count()) > 0, "a team captained by this account");
-    await expect(heading).toBeVisible();
+    // Scoped by data-slot, not by role: CardTitle renders a <div>, so
+    // getByRole("heading") never matches it — and a bare getByText matches
+    // both the title and its wrapper, which is a strict-mode violation.
+    const title = page.locator('[data-slot="card-title"]', { hasText: "Relay squads" });
+    requireFixture((await title.count()) > 0, "a team captained by this account");
+    await expect(title).toBeVisible();
     // The composition rule is stated up front rather than only on submit.
     await expect(page.getByLabel("Relay")).toBeVisible();
     await expect(page.getByLabel("Age group")).toBeVisible();

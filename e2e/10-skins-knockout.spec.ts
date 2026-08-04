@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { CREDENTIALS, login, logout, requireFixture } from "./helpers";
+import { clearSkinsNextRoundFixture, reopenSkinsRoundFixture } from "./fixtures/heat-fixture";
 
 /**
  * End-to-end cover for the Skins knockout.
@@ -61,6 +62,13 @@ test.describe("Skins knockout", () => {
   test("referee scores a round and an admin publishes it from the heat-card queue", async ({
     page,
   }) => {
+    // This spec publishes the round it scores, so after the first run every
+    // board is published and there is nothing left to score. Reopening one is
+    // the same action an admin takes to correct a mistake.
+    const reopened = await reopenSkinsRoundFixture();
+    requireFixture(reopened !== null, "a Skins Round of 6 that can be reopened");
+    if (!reopened) return;
+
     await login(page, CREDENTIALS.referee1);
     await openRefereeDeck(page);
 
@@ -116,16 +124,24 @@ test.describe("Skins knockout", () => {
       timeout: 10_000,
     });
     await expect(settled.getByRole("button", { name: /Publish Heat Card/ })).toHaveCount(0);
+    await reopened.cleanup();
   });
 
   test("advancing re-seeds the survivors into the centred lanes", async ({ page }) => {
+    // This spec creates the next round, so on later runs every board already
+    // has one and the advance button is gone. Removing an UNSCORED Round of 4
+    // restores the affordance; a scored one is a real swum round and is left.
+    const cleared = await clearSkinsNextRoundFixture();
+    requireFixture(cleared !== null, "a Skins board whose next round can be rebuilt");
+    if (!cleared) return;
+
     await login(page, CREDENTIALS.referee1);
     await openRefereeDeck(page);
 
     const advance = page.getByRole("button", { name: /Set up Round of 4/ }).first();
     requireFixture(
       (await advance.count()) > 0,
-      "a fully scored Skins Round of 6 (run the scoring test first)",
+      "a fully scored Skins Round of 6 — the scoring spec above produces one",
     );
     await advance.click();
     await page.waitForTimeout(4000);

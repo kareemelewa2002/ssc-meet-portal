@@ -12,7 +12,11 @@ const compat = new FlatCompat({
 const eslintConfig = [
   ...compat.extends("next/core-web-vitals", "next/typescript"),
   {
-    ignores: [".next/**", "out/**", "build/**", "next-env.d.ts"],
+    // supabase/.temp holds the local CLI's runtime scratch — including a
+    // bundled edge-runtime index.ts that is minified onto one line. It is
+    // gitignored, but eslint does not read .gitignore, so linting it produced
+    // 150+ errors about generated code nobody wrote.
+    ignores: [".next/**", "out/**", "build/**", "next-env.d.ts", "supabase/.temp/**"],
   },
 ];
 

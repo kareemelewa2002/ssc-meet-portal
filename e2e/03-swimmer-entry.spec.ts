@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { CREDENTIALS, login, requireFixture, SEED_PASSWORD } from "./helpers";
+import { findAthleteWithPublishedResult, freeRegistrationSlots } from "./fixtures/heat-fixture";
 
 /**
  * Part 3 §3 — Swimmer & Meet Entry Verification Suite.
@@ -24,6 +25,13 @@ test.describe.serial("Swimmer & meet entry", () => {
   });
 
   test("approved swimmer can submit a race entry with an mm:ss.cc seed time", async ({ page }) => {
+    // This spec registers an event every run and never removed it, so the
+    // swimmer drifted into the 4-event cap and it skipped from then on.
+    const slots = await freeRegistrationSlots(CREDENTIALS.unapproved);
+    requireFixture(slots !== null, "a swimmer profile for the entry fixture");
+    if (!slots) return;
+
+    try {
     await login(page, CREDENTIALS.unapproved);
     await page.goto("/events/1/register", { waitUntil: "networkidle" });
     await page.waitForTimeout(2000);
@@ -78,23 +86,23 @@ test.describe.serial("Swimmer & meet entry", () => {
 
     await expect(page.getByText("Entries submitted!")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Cash Payment Pending on Deck")).toBeVisible();
+    } finally {
+      await slots.cleanup();
+    }
   });
 });
 
 test.describe("Historical age freeze", () => {
   test("athlete profile shows age at swim, not current live age", async ({ page }) => {
     await login(page, CREDENTIALS.approvedU14, SEED_PASSWORD);
-    await page.goto("/athletes");
-    // Deliberately NOT a hard-coded swimmer name: seed rosters get renamed
-    // between generations, and a stale name turned this into a permanent
-    // skip. The first directory card is always a real seeded athlete.
-    await page.waitForTimeout(800);
-
-    const result = page.locator('main a[href^="/athletes/"]').first();
-    requireFixture((await result.count()) > 0, "at least one athlete in the directory");
-
-    await result.click();
-    await page.waitForURL("**/athletes/**");
+    // Deliberately NOT a hard-coded swimmer name (rosters get renamed) and
+    // NOT the first card in the directory either — that athlete may have no
+    // published swim, which is what turned this into a permanent skip. Pick
+    // one that demonstrably HAS a career result.
+    const athleteId = await findAthleteWithPublishedResult();
+    requireFixture(athleteId !== null, "any athlete with a published Vol. 1 result");
+    await page.goto(`/athletes/${athleteId}`);
+    await page.waitForTimeout(1200);
 
     // Chloe (athlete07, DOB 2013-05-14) was 13 at SSC Vol. 1's meet date
     // (2026-10-02) — this age is frozen at entry time (age_group_at_entry /
@@ -103,8 +111,11 @@ test.describe("Historical age freeze", () => {
     // itself is covered at the unit level (lib/__tests__/age.test.ts,
     // all-time-rankings.test.ts) — this just confirms the UI renders the
     // historically-computed value end-to-end, not a live recomputation.
-    const ledgerRow = page.locator("tr", { hasText: "SSC Vol. 1" }).first();
-    requireFixture((await ledgerRow.count()) > 0, "a published SSC Vol. 1 career-results row");
+    // Awaited, not counted immediately: the ledger loads client-side, so a
+    // bare count() ran before the row existed and reported drift that was
+    // really just a race.
+    const ledgerRow = page.getByRole("row", { name: /SSC Vol\. 1/ }).first();
+    await expect(ledgerRow).toBeVisible({ timeout: 15_000 });
 
     // The age column must render a concrete historical age computed from
     // date_of_birth + the volume's meet_date. Asserting the SHAPE rather than

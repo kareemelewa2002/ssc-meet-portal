@@ -17,7 +17,6 @@ async function openFixtureCard(page: Page, fixture: HeatFixture): Promise<Locato
   await page.goto("/referee");
   const card = page.getByTestId(`heat-card-${fixture.heatId}`);
   await expect(card).toBeVisible({ timeout: 20_000 });
-  await card.scrollIntoViewIfNeeded();
   return card;
 }
 

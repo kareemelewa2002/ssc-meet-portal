@@ -106,6 +106,7 @@ export function PendingTeamApprovals({ className }: { className?: string }) {
             {teams.map((team) => (
               <div
                 key={team.id}
+                data-testid="pending-team-row"
                 className="flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="flex min-w-0 items-center gap-3">

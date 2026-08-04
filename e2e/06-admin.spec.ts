@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
 import { CREDENTIALS, login, requireFixture } from "./helpers";
+import {
+  createPendingPaymentFixture,
+  createPendingTeamFixture,
+  createSubmittedHeatCardFixture,
+} from "./fixtures/heat-fixture";
 
 test.describe("Admin dashboard", () => {
   test.beforeEach(async ({ page }) => {
@@ -16,20 +21,37 @@ test.describe("Admin dashboard", () => {
   });
 
   test("Pending Team Approvals tab can approve a real pending team", async ({ page }) => {
-    // The tab button holds both a mobile shortLabel span and a desktop
-    // full-label span, toggled by Tailwind responsive classes — at
-    // Playwright's default desktop viewport, the full label is what's
-    // actually visible/accessible.
-    await page.getByRole("button", { name: "Pending Team Approvals" }).click();
-    await page.waitForTimeout(800);
+    // Restored, not assumed: this test APPROVES the seeded pending team, so
+    // from the second run onward the fixture it looks for no longer exists
+    // and the spec quietly skipped.
+    const pending = await createPendingTeamFixture();
+    requireFixture(pending !== null, "a team that can be put into the pending state");
+    if (!pending) return;
 
-    const row = page.locator("tr", { hasText: "Sunburst Aquatics" });
-    requireFixture((await row.count()) > 0, "the pending team fixture 'Sunburst Aquatics'");
+    try {
+      await page.goto("/admin");
+      // The tab button holds both a mobile shortLabel span and a desktop
+      // full-label span, toggled by Tailwind responsive classes — at
+      // Playwright's default desktop viewport, the full label is what's
+      // actually visible/accessible.
+      await page.getByRole("button", { name: "Pending Team Approvals" }).click();
+      await page.waitForTimeout(1200);
 
-    await row.getByRole("button", { name: "Approve Team" }).click();
-    await page.waitForTimeout(1000);
-    await expect(page.locator("tr", { hasText: "Sunburst Aquatics" })).toHaveCount(0);
-    await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
+      // Not `tr`: this queue renders cards, not a table, so the original
+      // locator could never match — the fixture guard was masking a test that
+      // would have failed the moment it ran.
+      const row = page.locator('[data-testid="pending-team-row"]', { hasText: pending.name });
+      await expect(row).toBeVisible({ timeout: 10_000 });
+
+      await row.getByRole("button", { name: "Approve Team" }).click();
+      await page.waitForTimeout(1500);
+      await expect(
+        page.locator('[data-testid="pending-team-row"]', { hasText: pending.name }),
+      ).toHaveCount(0);
+      await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
+    } finally {
+      await pending.cleanup();
+    }
   });
 
   test("User & Role Management tab loads without console errors", async ({ page }) => {
@@ -45,39 +67,53 @@ test.describe("Admin dashboard", () => {
   });
 
   test("Referee Heat Cards tab shows submitted drafts and can publish one", async ({ page }) => {
-    await page.getByRole("button", { name: "Referee Heat Cards" }).click();
-    await page.waitForTimeout(1200);
+    // Builds its own submitted card. Publishing is what this test does, so
+    // relying on a queue populated by earlier runs meant it emptied the queue
+    // and then skipped forever after.
+    const card = await createSubmittedHeatCardFixture();
+    requireFixture(card !== null, "an event with entries to build a submitted heat card from");
+    if (!card) return;
 
-    const publishButtons = page.getByRole("button", { name: "Publish Heat Card" });
-    requireFixture((await publishButtons.count()) > 0, "a referee-submitted draft heat card");
+    try {
+      await page.goto("/admin");
+      await page.getByRole("button", { name: "Referee Heat Cards" }).click();
+      await page.waitForTimeout(1500);
 
-    // Scoped to the specific heat-card container class — an unscoped
-    // "div" + hasText locator matches every ancestor div up the tree too.
-    const readyCard = page
-      .locator(".space-y-3.rounded-lg.border.p-3", { hasText: "Draft Heat Card — Ready" })
-      .first();
-    const readyPublish = readyCard.getByRole("button", { name: "Publish Heat Card" });
-    requireFixture((await readyPublish.count()) > 0, "a fully-complete draft heat card ready to publish");
+      const readyCard = page
+        .locator('[data-testid="review-heat-card"]', { hasText: `Heat ${card.heatNumber}` })
+        .first();
+      await expect(readyCard).toBeVisible({ timeout: 10_000 });
+      await expect(readyCard.getByText("Draft Heat Card — Ready")).toBeVisible();
 
-    await readyPublish.click();
-    await page.waitForTimeout(1500);
-    await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
+      await readyCard.getByRole("button", { name: "Publish Heat Card" }).click();
+      await page.waitForTimeout(1500);
+      await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
+    } finally {
+      await card.cleanup();
+    }
   });
 
-  test("Cash Payments tab shows the seeded pending-payment fixture and can confirm it", async ({ page }) => {
-    await page.getByRole("button", { name: "Cash Payments" }).click();
-    await page.waitForTimeout(1200);
+  test("Cash Payments tab shows a pending-payment fixture and can confirm it", async ({ page }) => {
+    // Confirming is the point of the test, so the pending entry has to be put
+    // back rather than found — otherwise the queue drains and this skips.
+    const payment = await createPendingPaymentFixture();
+    requireFixture(payment !== null, "an entry that can be put into pending_payment");
+    if (!payment) return;
 
-    const row = page.locator("tr", { hasText: "athlete02" });
-    const anyRow = page.locator("tbody tr").first();
-    const hasAnyRow = (await page.locator("tbody tr").count()) > 0;
-    requireFixture(hasAnyRow, "a pending cash payment (athlete02's fixture)");
+    try {
+      await page.goto("/admin");
+      await page.getByRole("button", { name: "Cash Payments" }).click();
+      await page.waitForTimeout(1500);
 
-    const target = (await row.count()) ? row : anyRow;
-    await expect(target.getByText(/Cash Payment Pending on Deck/)).toBeVisible();
-    await target.getByRole("button", { name: "Confirm Payment" }).click();
-    await page.waitForTimeout(1500);
-    await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
+      const row = page.locator("tbody tr").first();
+      await expect(row).toBeVisible({ timeout: 10_000 });
+      await expect(row.getByText(/Cash Payment Pending on Deck/)).toBeVisible();
+      await row.getByRole("button", { name: "Confirm Payment" }).click();
+      await page.waitForTimeout(1500);
+      await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
+    } finally {
+      await payment.cleanup();
+    }
   });
 });
 
