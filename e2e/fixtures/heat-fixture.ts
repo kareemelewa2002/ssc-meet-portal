@@ -397,18 +397,24 @@ export async function findAthleteWithCapacity(
     const email = (athlete as { users?: { email?: string } }).users?.email;
     if (!email || !email.endsWith("@ssc-demo.test")) continue;
 
-    // Counted client-side: `count: "exact", head: true` does not reliably
-    // apply an embedded !inner filter, so it reported fewer entries than the
-    // registration page did and this picked swimmers who had no room.
+    // Count LOCKED slots only — entries with any result cannot be reclaimed by
+    // freeRegistrationSlots(). After seed-played-meet confirms payments and
+    // scores Freestyle, most swimmers sit at 2–4 entries but only one is
+    // locked; counting raw rows would skip every usable U14 fixture.
     const { data: entries } = await supabase
       .from("entries")
-      .select("id, events!inner ( is_skins, is_relay )")
+      .select("id, events!inner ( is_skins, is_relay ), heat_lanes ( id, results ( id ) )")
       .eq("athlete_id", athlete.id)
       .eq("events.is_skins", false)
       .eq("events.is_relay", false);
-    const used = (entries ?? []).length;
 
-    if (4 - used >= freeSlots) {
+    type LaneWithResults = { id: string; results?: unknown[] };
+    const locked = (entries ?? []).filter((e) => {
+      const lanes = ((e as { heat_lanes?: LaneWithResults[] }).heat_lanes ?? []);
+      return lanes.some((lane) => (lane.results ?? []).length > 0);
+    }).length;
+
+    if (4 - locked >= freeSlots) {
       return { email, athleteId: athlete.id as string };
     }
   }

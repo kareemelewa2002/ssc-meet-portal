@@ -22,19 +22,51 @@ import {
   confirmCashPayment,
   type PendingPaymentAthlete,
 } from "@/lib/admin-cash-payments";
+import {
+  fetchMeetSettings,
+  individualPriceBySession,
+  uniformIndividualPriceEgp,
+} from "@/lib/meet-settings";
+import { fetchActiveVolume } from "@/lib/volumes";
 
 export function CashPayments({ className }: { className?: string }) {
   const toast = useToast();
   const [rows, setRows] = useState<PendingPaymentAthlete[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [priceEgp, setPriceEgp] = useState<number | null>(null);
   const [busyAthleteId, setBusyAthleteId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setRows(await fetchPendingCashPayments());
+      // The desk cannot take money without knowing the price. No fallback:
+      // an admin collecting cash against a guessed figure is exactly the kind
+      // of plausible-looking wrong the fail-loud policy exists to prevent.
+      const vol = await fetchActiveVolume();
+      if (!vol.data) {
+        setError(vol.error ?? "No active meet volume, so there is no price to charge.");
+        setRows([]);
+        return;
+      }
+      const settings = await fetchMeetSettings(vol.data.id);
+      if (settings.error) {
+        setError(settings.error);
+        setRows([]);
+        return;
+      }
+      if (settings.data.length === 0) {
+        setError(
+          `${vol.data.name} has no Control Unit settings — set the race price in /admin/control-unit before taking cash.`,
+        );
+        setRows([]);
+        return;
+      }
+      // Sessions may be priced differently, so each entry is charged its own
+      // session's rate. The headline price is shown only when all three agree.
+      setPriceEgp(uniformIndividualPriceEgp(settings.data));
+      setRows(await fetchPendingCashPayments(individualPriceBySession(settings.data)));
     } catch (err) {
       setError(getErrorMessage(err, "Failed to load pending cash payments."));
     } finally {
@@ -72,7 +104,8 @@ export function CashPayments({ className }: { className?: string }) {
         <div>
           <CardTitle>Cash on deck</CardTitle>
           <CardDescription>
-            Verify each swimmer&rsquo;s cash payment (300 EGP / race) at the meet desk, then confirm
+            Verify each swimmer&rsquo;s cash payment
+            {priceEgp != null ? ` (${priceEgp} EGP / race)` : ""} at the meet desk, then confirm
             here. Confirming seeds their races into the heat sheet.
           </CardDescription>
         </div>
@@ -128,9 +161,14 @@ export function CashPayments({ className }: { className?: string }) {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline" className="gap-1.5">
+                      <Badge
+                        variant={row.pricingComplete ? "outline" : "destructive"}
+                        className="gap-1.5"
+                      >
                         <Banknote className="size-3.5" />
-                        {row.totalEgp} EGP — Cash Payment Pending on Deck
+                        {row.pricingComplete
+                          ? `${row.totalEgp} EGP — Cash Payment Pending on Deck`
+                          : `At least ${row.totalEgp} EGP — a race is in a session with no price set`}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">

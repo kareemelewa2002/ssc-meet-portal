@@ -16,6 +16,7 @@ import {
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
 import { formatTimeMs } from "@/lib/format";
 import { describeAgeAtSwim } from "@/lib/age";
+import { fetchWaBaseTimes, formatWaPoints, waPointsFor, type WaBaseTimes } from "@/lib/wa-points";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
 /**
@@ -36,13 +37,17 @@ export function AllTimeBoards() {
   const [ageGroup, setAgeGroup] = useState<AgeGroup>("Open");
   const [stroke, setStroke] = useState<string>("Freestyle");
   const [distanceM, setDistanceM] = useState<number>(50);
+  // Twelve public rows, applied to every line of both time boards. An event
+  // with no row is unrateable by design and renders "—", never 0.
+  const [baseTimes, setBaseTimes] = useState<WaBaseTimes>(new Map());
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const data = await fetchAllTimePerformances();
+      const [data, base] = await Promise.all([fetchAllTimePerformances(), fetchWaBaseTimes()]);
       if (cancelled) return;
       setRaces(data);
+      setBaseTimes(base.data);
     })();
     return () => {
       cancelled = true;
@@ -175,9 +180,22 @@ export function AllTimeBoards() {
                       {row.teamName ?? "Unaffiliated"} · {row.racesCounted} races · set at age {row.ageAtSwim}
                     </p>
                   </div>
-                  <p className="font-mono text-lg font-semibold tabular-nums">
-                    {formatTimeMs(row.bestTimeMs)}
-                  </p>
+                  <div className="text-right">
+                    <p className="font-mono text-lg font-semibold tabular-nums">
+                      {formatTimeMs(row.bestTimeMs)}
+                    </p>
+                    <p className="font-mono text-xs text-muted-foreground">
+                      {formatWaPoints(
+                        waPointsFor(baseTimes, {
+                          stroke: row.stroke,
+                          distanceM: row.distanceM,
+                          gender: row.gender,
+                          officialTimeMs: row.bestTimeMs,
+                        }),
+                      )}{" "}
+                      pts
+                    </p>
+                  </div>
                 </div>
               ))}
             </CardContent>
@@ -215,9 +233,22 @@ export function AllTimeBoards() {
                       {describeAgeAtSwim(row.ageAtSwim, row.volumeName ?? "SSC")}
                     </p>
                   </div>
-                  <p className="font-mono text-lg font-semibold tabular-nums">
-                    {formatTimeMs(row.officialTimeMs)}
-                  </p>
+                  <div className="text-right">
+                    <p className="font-mono text-lg font-semibold tabular-nums">
+                      {formatTimeMs(row.officialTimeMs)}
+                    </p>
+                    <p className="font-mono text-xs text-muted-foreground">
+                      {formatWaPoints(
+                        waPointsFor(baseTimes, {
+                          stroke: row.stroke,
+                          distanceM: row.distanceM,
+                          gender: row.gender,
+                          officialTimeMs: row.officialTimeMs,
+                        }),
+                      )}{" "}
+                      pts
+                    </p>
+                  </div>
                 </div>
               ))}
             </CardContent>

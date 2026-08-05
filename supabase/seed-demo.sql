@@ -210,10 +210,12 @@ on conflict (volume_number) do update
 insert into public.sessions (meet_volume_id, session_number, name, meet_date, start_time, end_time)
 select mv.id, v.session_number, v.name, mv.meet_date, v.start_time, v.end_time
 from public.meet_volumes mv
+-- Times match public.default_session_window() in schema.sql, so a seeded meet
+-- and a hand-created one start from the same clock.
 cross join (values
-  (1, 'Session 1 — Morning', time '09:00', time '12:00'),
-  (2, 'Session 2 — Afternoon', time '14:00', time '17:00'),
-  (3, 'Session 3 — Skins', time '17:00', time '19:00')
+  (1, 'Session 1 — Morning', time '09:00', time '13:00'),
+  (2, 'Session 2 — Afternoon', time '13:30', time '17:00'),
+  (3, 'Session 3 — Skins', time '17:30', time '21:00')
 ) as v(session_number, name, start_time, end_time)
 where mv.volume_number = 1
 on conflict (meet_volume_id, session_number) do update
@@ -221,6 +223,17 @@ on conflict (meet_volume_id, session_number) do update
       meet_date = excluded.meet_date,
       start_time = excluded.start_time,
       end_time = excluded.end_time;
+
+-- Control Unit dials, one row per session. DO NOTHING rather than DO UPDATE:
+-- seed-demo.sql is destructive by design, but an admin's pricing is the one
+-- thing here worth preserving across a reseed, and the column defaults already
+-- give a fresh database the right values.
+insert into public.meet_settings (meet_volume_id, session_number)
+select mv.id, v.n
+from public.meet_volumes mv
+cross join (values (1), (2), (3)) as v(n)
+where mv.volume_number = 1
+on conflict (meet_volume_id, session_number) do nothing;
 
 -- Exact official Vol. 1 program. is_relay marks the 4x50/4x100 relay events
 -- (schedule-only — see the file header note); is_skins marks the single
@@ -307,10 +320,67 @@ where e.session_id = s.id
 -- ---------------------------------------------------------------------------
 -- 4. Officials & support staff.
 -- ---------------------------------------------------------------------------
--- SCOPE LOCK: exactly 5 approved roles (admin/referee/coach/athlete/parent).
+-- SCOPE LOCK: exactly 4 approved roles (admin/referee/athlete/parent).
 -- The consolidated Referee role covers what used to be split across Chief
 -- Referee, Lane Referee, Usher (call-room), and Entry Desk Helper — so
 -- those old seed identities are gone, folded into a flat pool of referees.
+--
+-- 'coach' and 'team_captain' were retired from public.user_role (see the
+-- header of schema.sql): a role only said someone *could* captain in the
+-- abstract while teams.captain_id said who actually does, which is two
+-- sources of truth for one fact. Captaincy is now exactly the relationship
+-- teams.captain_id, and eligibility to hold it is can_captain_team():
+-- an athlete in the 'Open' age group (18+) who creates the team. The RLS
+-- policies eligible_user_create_team / captain_update_own_team both check
+-- `captain_id = auth.uid()`, so the creator IS the captain and cannot hand
+-- captaincy to anybody else.
+
+-- Legacy address migration: the three captains used to be seeded at
+-- coach.<team>@ssc-demo.test, an address left over from a role that no longer
+-- exists. Renaming them in the block below alone would not be enough — on any
+-- database seeded by an earlier generation of this script the old accounts
+-- still exist, still have this file's shared password, and can still sign in,
+-- so a rename would silently leave three ghost logins behind. Carrying the
+-- identity across (rather than dropping and recreating) also keeps the
+-- account's id, so anything already pointing at it stays valid.
+do $$
+declare rec record;
+begin
+  for rec in
+    select * from (values
+      ('coach.riptide@ssc-demo.test',   'captain.riptide@ssc-demo.test'),
+      ('coach.marlins@ssc-demo.test',   'captain.marlins@ssc-demo.test'),
+      ('coach.tidalwave@ssc-demo.test', 'captain.tidalwave@ssc-demo.test')
+    ) as t(old_email, new_email)
+  loop
+    if not exists (select 1 from auth.users where email = rec.old_email) then
+      continue;
+    end if;
+
+    if exists (select 1 from auth.users where email = rec.new_email) then
+      -- A previous run of THIS version already created the new identity, so
+      -- the old row is a pure duplicate. Delete it — but only if nothing at
+      -- all hangs off it, so a database where the old account somehow still
+      -- owns a swimmer profile or a captaincy is left untouched for a human
+      -- to look at rather than cascade-deleted.
+      delete from auth.users u
+      where u.email = rec.old_email
+        and not exists (select 1 from public.athletes a where a.user_id = u.id)
+        and not exists (select 1 from public.teams t where t.captain_id = u.id);
+    else
+      update auth.users set email = rec.new_email, updated_at = now()
+      where email = rec.old_email;
+      update public.users set email = rec.new_email
+      where email = rec.old_email;
+      update auth.identities i
+      set identity_data = jsonb_set(i.identity_data, '{email}', to_jsonb(rec.new_email)),
+          updated_at = now()
+      where i.provider = 'email'
+        and i.user_id = (select id from auth.users where email = rec.new_email);
+    end if;
+  end loop;
+end $$;
+
 do $$
 begin
   -- A single dedicated Referee account — the consolidated Referee role
@@ -319,44 +389,54 @@ begin
   -- of interchangeable referee seats.
   perform public._seed_get_or_create_user('referee1@ssc-demo.test', 'Marcus Lee', 'referee', '+1-555-0102');
 
-  -- Coaches — one per team. Also each team's captain_id (assigned below),
-  -- but that never changes their role away from 'coach' — teams.captain_id
-  -- already tracks "who manages this team" independently of role.
-  -- The 'coach' role is retired. These accounts remain, and remain the
-  -- captains of their teams (teams.captain_id below) — captaincy is the
-  -- relationship, so no role is needed to hold it.
-  perform public._seed_get_or_create_user('coach.riptide@ssc-demo.test', 'Riley Adams', 'athlete', '+1-555-0106');
-  perform public._seed_get_or_create_user('coach.marlins@ssc-demo.test', 'Jordan Kim', 'athlete', '+1-555-0130');
-  perform public._seed_get_or_create_user('coach.tidalwave@ssc-demo.test', 'Alicia Moreno', 'athlete', '+1-555-0131');
+  -- Team captains — one per approved team, named for the team they captain
+  -- (these were the 'coach.*' accounts before the role was retired; the
+  -- address was left over from a role that no longer exists and read as if
+  -- the platform still had coaches). They are plain 'athlete'-role users:
+  -- captaincy is teams.captain_id, assigned below, so no role holds it.
+  -- Each one also gets an Open-age athletes row in section 5 — without it
+  -- can_captain_team() is false and the "captain" could not have founded
+  -- the team the seed says they captain.
+  perform public._seed_get_or_create_user('captain.riptide@ssc-demo.test', 'Riley Adams', 'athlete', '+1-555-0106');
+  perform public._seed_get_or_create_user('captain.marlins@ssc-demo.test', 'Jordan Kim', 'athlete', '+1-555-0130');
+  perform public._seed_get_or_create_user('captain.tidalwave@ssc-demo.test', 'Alicia Moreno', 'athlete', '+1-555-0131');
 
   -- Parents — linked to the U13-14 athletes below.
+  -- parent1-3 each have four children (the multi-child dashboard case);
+  -- parent4 has exactly one (athlete40), which is the single-child case —
+  -- a one-child parent renders a different dashboard path and had no
+  -- fixture at all until it was added here.
   perform public._seed_get_or_create_user('parent1@ssc-demo.test', 'Dana Whitfield', 'parent', '+1-555-0107');
   perform public._seed_get_or_create_user('parent2@ssc-demo.test', 'Marcus Webb Sr.', 'parent', '+1-555-0132');
   perform public._seed_get_or_create_user('parent3@ssc-demo.test', 'Sophia Ahmed', 'parent', '+1-555-0133');
+  perform public._seed_get_or_create_user('parent4@ssc-demo.test', 'Helena Duarte', 'parent', '+1-555-0134');
 end $$;
 
-update public.teams set captain_id = (select id from auth.users where email = 'coach.riptide@ssc-demo.test')
+update public.teams set captain_id = (select id from auth.users where email = 'captain.riptide@ssc-demo.test')
 where name = 'Riptide Swim Club';
-update public.teams set captain_id = (select id from auth.users where email = 'coach.marlins@ssc-demo.test')
+update public.teams set captain_id = (select id from auth.users where email = 'captain.marlins@ssc-demo.test')
 where name = 'Blue Marlins';
-update public.teams set captain_id = (select id from auth.users where email = 'coach.tidalwave@ssc-demo.test')
+update public.teams set captain_id = (select id from auth.users where email = 'captain.tidalwave@ssc-demo.test')
 where name = 'Tidal Wave';
 
 -- ---------------------------------------------------------------------------
--- 5. Athletes — 36 regular swimmers (12 per age group, 6 male + 6 female
--- each, distributed across all 3 teams), plus 1 unapproved swimmer and 1
--- under-15 swimmer with a still-pending parent linkage to exercise both
--- approval gates independently of the regular population.
+-- 5. Athletes — 37 regular swimmers (12 per age group, 6 male + 6 female
+-- each, distributed across all 3 teams, plus athlete40 as the only child of
+-- parent4), plus 1 unapproved swimmer and 1 under-15 swimmer with a
+-- still-pending parent linkage to exercise both approval gates
+-- independently of the regular population, plus the three team captains
+-- (Open age group — see the block after the loop).
 -- ---------------------------------------------------------------------------
 do $$
 declare
-  v_parent1 uuid; v_parent2 uuid; v_parent3 uuid;
+  v_parent1 uuid; v_parent2 uuid; v_parent3 uuid; v_parent4 uuid;
   v_riptide uuid; v_marlins uuid; v_tidal uuid;
   rec record;
 begin
   v_parent1 := (select id from auth.users where email = 'parent1@ssc-demo.test');
   v_parent2 := (select id from auth.users where email = 'parent2@ssc-demo.test');
   v_parent3 := (select id from auth.users where email = 'parent3@ssc-demo.test');
+  v_parent4 := (select id from auth.users where email = 'parent4@ssc-demo.test');
   select id into v_riptide from public.teams where name = 'Riptide Swim Club';
   select id into v_marlins from public.teams where name = 'Blue Marlins';
   select id into v_tidal from public.teams where name = 'Tidal Wave';
@@ -376,6 +456,12 @@ begin
       ('athlete10@ssc-demo.test', 'Nina Torres',     date '2012-01-25', 'female', v_riptide, v_parent1),
       ('athlete11@ssc-demo.test', 'Ivy Chen',        date '2013-03-09', 'female', v_marlins, v_parent2),
       ('athlete12@ssc-demo.test', 'Lucy Brooks',     date '2012-06-01', 'female', v_tidal,   v_parent3),
+      -- The single-child parent fixture: parent4's ONLY child. parent1-3 each
+      -- have four, so the one-child parent dashboard had no fixture at all.
+      -- Deliberately a NEW athlete rather than a reassignment — e2e/helpers.ts
+      -- pins parent1 and approvedU14 = athlete01, and moving an existing child
+      -- between parents would break those specs.
+      ('athlete40@ssc-demo.test', 'Beatriz Duarte',  date '2013-07-19', 'female', v_riptide, v_parent4),
       -- ---- U17 (12): no parent link required, teams round-robin ----
       ('athlete13@ssc-demo.test', 'Tyler Brooks',    date '2010-02-25', 'male',   v_riptide, null),
       ('athlete14@ssc-demo.test', 'Diego Ramirez',   date '2010-05-18', 'male',   v_marlins, null),
@@ -434,6 +520,67 @@ begin
             approved_by_admin = excluded.approved_by_admin;
     end;
   end loop;
+
+  -- ---- Team captains: Open-age swimmers on the team they captain ----
+  -- A captain is an ATHLETE who founded the team and is 18 or over — all
+  -- three conditions live in the database already: can_captain_team()
+  -- requires an athletes row with age_group = 'Open', and the RLS policies
+  -- eligible_user_create_team / captain_update_own_team both check
+  -- `captain_id = auth.uid()`.
+  --
+  -- These accounts previously had NO athletes row at all (they were seeded
+  -- as bare 'coach'-role users, and losing the role did not give them a
+  -- swimmer profile). can_captain_team() was therefore false for all three:
+  -- the seed shipped captains who could never have created the team they
+  -- are recorded as captaining, and who cannot found one now. Giving them
+  -- real Open-age athlete rows is what makes the fixture honest.
+  --
+  -- They are deliberately NOT entered in Vol. 1: the entries/affiliation
+  -- blocks below match `athlete%@ssc-demo.test`, so a captain is a rostered
+  -- swimmer without a meet entry — which is also a state the app must
+  -- handle. Their safety acknowledgement is set here because the bulk
+  -- update below is scoped to the same email pattern.
+  declare
+    v_cap record;
+    v_cap_id uuid;
+    v_cap_age integer;
+  begin
+    for v_cap in
+      select * from (values
+        ('captain.riptide@ssc-demo.test',   'Riley Adams',   date '1996-04-11', 'male',   v_riptide),
+        ('captain.marlins@ssc-demo.test',   'Jordan Kim',    date '1994-09-02', 'male',   v_marlins),
+        ('captain.tidalwave@ssc-demo.test', 'Alicia Moreno', date '1991-11-23', 'female', v_tidal)
+      ) as t(email, full_name, dob, gender, team_id)
+    loop
+      v_cap_id := (select id from auth.users where email = v_cap.email);
+      v_cap_age := public.age_turning_this_year(v_cap.dob, current_date);
+
+      insert into public.athletes (
+        user_id, team_id, parent_id, date_of_birth, age, age_group, gender,
+        height_cm, weight_kg, specialty_events, parent_link_status,
+        pending_parent_email, approved_by_admin,
+        safety_accepted_at, safety_accepted_by
+      ) values (
+        v_cap_id, v_cap.team_id, null, v_cap.dob, v_cap_age,
+        public.age_group_for_age(v_cap_age), v_cap.gender::public.gender,
+        150 + (abs(hashtext(v_cap.email)) % 40), 40 + (abs(hashtext(v_cap.email || 'w')) % 45),
+        array['Freestyle'], 'none', null, true,
+        now(), v_cap_id
+      )
+      on conflict (user_id) do update
+        set team_id = excluded.team_id,
+            parent_id = excluded.parent_id,
+            date_of_birth = excluded.date_of_birth,
+            age = excluded.age,
+            age_group = excluded.age_group,
+            gender = excluded.gender,
+            parent_link_status = excluded.parent_link_status,
+            pending_parent_email = excluded.pending_parent_email,
+            approved_by_admin = excluded.approved_by_admin,
+            safety_accepted_at = coalesce(athletes.safety_accepted_at, excluded.safety_accepted_at),
+            safety_accepted_by = coalesce(athletes.safety_accepted_by, excluded.safety_accepted_by);
+    end loop;
+  end;
 
   -- ---- Special gate-test fixtures (excluded from bulk entries below) ----
   declare
@@ -495,7 +642,7 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 6. Volume team affiliations (Feature 2). All 36 regular athletes represent
+-- 6. Volume team affiliations (Feature 2). All 37 regular athletes represent
 -- their current team for SSC Vol. 1, EXCEPT Isabella Cruz (athlete19), who
 -- is deliberately recorded as having swum Vol. 1 unattached — demonstrating
 -- that historical team display is independent of an athlete's current team.

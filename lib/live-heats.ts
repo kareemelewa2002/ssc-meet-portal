@@ -442,14 +442,26 @@ export interface EventResultView {
   athleteName: string;
   teamName: string | null;
   heatNumber: number;
-  officialTimeMs: number;
-  eventPlace: number;
+  /** Null on DQ and NS — neither produced a time. */
+  officialTimeMs: number | null;
+  outcome: ResultOutcome;
+  dqCode: DqReason | null;
+  /** Null on DQ and NS: no place, and a 0 would read as one. */
+  eventPlace: number | null;
+  /** World Aquatics points, or null when the event has no base time on file
+   * (relays, Skins, the switch events) — unrated, never zero. */
+  waPoints: number | null;
 }
 
 /**
  * Reads public.event_results, which ranks published results across ALL heats
  * of an event. This is deliberately not the same as results.finish_place:
  * heats are seeded by speed, so winning heat 1 is not winning the event.
+ *
+ * DQ and NS rows come back too, with a null place. They used to be filtered
+ * out of the view entirely, which made a disqualified swimmer indistinguishable
+ * from one who never entered; callers sort them below every valid swim (see
+ * compareResultStanding in lib/results.ts).
  */
 export async function fetchEventResultsForSession(
   sessionId: string,
@@ -469,8 +481,11 @@ export async function fetchEventResultsForSession(
       athlete_name: string;
       team_name: string | null;
       heat_number: number;
-      official_time_ms: number;
-      event_place: number;
+      official_time_ms: number | null;
+      result_outcome: ResultOutcome;
+      dq_code: DqReason | null;
+      wa_points: number | null;
+      event_place: number | null;
     }[]
   >(
     "Loading event results",
@@ -479,11 +494,11 @@ export async function fetchEventResultsForSession(
       return supabase
         .from("event_results")
         .select(
-          "event_id, event_name, age_group, own_age_group, is_open_entry, session_id, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, event_place",
+          "event_id, event_name, age_group, own_age_group, is_open_entry, session_id, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, result_outcome, dq_code, wa_points, event_place",
         )
         .eq("session_id", sessionId)
         .order("event_name", { ascending: true })
-        .order("event_place", { ascending: true });
+        .order("event_place", { ascending: true, nullsFirst: false });
     },
     { empty: [] },
   );
@@ -503,7 +518,10 @@ export async function fetchEventResultsForSession(
       teamName: r.team_name,
       heatNumber: r.heat_number,
       officialTimeMs: r.official_time_ms,
+      outcome: r.result_outcome,
+      dqCode: r.dq_code,
       eventPlace: r.event_place,
+      waPoints: r.wa_points,
     })),
   };
 }

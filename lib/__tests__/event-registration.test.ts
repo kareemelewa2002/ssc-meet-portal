@@ -1,37 +1,54 @@
 import { describe, expect, it } from "vitest";
 import {
-  MAX_EVENTS_MESSAGE,
-  MAX_EVENTS_PER_MEET,
-  RACE_PRICE_EGP,
   buildEntryInserts,
   computeRegistrationTotalEgp,
+  maxEventsMessage,
   resolveSeedSource,
   validateEventCount,
 } from "@/lib/event-registration";
 
-describe("cash-on-deck pricing", () => {
-  it("is a flat per-race price", () => {
-    expect(RACE_PRICE_EGP).toBe(300);
-    expect(computeRegistrationTotalEgp(0)).toBe(0);
-    expect(computeRegistrationTotalEgp(3)).toBe(900);
-    expect(computeRegistrationTotalEgp(MAX_EVENTS_PER_MEET)).toBe(1200);
-  });
-});
-describe("MAX_EVENTS_PER_MEET cap", () => {
-  it("allows up to 4 events", () => {
-    expect(validateEventCount(4).ok).toBe(true);
-    expect(validateEventCount(1, 3).ok).toBe(true);
+// The old assertions here pinned RACE_PRICE_EGP === 300 and
+// MAX_EVENTS_PER_MEET === 4 as module constants. Both are now per-volume
+// admin settings (public.meet_settings, edited in /admin/control-unit) and
+// this module carries no copy of either — so what is worth asserting is that
+// the resolvers use whatever the caller was given, including values that are
+// nothing like the old defaults.
+describe("cash-on-deck pricing resolves from the passed price", () => {
+  it("multiplies the race count by the meet's own price", () => {
+    expect(computeRegistrationTotalEgp(0, 300)).toBe(0);
+    expect(computeRegistrationTotalEgp(3, 300)).toBe(900);
+    expect(computeRegistrationTotalEgp(4, 300)).toBe(1200);
   });
 
-  it("rejects a 5th event, counting ones already entered earlier", () => {
-    expect(validateEventCount(5).ok).toBe(false);
-    expect(validateEventCount(2, 3).ok).toBe(false);
-    expect(validateEventCount(5).error).toBe(MAX_EVENTS_MESSAGE);
+  it("follows a price the admin changed, rather than a baked-in 300", () => {
+    expect(computeRegistrationTotalEgp(3, 450)).toBe(1350);
+    expect(computeRegistrationTotalEgp(2, 0)).toBe(0);
+  });
+});
+
+describe("athlete event limit", () => {
+  it("allows exactly the configured limit", () => {
+    expect(validateEventCount(4, 0, 4).ok).toBe(true);
+    expect(validateEventCount(1, 3, 4).ok).toBe(true);
+  });
+
+  it("rejects one over, counting events already entered earlier", () => {
+    expect(validateEventCount(5, 0, 4).ok).toBe(false);
+    expect(validateEventCount(2, 3, 4).ok).toBe(false);
+    expect(validateEventCount(5, 0, 4).error).toBe(maxEventsMessage(4));
   });
 
   it("the cap is per meet, not per submission", () => {
-    // Someone who already entered 4 cannot add even one more.
-    expect(validateEventCount(1, 4).ok).toBe(false);
+    // Someone who already entered the maximum cannot add even one more.
+    expect(validateEventCount(1, 4, 4).ok).toBe(false);
+  });
+
+  it("honours a limit the admin changed", () => {
+    expect(validateEventCount(6, 0, 6).ok).toBe(true);
+    expect(validateEventCount(5, 0, 4).ok).toBe(false);
+    expect(validateEventCount(2, 0, 1).error).toBe(
+      "You can enter a maximum of 1 event per meet.",
+    );
   });
 });
 

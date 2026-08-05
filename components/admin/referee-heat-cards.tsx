@@ -11,6 +11,7 @@ import { getErrorMessage } from "@/lib/utils";
 import { formatTimeMs, heatTitle, parseTimeToMs, CLOCK_TIME_ERROR } from "@/lib/format";
 import { FilterSelect } from "@/components/events/filter-select";
 import { RESULT_OUTCOME_LABELS, DQ_REASON_LABELS } from "@/lib/results";
+import { compareByCategory } from "@/lib/category-order";
 import { useToast } from "@/hooks/use-toast";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import {
@@ -131,11 +132,13 @@ export function RefereeHeatCards({ className }: { className?: string }) {
     .filter((h) => !sessionFilter || String(h.sessionNumber) === sessionFilter)
     .filter((h) => !eventFilter || h.eventName === eventFilter)
     .filter((h) => !genderFilter || h.gender === genderFilter)
+    // Same running order the referee's deck and the spectator heat sheets
+    // use, so a card the admin is reviewing sits where the referee left it.
     .sort(
       (a, b) =>
         (a.sessionNumber ?? 0) - (b.sessionNumber ?? 0) ||
         a.eventName.localeCompare(b.eventName) ||
-        a.heatNumber - b.heatNumber,
+        compareByCategory(a, b),
     );
 
   return (

@@ -27,7 +27,9 @@ import {
   type PerformanceHighlight,
 } from "@/lib/live-heats";
 import { formatTimeMs, timeDropSeconds } from "@/lib/format";
-import { DQ_REASON_LABELS } from "@/lib/results";
+import { DQ_REASON_LABELS, compareResultStanding } from "@/lib/results";
+import { compareByCategory } from "@/lib/category-order";
+import { formatWaPoints } from "@/lib/wa-points";
 import type { AgeGroup, Gender, MeetVolumeRow, SessionRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { AGE_GROUP_LABELS, AGE_GROUP_SHORT_LABELS } from "@/lib/athletes";
@@ -153,19 +155,20 @@ function LaneRow({
                 >
                   {formatTimeMs(lane.result.officialTimeMs)}
                 </span>
-                {highlight && (
-                  // The switch events have no base time, so no points — they
-                  // simply have no highlight row and nothing renders.
-                  <span
-                    className={cn(
-                      "font-telemetry text-[10px] font-bold",
-                      outdoorMode ? "text-yellow-100/80" : "text-muted-foreground",
-                    )}
-                    title="World Aquatics points (short course)"
-                  >
-                    {highlight.waPoints} pts
-                  </span>
-                )}
+                {/* Always rendered on a scored lane. A swim with no
+                    highlight row is one whose event has no base time (the
+                    switch events, relays) — deliberately unrateable, which
+                    an em dash says and a blank space does not. Never a 0:
+                    that would read as a real score of nought. */}
+                <span
+                  className={cn(
+                    "font-telemetry text-[10px] font-bold",
+                    outdoorMode ? "text-yellow-100/80" : "text-muted-foreground",
+                  )}
+                  title="World Aquatics points (short course)"
+                >
+                  {formatWaPoints(highlight?.waPoints)} pts
+                </span>
                 {drop != null && (
                   // Seed -> official delta. A drop is the whole point of the
                   // series' Progress scoring, so it gets the lime glow.
@@ -375,16 +378,39 @@ export function LiveEventsClient({
         heats: ev.heats
           .map((heat) => ({
             ...heat,
-            lanes: heat.lanes.filter(
-              (lane) =>
-                (!genderFilter || lane.gender === genderFilter) &&
-                (!ageFilter || lane.ageGroup === ageFilter) &&
-                // Results view shows only swum lanes; the heat sheet shows
-                // every seeded lane whether or not it has been scored.
-                (!isResults || lane.result != null),
-            ),
+            lanes: heat.lanes
+              .filter(
+                (lane) =>
+                  (!genderFilter || lane.gender === genderFilter) &&
+                  (!ageFilter || lane.ageGroup === ageFilter) &&
+                  // Results view shows only swum lanes; the heat sheet shows
+                  // every seeded lane whether or not it has been scored.
+                  (!isResults || lane.result != null),
+              )
+              // On the heat sheet a lane list IS the pool, so lane order is
+              // the only honest order. On the results view it is a standing,
+              // so it ranks — with DQ and NS below every valid swim.
+              .sort((a, b) =>
+                isResults
+                  ? compareResultStanding(
+                      {
+                        outcome: a.result?.outcome,
+                        place: a.result?.finishPlace,
+                        officialTimeMs: a.result?.officialTimeMs,
+                      },
+                      {
+                        outcome: b.result?.outcome,
+                        place: b.result?.finishPlace,
+                        officialTimeMs: b.result?.officialTimeMs,
+                      },
+                    ) || a.laneNumber - b.laneNumber
+                  : a.laneNumber - b.laneNumber,
+              ),
           }))
-          .filter((heat) => heat.lanes.length > 0),
+          .filter((heat) => heat.lanes.length > 0)
+          // Category running order: 14&U Women, 14&U Men, 17&U/Open Women,
+          // 17&U/Open Men — the same order /admin/seeding and /referee use.
+          .sort(compareByCategory),
       }))
       .filter((ev) => ev.heats.length > 0);
   }, [events, eventFilterId, eventNameFilter, genderFilter, ageFilter, isResults]);
@@ -400,7 +426,16 @@ export function LiveEventsClient({
         .filter((r) => !eventFilterId || r.eventId === eventFilterId)
         .filter((r) => !eventNameFilter || r.eventName === eventNameFilter)
         .filter((r) => !genderFilter || r.gender === genderFilter)
-        .filter((r) => !ageFilter || r.ageGroup === ageFilter),
+        .filter((r) => !ageFilter || r.ageGroup === ageFilter)
+        // The view already orders places ascending with nulls last, but the
+        // rows are stitched together from several per-session fetches — so
+        // the standing is only guaranteed ordered once it is sorted here.
+        .sort((a, b) =>
+          compareResultStanding(
+            { outcome: a.outcome, place: a.eventPlace, officialTimeMs: a.officialTimeMs },
+            { outcome: b.outcome, place: b.eventPlace, officialTimeMs: b.officialTimeMs },
+          ),
+        ),
     [eventResults, eventFilterId, eventNameFilter, genderFilter, ageFilter],
   );
 
@@ -627,23 +662,40 @@ export function LiveEventsClient({
                           className={cn(
                             "flex items-center gap-3 rounded-lg border-2 p-2",
                             outdoorMode ? "border-yellow-300/30" : "border-border",
+                            // DQ and NS are shown, sorted below every valid
+                            // swim, rather than dropped from the standing —
+                            // "not in the list" reads as "never entered".
+                            r.eventPlace == null && "opacity-70",
                           )}
                         >
-                          <Badge
-                            className={cn(
-                              "h-6 min-w-[34px] justify-center font-telemetry text-[11px]",
-                              r.eventPlace === 1 && "bg-neon-lime text-black",
-                              r.eventPlace === 2 && "bg-neon-cyan text-black",
-                              r.eventPlace === 3 && "bg-neon-violet text-white",
-                            )}
-                          >
-                            #{r.eventPlace}
-                          </Badge>
+                          {r.eventPlace == null ? (
+                            <Badge
+                              variant={r.outcome === "dq" ? "destructive" : "secondary"}
+                              className="h-6 min-w-[34px] justify-center font-telemetry text-[11px]"
+                            >
+                              {r.outcome === "dq" ? "DQ" : "NS"}
+                            </Badge>
+                          ) : (
+                            <Badge
+                              className={cn(
+                                "h-6 min-w-[34px] justify-center font-telemetry text-[11px]",
+                                r.eventPlace === 1 && "bg-neon-lime text-black",
+                                r.eventPlace === 2 && "bg-neon-cyan text-black",
+                                r.eventPlace === 3 && "bg-neon-violet text-white",
+                              )}
+                            >
+                              #{r.eventPlace}
+                            </Badge>
+                          )}
                           <div className="min-w-0 flex-1">
                             <AthleteLink
                               athleteId={r.athleteId}
                               name={r.athleteName}
-                              className={cn("truncate", outdoorMode && "text-yellow-300")}
+                              className={cn(
+                                "truncate",
+                                outdoorMode && "text-yellow-300",
+                                r.outcome === "dq" && "line-through",
+                              )}
                             />
                             <p
                               className={cn(
@@ -653,16 +705,33 @@ export function LiveEventsClient({
                             >
                               {r.teamName ? `${r.teamName} · ` : ""}heat {r.heatNumber}
                               {r.isOpenEntry ? ` · ${AGE_GROUP_LABELS[r.ownAgeGroup]} swimmer` : ""}
+                              {r.outcome === "dq" && r.dqCode
+                                ? ` · ${DQ_REASON_LABELS[r.dqCode]}`
+                                : ""}
                             </p>
                           </div>
-                          <span
-                            className={cn(
-                              "shrink-0 font-telemetry text-sm font-bold",
-                              outdoorMode && "text-yellow-300",
-                            )}
-                          >
-                            {formatTimeMs(r.officialTimeMs)}
-                          </span>
+                          <div className="shrink-0 text-right">
+                            <span
+                              className={cn(
+                                "block font-telemetry text-sm font-bold",
+                                outdoorMode && "text-yellow-300",
+                              )}
+                            >
+                              {formatTimeMs(r.officialTimeMs)}
+                            </span>
+                            {/* An em dash, never a 0: relays, Skins and the
+                                switch events have no base time on file and
+                                are unrateable by design. */}
+                            <span
+                              className={cn(
+                                "block font-telemetry text-[10px]",
+                                outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
+                              )}
+                              title="World Aquatics points (short course)"
+                            >
+                              {formatWaPoints(r.waPoints)} pts
+                            </span>
+                          </div>
                         </div>
                       ))}
                     </CardContent>

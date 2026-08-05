@@ -10,7 +10,6 @@ import {
   validateSquad,
   type RelayCandidate,
 } from "@/lib/relays";
-import { RACE_PRICE_EGP } from "@/lib/event-registration";
 
 const swimmer = (
   id: string,
@@ -63,8 +62,13 @@ describe("legStroke — medley order is fixed", () => {
 });
 
 describe("squad fee and lettering", () => {
-  it("charges one race fee per swimmer", () => {
-    expect(relaySquadFeeEgp()).toBe(RELAY_LEGS * RACE_PRICE_EGP);
+  it("charges one race fee per swimmer, at the meet's configured relay price", () => {
+    // The price is meet_settings.relay_event_price_egp, not a constant — the
+    // fee has to follow whatever an admin set in the Control Unit.
+    expect(relaySquadFeeEgp(300)).toBe(RELAY_LEGS * 300);
+    expect(relaySquadFeeEgp(450)).toBe(RELAY_LEGS * 450);
+    // A short squad still pays per swimmer.
+    expect(relaySquadFeeEgp(300, 2)).toBe(600);
   });
 
   it("letters squads A, B, C in creation order", () => {

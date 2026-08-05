@@ -55,6 +55,87 @@ export function parseClockTime(value: string): ClockParseResult {
   return { ok: false, error: CLOCK_TIME_ERROR };
 }
 
+// ---------------------------------------------------------------------------
+// Live input mask (poolside ergonomics)
+// ---------------------------------------------------------------------------
+//
+// A referee scoring a heat on a phone has a numeric keypad in front of them
+// and no colon or dot within reach. So they type digits and the field grows
+// the separators: 1 0 5 4 3 renders as "1:05.43" while they type.
+//
+// The mask is right-anchored — the last two digits are always centiseconds,
+// the two before that seconds, everything left of those minutes — because
+// that is the direction a time is actually known. Nobody types the minutes of
+// a 29-second swim first.
+//
+// This is FORMATTING ONLY. parseClockTime above is untouched: it still
+// strictly accepts mm:ss.cc and ss.cc, still rejects raw integers, and the
+// field still flags invalid input with aria-invalid exactly as before. The
+// mask just means the referee reaches a valid string by pressing digits.
+
+/** Longest time the field accepts: 99:59.99. */
+const MAX_CLOCK_DIGITS = 6;
+
+function formatClockDigits(digits: string): string {
+  const n = digits.length;
+  if (n === 0) return "";
+  // One or two digits are still ambiguous (is "29" 29 seconds or the start of
+  // 2:9x?), so no separator is guessed until a third digit settles it.
+  if (n <= 2) return digits;
+  if (n <= 4) return `${digits.slice(0, n - 2)}.${digits.slice(n - 2)}`;
+  return `${digits.slice(0, n - 4)}:${digits.slice(n - 4, n - 2)}.${digits.slice(n - 2)}`;
+}
+
+export interface MaskedClockTime {
+  value: string;
+  /** Where the caret belongs in `value`, counted in characters. */
+  caret: number;
+}
+
+/**
+ * Applies the mask to whatever the input element now holds.
+ *
+ * `previousValue` exists for one case that is otherwise unfixable: backspacing
+ * over a separator. Deleting the ":" of "1:05.43" leaves "105.43", whose digits
+ * are unchanged — so a naive re-mask puts the ":" straight back and the key
+ * appears dead. When the edit removed exactly one character and no digits, the
+ * digit in front of the separator is removed instead, which is what the
+ * referee meant.
+ */
+export function maskClockTimeInput(
+  raw: string,
+  caretPosition: number | null | undefined,
+  previousValue?: string,
+): MaskedClockTime {
+  const caret = caretPosition ?? raw.length;
+  let digits = raw.replace(/\D/g, "").slice(0, MAX_CLOCK_DIGITS);
+  let digitsBeforeCaret = raw.slice(0, caret).replace(/\D/g, "").length;
+
+  const deletedOneChar =
+    previousValue !== undefined && raw.length === previousValue.length - 1;
+  const digitsUnchanged =
+    previousValue !== undefined && digits === previousValue.replace(/\D/g, "").slice(0, MAX_CLOCK_DIGITS);
+  if (deletedOneChar && digitsUnchanged && digitsBeforeCaret > 0) {
+    digits = digits.slice(0, digitsBeforeCaret - 1) + digits.slice(digitsBeforeCaret);
+    digitsBeforeCaret -= 1;
+  }
+
+  digitsBeforeCaret = Math.min(digitsBeforeCaret, digits.length);
+  const value = formatClockDigits(digits);
+
+  // Walk the formatted string until as many digits have gone by as sat before
+  // the caret in the raw input. Separators shift the caret along with them,
+  // so inserting one never strands it mid-number.
+  let seen = 0;
+  let index = 0;
+  while (index < value.length && seen < digitsBeforeCaret) {
+    if (/\d/.test(value[index])) seen += 1;
+    index += 1;
+  }
+
+  return { value, caret: index };
+}
+
 /** Formats milliseconds as swim-meet clock time, e.g. 65432 -> "1:05.43". */
 export function formatTimeMs(ms: number | null | undefined): string {
   if (ms == null) return "—";

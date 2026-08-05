@@ -87,6 +87,9 @@ const SMOKE_TABLES = [
   "teams",
   "team_memberships",
   "meet_volumes",
+  // Public read: the registration form quotes the individual race price from
+  // here, so a 400 on this table takes registration down with it.
+  "meet_settings",
   "sessions",
   "events",
   "entries",
@@ -130,6 +133,7 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "public", table: "entries", trigger: "generate_heats_on_confirm_update" },
   { schema: "public", table: "entries", trigger: "set_entry_age_group_trigger" },
   { schema: "public", table: "heats", trigger: "heats_set_updated_at" },
+  { schema: "public", table: "meet_settings", trigger: "meet_settings_set_updated_at" },
   { schema: "public", table: "meet_volumes", trigger: "meet_volumes_set_updated_at" },
   { schema: "public", table: "results", trigger: "enforce_result_publish_trigger" },
   { schema: "public", table: "results", trigger: "enforce_result_scoring_trigger" },
@@ -364,7 +368,7 @@ async function main() {
   console.log(`\n[1mSSC schema drift guard[0m  →  ${url}\n`);
 
   // -- 1. user_role enum membership -----------------------------------------
-  console.log("[1m1. user_role enum (scope lock: exactly 5 roles)[0m");
+  console.log("[1m1. user_role enum (scope lock: exactly 4 roles)[0m");
   for (const role of APPROVED_ROLES) {
     const r = await rest(`${url}/rest/v1/users?select=id&role=eq.${role}&limit=1`, { method: "GET" }, key);
     if (r.status === 200) {

@@ -33,19 +33,20 @@ test.describe.serial("Swimmer & meet entry", () => {
 
     try {
     await login(page, CREDENTIALS.unapproved);
-    await page.goto("/events/1/register", { waitUntil: "networkidle" });
-    await page.waitForTimeout(2000);
+    await page.goto("/events/1/register", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
 
     // A 15+ swimmer who predates the safety acknowledgement accepts it here.
     const acceptSafety = page.getByRole("button", { name: /I accept the safety/i });
     if (await acceptSafety.count()) {
       await acceptSafety.click();
-      await page.waitForTimeout(1500);
+      await expect(acceptSafety).toHaveCount(0, { timeout: 10_000 });
     }
 
     // Buttons can be present but DISABLED once the 4-event-per-meet cap is
     // reached, so presence alone is not a usable fixture.
     const selectButtons = page.getByRole("button", { name: "Select" });
+    await expect(selectButtons.first()).toBeVisible({ timeout: 20_000 });
     const enabledCount = await selectButtons.evaluateAll(
       (nodes) => nodes.filter((n) => !(n as HTMLButtonElement).disabled).length,
     );
@@ -54,10 +55,9 @@ test.describe.serial("Swimmer & meet entry", () => {
       "a free event slot for athlete37 (they are at the 4-event cap for this meet)",
     );
 
-    // Not simply the first enabled Select: the 50m switch events and the
-    // 100 IM seed as NT, so selecting one renders no seed-time field at all
-    // and this test would time out on an input that is correctly absent.
-    // Walk the enabled buttons until one asks for a time.
+    // Not simply the first enabled Select: seeds_as_nt events (50m switch,
+    // 100 IM) render no seed-time field at all. Walk enabled buttons until
+    // one asks for a time; give the form a beat to mount the ClockTimeInput.
     const timeInput = page.locator('input[placeholder="mm:ss.cc or ss.cc"]').first();
     const total = await selectButtons.count();
     let opened = false;
@@ -65,14 +65,14 @@ test.describe.serial("Swimmer & meet entry", () => {
       const button = selectButtons.nth(i);
       if (await button.isDisabled()) continue;
       await button.click();
-      await page.waitForTimeout(500);
-      if ((await timeInput.count()) > 0) {
+      try {
+        await expect(timeInput).toBeVisible({ timeout: 1500 });
         opened = true;
         break;
+      } catch {
+        // NT / seeds_as_nt event — deselect and try the next one.
+        await button.click();
       }
-      // Not a timed event — deselect and try the next one.
-      await button.click();
-      await page.waitForTimeout(300);
     }
     requireFixture(opened, "a free slot in an event that asks for a seed time");
 
@@ -114,7 +114,14 @@ test.describe("Historical age freeze", () => {
     // Awaited, not counted immediately: the ledger loads client-side, so a
     // bare count() ran before the row existed and reported drift that was
     // really just a race.
-    const ledgerRow = page.getByRole("row", { name: /SSC Vol\. 1/ }).first();
+    // Scoped to the career ledger by testid. The Personal Bests table above it
+    // also has a Volume column, so an unscoped "row mentioning SSC Vol. 1"
+    // matched THAT first — and its columns are ordered differently, so the
+    // age assertion below was reading a World Aquatics points cell instead.
+    const ledgerRow = page
+      .getByTestId("career-ledger")
+      .getByRole("row", { name: /SSC Vol\. 1/ })
+      .first();
     await expect(ledgerRow).toBeVisible({ timeout: 15_000 });
 
     // The age column must render a concrete historical age computed from

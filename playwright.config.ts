@@ -32,8 +32,10 @@ const SYSTEM_CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chr
 export default defineConfig({
   testDir: "./e2e",
   globalSetup: SKIP_RESET ? undefined : "./e2e/global-setup.ts",
-  timeout: 45_000,
-  expect: { timeout: 10_000 },
+  // Played-meet state loads a full heat deck + Skins boards; 45s was too
+  // tight once seed-played-meet advances past pending_payment.
+  timeout: 90_000,
+  expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   retries: 0,
@@ -68,7 +70,19 @@ export default defineConfig({
     // class of flakiness.
     command: "npm run build && npm run start",
     url: "http://localhost:3000",
-    reuseExistingServer: true,
+    // NEVER reuse a server already on :3000.
+    //
+    // Reusing one cost a full 56-minute run: a next-server left over from an
+    // earlier session was still holding the port, so Playwright skipped the
+    // build and ran the whole suite against that process. It was serving an
+    // OLD build, and once `.next` on disk was replaced its chunk manifest went
+    // stale — every page died with "Loading chunk NNNN failed", and 43 specs
+    // failed for a reason that had nothing to do with the code under test.
+    //
+    // This is the same rule as the database reset in e2e/global-setup.ts:
+    // a suite run against state nobody verified proves nothing. Failing loudly
+    // on a busy port is the point — kill the squatter and run again.
+    reuseExistingServer: false,
     // A cold production build (no .next cache) exceeds 3 minutes on this
     // machine, and switching between the live and test environments always
     // invalidates that cache because NEXT_PUBLIC_* is inlined at build time.

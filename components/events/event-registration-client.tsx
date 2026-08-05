@@ -13,11 +13,8 @@ import { fetchTeams } from "@/lib/teams";
 import { canSubmitEntries } from "@/lib/register";
 import { acceptSafetyAcknowledgement } from "@/lib/safety";
 import {
-  MAX_EVENTS_MESSAGE,
-  MAX_EVENTS_PER_MEET,
-  RACE_PRICE_EGP,
+  maxEventsMessage,
   validateEventCount,
-  computeRegistrationTotalEgp,
   fetchAthleteEnteredEventIds,
   fetchPreviousBestTimes,
   fetchRegisterableEvents,
@@ -26,6 +23,13 @@ import {
   type EventSelection,
   type RegisterableEvent,
 } from "@/lib/event-registration";
+import {
+  effectiveEventLimit,
+  fetchMeetSettings,
+  settingsForSession,
+  type MeetSettings,
+  type SessionNumber,
+} from "@/lib/meet-settings";
 import { CLOCK_TIME_ERROR, formatTimeMs, parseTimeToMs } from "@/lib/format";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
 import type { AgeGroup, MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
@@ -46,6 +50,11 @@ interface CurrentAthlete {
 
 export function EventRegistrationClient({ volId }: { volId: string }) {
   const [volume, setVolume] = useState<MeetVolumeRow | null>(null);
+  // Price and event cap both come from the Control Unit. Null means they
+  // could not be read, and the form refuses to quote a price rather than
+  // showing a plausible one — see lib/fetch-policy.ts.
+  const [settings, setSettings] = useState<MeetSettings[]>([]);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [events, setEvents] = useState<RegisterableEvent[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [athlete, setAthlete] = useState<CurrentAthlete | null>(null);
@@ -72,14 +81,22 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
 
       let loadedEvents: RegisterableEvent[] = [];
       if (volResult.data) {
-        const [ev, tm] = await Promise.all([
+        const [ev, tm, cfg] = await Promise.all([
           fetchRegisterableEvents(volResult.data.id),
           fetchTeams(),
+          fetchMeetSettings(volResult.data.id),
         ]);
         loadedEvents = ev;
         if (!cancelled) {
           setEvents(ev);
           setTeams(tm.data.filter((t) => t.approved_by_admin));
+          setSettings(cfg.data);
+          if (cfg.error || cfg.data.length === 0) {
+            setSettingsError(
+              cfg.error ??
+                `${volResult.data.name} has no entry pricing configured yet, so races can't be priced. An admin sets this in the Control Unit.`,
+            );
+          }
           if (tm.error) setDataError(tm.error);
         }
       }
@@ -189,7 +206,34 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   /** What this event's seed time will be, and why — mirrors the database. */
   const seedFor = (ev: RegisterableEvent) =>
     resolveSeedSource(ev, volume?.volume_number ?? 1, previousBest.get(ev.id));
-  const remainingSlots = Math.max(0, MAX_EVENTS_PER_MEET - enteredCount);
+  // The cap is per MEET, so where the three sessions disagree a swimmer is
+  // held to the strictest of them — the alternative lets someone exceed a
+  // session's own limit by spreading entries across the others.
+  const eventLimit = settings.length > 0 ? effectiveEventLimit(settings) : null;
+  const remainingSlots = eventLimit == null ? 0 : Math.max(0, eventLimit - enteredCount);
+
+  /**
+   * What the selected races actually cost.
+   *
+   * Summed per race at its OWN session's price rather than count × one price:
+   * the sessions may be priced differently, and a swimmer picking one race in
+   * the morning and one in the evening would otherwise be quoted twice the
+   * wrong figure. `perRaceEgp` is non-null only when every selected race
+   * happens to cost the same, so the "N races × X EGP" line is never a lie.
+   */
+  const priced = useMemo(() => {
+    if (!volume || settings.length === 0) return null;
+    const selectedEvents = events.filter((ev) => drafts[ev.id]?.selected);
+    const prices = selectedEvents.map(
+      (ev) =>
+        settingsForSession(settings, volume.id, ev.sessionNumber as SessionNumber)
+          .individualEventPriceEgp,
+    );
+    const totalEgp = prices.reduce((sum, p) => sum + p, 0);
+    const perRaceEgp =
+      prices.length > 0 && prices.every((p) => p === prices[0]) ? prices[0] : null;
+    return { totalEgp, perRaceEgp };
+  }, [events, drafts, settings, volume]);
 
   const eventsBySession = useMemo(() => {
     const groups = new Map<number, RegisterableEvent[]>();
@@ -206,11 +250,15 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
       const current = prev[eventId];
       const turningOn = !current?.selected;
       if (turningOn) {
+        if (eventLimit == null) {
+          setError(settingsError);
+          return prev;
+        }
         const selectedNow = Object.values(prev).filter((d) => d.selected).length;
         // Cap is per MEET, so events already entered in an earlier session
         // count against it too.
-        if (!validateEventCount(selectedNow + 1, enteredCount).ok) {
-          setError(MAX_EVENTS_MESSAGE);
+        if (!validateEventCount(selectedNow + 1, enteredCount, eventLimit).ok) {
+          setError(maxEventsMessage(eventLimit));
           return prev;
         }
       }
@@ -315,8 +363,15 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
         </Badge>
         <p className="text-sm text-muted-foreground">
           Your {selectedCount} {selectedCount === 1 ? "entry" : "entries"} for {volume?.name} are booked.
-          Bring <strong>{computeRegistrationTotalEgp(selectedCount)} EGP in cash</strong> to the meet desk on
-          deck — an admin will confirm payment there.
+          {priced ? (
+            <>
+              {" "}
+              Bring <strong>{priced.totalEgp} EGP in cash</strong> to the meet desk on deck — an
+              admin will confirm payment there.
+            </>
+          ) : (
+            " Pay cash at the meet desk on deck — the amount could not be loaded, so ask an admin to confirm it there."
+          )}
         </p>
         <Button className="min-h-[48px] w-full" nativeButton={false} render={<Link href="/" />}>
           Back to home
@@ -333,16 +388,22 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
       </Link>
 
       <DataErrorBanner error={dataError} subject="the event schedule" />
+      {/* No price, no entries. Registration is a commitment to pay a specific
+          amount on deck, so a form that cannot state the amount must say so
+          rather than quote a familiar-looking number. */}
+      <DataErrorBanner error={settingsError} subject="entry pricing" />
 
       <header>
         <h1 className="text-xl font-bold sm:text-2xl">{volume?.name ?? "Meet"} — Event Registration</h1>
         <p className="text-sm text-muted-foreground">
           Select your races, enter Long Course seed times, and choose your team representation.
         </p>
-        <Badge variant="outline" className="mt-2 gap-1.5 py-1">
-          <ListChecks className="size-3.5" />
-          {selectedCount + enteredCount} of {MAX_EVENTS_PER_MEET} events used
-        </Badge>
+        {eventLimit != null && (
+          <Badge variant="outline" className="mt-2 gap-1.5 py-1">
+            <ListChecks className="size-3.5" />
+            {selectedCount + enteredCount} of {eventLimit} events used
+          </Badge>
+        )}
       </header>
 
       {loading ? (
@@ -497,16 +558,17 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
             ))
           )}
 
-          {selectedCount > 0 && (
+          {selectedCount > 0 && priced && (
             <Card className="border-dashed">
               <CardContent className="space-y-2 py-4">
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">
-                    {selectedCount} {selectedCount === 1 ? "race" : "races"} × {RACE_PRICE_EGP} EGP
+                    {selectedCount} {selectedCount === 1 ? "race" : "races"}
+                    {priced.perRaceEgp != null
+                      ? ` × ${priced.perRaceEgp} EGP`
+                      : " (priced per session)"}
                   </span>
-                  <span className="text-lg font-bold tabular-nums">
-                    {computeRegistrationTotalEgp(selectedCount)} EGP
-                  </span>
+                  <span className="text-lg font-bold tabular-nums">{priced.totalEgp} EGP</span>
                 </div>
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Banknote className="size-3.5 shrink-0" />
@@ -519,13 +581,13 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           <Button
             type="button"
             className="min-h-[48px] w-full text-base font-semibold"
-            disabled={submitting || selectedCount === 0 || !entryGate.ok}
+            disabled={submitting || selectedCount === 0 || !entryGate.ok || !priced}
             onClick={() => void handleSubmit()}
           >
             {submitting && <Loader2 className="mr-2 size-4 animate-spin" />}
             Submit {selectedCount > 0 ? `${selectedCount} ` : ""}
             {selectedCount === 1 ? "Entry" : "Entries"}
-            {selectedCount > 0 ? ` — ${computeRegistrationTotalEgp(selectedCount)} EGP Cash on Deck` : ""}
+            {selectedCount > 0 && priced ? ` — ${priced.totalEgp} EGP Cash on Deck` : ""}
           </Button>
         </>
       )}

@@ -16,7 +16,19 @@ const eslintConfig = [
     // bundled edge-runtime index.ts that is minified onto one line. It is
     // gitignored, but eslint does not read .gitignore, so linting it produced
     // 150+ errors about generated code nobody wrote.
-    ignores: [".next/**", "out/**", "build/**", "next-env.d.ts", "supabase/.temp/**"],
+    //
+    // .claude/worktrees holds FULL working copies of this repo, one per agent
+    // worktree. Linting them re-reports every finding once per copy and drags
+    // in each copy's generated .next/ output — 1,200+ errors about code that
+    // is not in this checkout.
+    ignores: [
+      ".next/**",
+      "out/**",
+      "build/**",
+      "next-env.d.ts",
+      "supabase/.temp/**",
+      ".claude/**",
+    ],
   },
 ];
 

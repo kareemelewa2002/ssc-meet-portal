@@ -35,12 +35,13 @@ const CREDENTIAL_GROUPS: CredentialGroup[] = [
     ],
   },
   {
-    group: "Coaches & Family",
+    group: "Captains & Family",
     entries: [
-      { label: "Coach — Riptide", email: "coach.riptide@ssc-demo.test" },
-      { label: "Coach — Blue Marlins", email: "coach.marlins@ssc-demo.test" },
-      { label: "Coach — Tidal Wave", email: "coach.tidalwave@ssc-demo.test" },
-      { label: "Parent", email: "parent1@ssc-demo.test", note: "…through parent3@ssc-demo.test" },
+      { label: "Team captain — Riptide", email: "captain.riptide@ssc-demo.test" },
+      { label: "Team captain — Blue Marlins", email: "captain.marlins@ssc-demo.test" },
+      { label: "Team captain — Tidal Wave", email: "captain.tidalwave@ssc-demo.test" },
+      { label: "Parent (4 children)", email: "parent1@ssc-demo.test", note: "…through parent3@ssc-demo.test" },
+      { label: "Parent (1 child)", email: "parent4@ssc-demo.test" },
     ],
   },
   {

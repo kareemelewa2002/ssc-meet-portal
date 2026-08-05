@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { seedPlayedMeet } from "./helpers/seed-played-meet";
 
 /**
  * Resets the E2E database to supabase/seed-demo.sql before the suite runs.
@@ -137,4 +138,9 @@ export default async function globalSetup() {
         "  its skips and failures would describe the database, not the code.",
     );
   }
+
+  // seed-demo.sql stops at pending_payment with zero heats. Downstream specs
+  // need confirmed payments, Freestyle results, and Skins Round-of-6 boards.
+  console.log("\x1b[1mE2E global setup\x1b[0m — advancing to played-meet state…");
+  seedPlayedMeet(dbUrl);
 }

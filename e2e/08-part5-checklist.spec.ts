@@ -46,23 +46,24 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
     await expect(page.getByText("PB")).toBeVisible();
 
     // Register for 2 races, assert the itemized 300 EGP/race cash total.
-    await page.goto("/events/1/register");
-    await page.waitForTimeout(1500);
-    // athlete01 is U14: their safety acknowledgement must have been accepted
-    // by their parent before they can enter anything.
+    await page.goto("/events/1/register", { waitUntil: "domcontentloaded" });
+    // freeRegistrationSlots can finish before the event catalogue hydrates —
+    // "0 of 4 events used" with Select still Loading is not a capacity miss.
+    await expect(page.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
     requireFixture(
       (await page.getByText(/safety & privacy acknowledgement must be accepted/i).count()) === 0,
-      "athlete01's safety acknowledgement accepted by their parent",
+      "the U14 swimmer's safety acknowledgement accepted by their parent",
     );
     const selectButtons = page.getByRole("button", { name: "Select" });
+    await expect(selectButtons.first()).toBeVisible({ timeout: 20_000 });
     const available = await selectButtons.evaluateAll(
       (nodes) => nodes.filter((n) => !(n as HTMLButtonElement).disabled).length,
     );
-    requireFixture(available >= 2, "at least 2 free event slots for athlete01");
+    requireFixture(available >= 2, "at least 2 free event slots for a U14 demo swimmer");
 
-    // Pick two events that actually ASK for a seed time. The 50m switch
-    // events and the 100 IM are entered as NT — selecting one renders no time
-    // field at all, and this timed out on an input that is correctly absent.
+    // Pick two events that actually ASK for a seed time. seeds_as_nt events
+    // (50m switch, 100 IM) render no time field — selecting one must not be
+    // treated as a successful pick, or the fill below times out on absence.
     const timeInputs = page.locator('input[placeholder="mm:ss.cc or ss.cc"]');
     const total = await selectButtons.count();
     let picked = 0;
@@ -70,14 +71,16 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
       const button = selectButtons.nth(i);
       if (await button.isDisabled()) continue;
       await button.click();
-      await page.waitForTimeout(400);
-      if ((await timeInputs.count()) > picked) {
+      const before = picked;
+      try {
+        await expect(timeInputs.nth(picked)).toBeVisible({ timeout: 1500 });
         await timeInputs.nth(picked).fill(picked === 0 ? "1:04.12" : "35.10");
         picked += 1;
-      } else {
-        // Not a timed event — deselect and keep looking.
-        await button.click();
-        await page.waitForTimeout(300);
+      } catch {
+        // NT event — deselect and keep looking.
+        if ((await timeInputs.count()) === before) {
+          await button.click();
+        }
       }
     }
     requireFixture(picked === 2, "two free slots in events that ask for a seed time");
@@ -107,21 +110,19 @@ test.describe("Part 5 checklist — Parent Flow", () => {
     // against athlete01's pending/verified parent link, and via the
     // AppHeader confirming the Parent role loaded correctly.
     const trigger = page.locator('header button:has([data-slot="avatar"])').first();
+    await expect(trigger).toBeVisible({ timeout: 15_000 });
     await trigger.click();
-    await page.waitForTimeout(400);
-    await expect(page.getByText("Parent", { exact: true })).toBeVisible();
+    await expect(page.getByText("Parent", { exact: true })).toBeVisible({ timeout: 10_000 });
 
-    await page.goto("/athletes");
-    await page.waitForTimeout(1000);
-    await page.waitForTimeout(800);
+    await page.goto("/athletes", { waitUntil: "domcontentloaded" });
     const card = page.locator('main a[href^="/athletes/"]').first();
-    requireFixture((await card.count()) > 0, "at least one athlete in the directory");
+    await expect(card).toBeVisible({ timeout: 20_000 });
     await card.click();
     await page.waitForURL("**/athletes/**");
     // The linked U14 swimmer's public profile must be reachable by the
     // parent — proving the account exists and the linkage isn't broken.
     // Scoped to <main> — AppHeader also renders an <h1> for the page title.
-    await expect(page.locator("main h1")).toBeVisible();
+    await expect(page.locator("main h1")).toBeVisible({ timeout: 15_000 });
   });
 });
 

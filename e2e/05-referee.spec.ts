@@ -14,9 +14,11 @@ import { createRefereeHeatFixture, type HeatFixture } from "./fixtures/heat-fixt
 
 /** Scrolls the fixture's own card into view and returns it. */
 async function openFixtureCard(page: Page, fixture: HeatFixture): Promise<Locator> {
-  await page.goto("/referee");
+  // domcontentloaded: realtime subscriptions keep networkidle from settling.
+  await page.goto("/referee", { waitUntil: "domcontentloaded" });
   const card = page.getByTestId(`heat-card-${fixture.heatId}`);
-  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card).toBeVisible({ timeout: 45_000 });
+  await card.scrollIntoViewIfNeeded();
   return card;
 }
 
@@ -49,13 +51,15 @@ test.describe("Consolidated Referee deck", () => {
       const card = await openFixtureCard(page, fixture);
 
       await card.getByRole("button", { name: "Valid Time" }).first().click();
-      await card.locator('input[id^="time-"]').first().fill("00:29.87");
+      await card.locator('input[id^="time-"]').first().fill("29.87");
 
       // Partial save: one of two lanes is scored, so this is Save Progress.
-      await card.getByRole("button", { name: /Save Progress/ }).click();
+      const save = card.getByRole("button", { name: /Save Progress/ });
+      await expect(save).toBeEnabled({ timeout: 5_000 });
+      await save.click();
       await expect(
         page.getByRole("heading", { name: /Heat card submitted|Progress saved/ }),
-      ).toBeVisible({ timeout: 8_000 });
+      ).toBeVisible({ timeout: 20_000 });
 
       await page.reload();
       const reloaded = page.getByTestId(`heat-card-${fixture.heatId}`);
@@ -80,12 +84,12 @@ test.describe("Consolidated Referee deck", () => {
       const laneCount = await validButtons.count();
       for (let i = 0; i < laneCount; i += 1) {
         await validButtons.nth(i).click();
-        await card.locator('input[id^="time-"]').nth(i).fill(`00:3${i}.10`);
+        await card.locator('input[id^="time-"]').nth(i).fill(`3${i}.10`);
       }
 
       await card.getByRole("button", { name: /Submit Heat Card to Admin/ }).click();
       await expect(page.getByRole("heading", { name: /Heat card submitted/ })).toBeVisible({
-        timeout: 8_000,
+        timeout: 20_000,
       });
 
       // Submitted: the card presents as sent, and editing is a deliberate act.
@@ -116,11 +120,11 @@ test.describe("Consolidated Referee deck", () => {
       const laneCount = await validButtons.count();
       for (let i = 0; i < laneCount; i += 1) {
         await validButtons.nth(i).click();
-        await card.locator('input[id^="time-"]').nth(i).fill(`00:2${i}.55`);
+        await card.locator('input[id^="time-"]').nth(i).fill(`2${i}.55`);
       }
       await card.getByRole("button", { name: /Submit Heat Card to Admin/ }).click();
       await expect(page.getByRole("heading", { name: /Heat card submitted/ })).toBeVisible({
-        timeout: 8_000,
+        timeout: 20_000,
       });
 
       // Admin publishes it. Clearing the session first matters: signing in
@@ -154,7 +158,16 @@ test.describe("Consolidated Referee deck", () => {
     }
   });
 
-  test("invalid clock time text is flagged inline, blocking a bad save", async ({ page }) => {
+  test("a bad clock time cannot be entered, and an impossible one is flagged", async ({ page }) => {
+    // This used to type "garbage" and assert aria-invalid. The mm:ss.cc input
+    // mask now strips non-digits as they arrive, so letters never reach the
+    // field at all — a STRONGER guarantee than flagging them, but it does mean
+    // the old assertion could no longer fire. Both halves are asserted here so
+    // the protection the original test existed for is not quietly lost:
+    //   1. letters are unenterable, so a bad save is impossible;
+    //   2. a time that is numerically reachable but impossible is still
+    //      flagged inline — 77.77 seconds, which the mask will happily
+    //      assemble from four digits but no clock can show.
     const fixture = await createRefereeHeatFixture();
     requireFixture(fixture !== null, "an event with entries to build a scratch heat from");
     if (!fixture) return;
@@ -164,8 +177,20 @@ test.describe("Consolidated Referee deck", () => {
       const card = await openFixtureCard(page, fixture);
       await card.getByRole("button", { name: "Valid Time" }).first().click();
       const timeInput = card.locator('input[id^="time-"]').first();
-      await timeInput.fill("garbage");
+
+      await timeInput.pressSequentially("garbage");
+      await expect(timeInput).toHaveValue("");
+
+      // Four digits mask to "77.77" — seconds only go to 59.
+      await timeInput.pressSequentially("7777");
+      await expect(timeInput).toHaveValue("77.77");
       await expect(timeInput).toHaveAttribute("aria-invalid", "true");
+
+      // And the mask really is assembling the separators from bare digits.
+      await timeInput.fill("");
+      await timeInput.pressSequentially("10543");
+      await expect(timeInput).toHaveValue("1:05.43");
+      await expect(timeInput).not.toHaveAttribute("aria-invalid", "true");
     } finally {
       await fixture.cleanup();
     }
@@ -185,6 +210,13 @@ test.describe("Consolidated Referee deck", () => {
   test("two devices on the same Referee account see each other's saved draft live", async ({
     browser,
   }) => {
+    // Two browser contexts, two full sign-ins, and a deliberate 3s wait for
+    // the realtime channel to reach SUBSCRIBED — this one sits right on the
+    // 90s default and tips over it on a slower run. The waits are what make it
+    // trustworthy (see the SUBSCRIBED note below), so the budget gives way,
+    // not the waits.
+    test.slow();
+
     // A single dedicated Referee account (seed-demo.sql scope lock) — this
     // simulates the same referee with a phone AND a tablet open at once,
     // proving the sync is a genuine postgres_changes subscription rather
@@ -210,9 +242,11 @@ test.describe("Consolidated Referee deck", () => {
       await pageB.waitForTimeout(3000);
 
       await cardA.getByRole("button", { name: "Valid Time" }).first().click();
-      await cardA.locator('input[id^="time-"]').first().fill("00:31.42");
+      await cardA.locator('input[id^="time-"]').first().fill("31.42");
       // Two lanes, one scored — a partial save, so the label is Save Progress.
-      await cardA.getByRole("button", { name: /Save Progress/ }).click();
+      const saveA = cardA.getByRole("button", { name: /Save Progress/ });
+      await expect(saveA).toBeEnabled({ timeout: 5_000 });
+      await saveA.click();
       await pageA.waitForTimeout(1500);
 
       // B never touched anything — a live postgres_changes subscription,

@@ -81,10 +81,15 @@ export type TeamRow = {
   updated_at: string;
 };
 
-/** public.event_results — overall standings across every heat of an event. */
+/** public.event_results — overall standings across every heat of an event.
+ * Includes DQ and NS rows: they carry is_ranked = false and a null place, so
+ * a disqualified swimmer shows at the bottom of the standing rather than
+ * vanishing from it. */
 export type EventResultRow = {
   event_id: string;
   event_name: string;
+  stroke: string;
+  distance_m: number;
   session_id: string;
   meet_volume_id: string;
   /** The board this row belongs to. Not mutually exclusive: "Open" means
@@ -104,10 +109,17 @@ export type EventResultRow = {
   heat_number: number;
   heat_order: number;
   lane_number: number;
-  official_time_ms: number;
+  /** Null on DQ and NS — neither produced a time. */
+  official_time_ms: number | null;
   result_outcome: ResultOutcome;
   dq_code: DqReason | null;
-  event_place: number;
+  /** False for DQ/NS. The flag standings sort on. */
+  is_ranked: boolean;
+  /** World Aquatics points, or null when the event has no base time on file
+   * (relays, Skins, the switch events) — "unrated", never zero. */
+  wa_points: number | null;
+  /** Null on DQ and NS: they have no place, and a 0 would read as one. */
+  event_place: number | null;
 };
 
 /** public.performance_highlights — every published swim scored in World
@@ -132,6 +144,17 @@ export type PerformanceHighlightRow = {
   swam_at: string;
   is_best_overall: boolean;
   is_best_in_event: boolean;
+};
+
+/** public.wa_base_times — World Aquatics base times per stroke x distance x
+ * gender (short course). An event with no row here is deliberately
+ * unrateable, which callers must render as "—" and never as 0. */
+export type WaBaseTimeRow = {
+  stroke: string;
+  distance_m: number;
+  gender: Gender;
+  base_time_ms: number;
+  updated_at: string;
 };
 
 /** public.relay_squads — a team's four-swimmer entry for a relay event. */
@@ -207,6 +230,23 @@ export type MeetVolumeRow = {
   meet_date: string | null;
   status: VolumeStatus;
   created_at: string;
+  updated_at: string;
+};
+
+/** public.meet_settings — the Admin Control Unit's per-volume dials. The
+ * source of truth for pricing: there is deliberately no client-side default,
+ * only the DB column default (see supabase/schema.sql). */
+/** One Control Unit row per (volume, session 1-3). Session start/end times are
+ * NOT here — public.sessions owns those; see the table comment in schema.sql. */
+export type MeetSettingsRow = {
+  id: string;
+  meet_volume_id: string;
+  session_number: 1 | 2 | 3;
+  athlete_capacity: number;
+  heat_turnaround_seconds: number;
+  individual_event_price_egp: number;
+  relay_swimmer_price_egp: number;
+  athlete_event_limit: number;
   updated_at: string;
 };
 
@@ -416,6 +456,8 @@ export type Database = {
       athletes: Table<AthleteRow>;
       volume_team_affiliations: Table<VolumeTeamAffiliationRow>;
       meet_volumes: Table<MeetVolumeRow>;
+      meet_settings: Table<MeetSettingsRow>;
+      wa_base_times: Table<WaBaseTimeRow>;
       sessions: Table<SessionRow>;
       events: Table<EventRow>;
       entries: Table<EntryRow>;

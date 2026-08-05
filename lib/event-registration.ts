@@ -2,31 +2,48 @@ import { createClient } from "@/lib/supabase/client";
 import { canSubmitEntries } from "@/lib/register";
 import type { EntryStatus, ParentLinkStatus } from "@/lib/supabase/types";
 
-/** SSC Vol. 1 pricing — cash paid on deck, never online. */
-export const RACE_PRICE_EGP = 300;
+// ---------------------------------------------------------------------------
+// PRICING AND THE EVENT CAP COME FROM public.meet_settings.
+//
+// This file used to export `RACE_PRICE_EGP = 300` and `MAX_EVENTS_PER_MEET =
+// 4`, and eight call sites multiplied by the first or compared against the
+// second. Both are now per-volume admin settings edited in
+// /admin/control-unit, and both survive as DATABASE column defaults — not as
+// constants here.
+//
+// There is deliberately no fallback price in this module. A client that
+// cannot read meet_settings must say so; quoting a swimmer 300 EGP because
+// the settings query failed is a wrong number wearing a right number's
+// clothes, which is precisely the failure lib/fetch-policy.ts exists to stop.
+// ---------------------------------------------------------------------------
 
-/** An athlete may enter at most this many individual events per meet. */
-export const MAX_EVENTS_PER_MEET = 4;
-
-export const MAX_EVENTS_MESSAGE = `You can enter a maximum of ${MAX_EVENTS_PER_MEET} events per meet.`;
+export function maxEventsMessage(limit: number): string {
+  return `You can enter a maximum of ${limit} ${limit === 1 ? "event" : "events"} per meet.`;
+}
 
 /**
  * Total selected must include events already entered in a previous session
  * of the same meet — the cap is per meet, not per submission, so someone who
  * enters two events today cannot come back and add four more tomorrow.
+ *
+ * `limit` is meet_settings.athlete_event_limit. It is required, with no
+ * default, so a caller that has not loaded the settings cannot accidentally
+ * enforce a stale 4.
  */
 export function validateEventCount(
   newlySelected: number,
-  alreadyEntered = 0,
+  alreadyEntered: number,
+  limit: number,
 ): { ok: boolean; error?: string } {
-  if (newlySelected + alreadyEntered > MAX_EVENTS_PER_MEET) {
-    return { ok: false, error: MAX_EVENTS_MESSAGE };
+  if (newlySelected + alreadyEntered > limit) {
+    return { ok: false, error: maxEventsMessage(limit) };
   }
   return { ok: true };
 }
 
-export function computeRegistrationTotalEgp(raceCount: number): number {
-  return raceCount * RACE_PRICE_EGP;
+/** `priceEgp` is meet_settings.individual_event_price_egp — never a constant. */
+export function computeRegistrationTotalEgp(raceCount: number, priceEgp: number): number {
+  return raceCount * priceEgp;
 }
 
 export interface EventSelection {

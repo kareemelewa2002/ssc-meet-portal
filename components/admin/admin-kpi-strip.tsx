@@ -5,7 +5,8 @@ import { Banknote, Building2, ClipboardCheck, UserRoundCheck } from "lucide-reac
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { describeError, failure, ok, type FetchResult } from "@/lib/fetch-policy";
-import { RACE_PRICE_EGP } from "@/lib/event-registration";
+import { fetchMeetSettings, uniformIndividualPriceEgp } from "@/lib/meet-settings";
+import { fetchActiveVolume } from "@/lib/volumes";
 import { SkeletonStat } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
@@ -19,8 +20,13 @@ export interface AdminKpis {
 
 /** Four head:true counts + one small select — cheap enough to poll on focus,
  * and each is independently null-safe so one failing table never blanks the
- * whole strip. */
-export async function fetchAdminKpis(): Promise<FetchResult<AdminKpis>> {
+ * whole strip.
+ *
+ * `individualPriceEgp` is required rather than defaulted: the cash-queue tile
+ * is a money figure an admin acts on, and a hard-coded 300 here would keep
+ * printing a confident total after an admin changed the price in the Control
+ * Unit. */
+export async function fetchAdminKpis(individualPriceEgp: number): Promise<FetchResult<AdminKpis>> {
   const EMPTY: AdminKpis = {
     registeredAthletes: 0,
     unapprovedTeams: 0,
@@ -45,8 +51,8 @@ export async function fetchAdminKpis(): Promise<FetchResult<AdminKpis>> {
       registeredAthletes: swimmers.count ?? 0,
       unapprovedTeams: teams.count ?? 0,
       cashQueueCount: cashCount,
-      // Every unpaid entry is one race at the flat deck price.
-      cashQueueEgp: cashCount * RACE_PRICE_EGP,
+      // Every unpaid entry is one race at the volume's deck price.
+      cashQueueEgp: cashCount * individualPriceEgp,
       draftHeatCards: drafts.count ?? 0,
     });
   } catch (err) {
@@ -74,7 +80,32 @@ export function AdminKpiStrip({ className }: { className?: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetchAdminKpis();
+    // The price has to be resolved before the money tile can be computed. If
+    // it cannot be, the strip shows the error instead of a total built on a
+    // guessed price — a wrong cash figure on the admin's dashboard is worse
+    // than no cash figure.
+    const vol = await fetchActiveVolume();
+    if (!vol.data) {
+      setError(vol.error ?? "No active meet volume, so there is no deck price to total against.");
+      return;
+    }
+    const settings = await fetchMeetSettings(vol.data.id);
+    if (settings.error) {
+      setError(settings.error);
+      return;
+    }
+    // A headline figure has no session context, so it is only honest when the
+    // three sessions charge the same. When they differ there is no single
+    // "cash queue value" to print, and inventing one from session 1 would
+    // understate or overstate the desk by however much session 3 differs.
+    const price = uniformIndividualPriceEgp(settings.data);
+    if (price === null) {
+      setError(
+        `${vol.data.name} prices its sessions differently, so the cash queue has no single total — see /admin/cash-payments for the per-swimmer breakdown.`,
+      );
+      return;
+    }
+    const res = await fetchAdminKpis(price);
     setKpis(res.data);
     setError(res.error);
   }, []);

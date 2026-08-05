@@ -25,6 +25,7 @@ import {
 } from "@/lib/athletes";
 import { formatTimeMs } from "@/lib/format";
 import { DQ_REASON_LABELS } from "@/lib/results";
+import { formatWaPoints } from "@/lib/wa-points";
 import { AppHeader } from "@/components/layout/app-header";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 
@@ -180,7 +181,11 @@ export default function AthleteProfilePage() {
       <Card>
         <CardHeader>
           <CardTitle>Personal bests</CardTitle>
-          <CardDescription>Best SSC times per event.</CardDescription>
+          <CardDescription>
+            Best SSC times per event, with World Aquatics points (short course). Events with no
+            base time on file — the 50m switch events, relays — have no points system and show a
+            dash.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -188,6 +193,7 @@ export default function AthleteProfilePage() {
               <TableRow>
                 <TableHead>Event</TableHead>
                 <TableHead>PB</TableHead>
+                <TableHead>Points</TableHead>
                 <TableHead>Age</TableHead>
                 <TableHead>Volume</TableHead>
               </TableRow>
@@ -199,6 +205,7 @@ export default function AthleteProfilePage() {
                     {pb.distanceM} {pb.stroke}
                   </TableCell>
                   <TableCell className="font-mono">{formatTimeMs(pb.bestTimeMs)}</TableCell>
+                  <TableCell className="font-mono">{formatWaPoints(pb.waPoints)}</TableCell>
                   <TableCell>{pb.ageAtSwim}</TableCell>
                   <TableCell>{pb.volumeName ?? "—"}</TableCell>
                 </TableRow>
@@ -226,13 +233,17 @@ export default function AthleteProfilePage() {
             />
           </div>
           <div className="overflow-x-auto">
-            <Table>
+            {/* Named because the Personal Bests table above ALSO carries a
+                Volume column, so "the row mentioning SSC Vol. 1" matches both
+                and their columns are in different orders. */}
+            <Table data-testid="career-ledger">
               <TableHeader>
                 <TableRow>
                   <TableHead>Volume</TableHead>
                   <TableHead>Event</TableHead>
                   <TableHead>Age</TableHead>
                   <TableHead>Time</TableHead>
+                  <TableHead>Points</TableHead>
                   <TableHead>Place</TableHead>
                   <TableHead>Split</TableHead>
                   <TableHead>Status</TableHead>
@@ -247,6 +258,9 @@ export default function AthleteProfilePage() {
                     <TableCell className="font-mono">
                       {formatTimeMs(row.officialTimeMs)}
                     </TableCell>
+                    {/* Unrateable and DQ/NS both show a dash. A 0 here would
+                        read as a real score of nought. */}
+                    <TableCell className="font-mono">{formatWaPoints(row.waPoints)}</TableCell>
                     <TableCell>{row.finishPlace ?? "—"}</TableCell>
                     <TableCell className="font-mono">
                       {formatTimeMs(row.splitTimeMs)}

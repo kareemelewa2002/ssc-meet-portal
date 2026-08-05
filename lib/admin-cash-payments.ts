@@ -1,6 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
-import { RACE_PRICE_EGP } from "@/lib/event-registration";
 
 export interface PendingPaymentAthlete {
   athleteId: string;
@@ -12,12 +11,22 @@ export interface PendingPaymentAthlete {
   raceNames: string[];
   raceCount: number;
   totalEgp: number;
+  /** False when at least one of this swimmer's races is in a session with no
+   * configured price, so `totalEgp` is short of what they actually owe. The
+   * desk must not read the figure as final. */
+  pricingComplete: boolean;
 }
+
+type EventEmbed = {
+  name: string;
+  event_order: number;
+  sessions: { session_number: number } | { session_number: number }[] | null;
+};
 
 interface RawEntryRow {
   id: string;
   athlete_id: string;
-  events: { name: string; event_order: number } | { name: string; event_order: number }[] | null;
+  events: EventEmbed | EventEmbed[] | null;
   athletes:
     | {
         team_id: string | null;
@@ -34,8 +43,19 @@ interface RawEntryRow {
 
 /** Every athlete with at least one "pending_payment" entry — grouped so an
  * admin can verify one cash handoff at the meet desk and clear every race
- * that swimmer entered in a single tap, rather than confirming per-race. */
-export async function fetchPendingCashPayments(): Promise<PendingPaymentAthlete[]> {
+ * that swimmer entered in a single tap, rather than confirming per-race.
+ *
+ * `priceBySession` maps session_number -> individual race price, from
+ * meet_settings (see /admin/control-unit). A MAP rather than a single price
+ * because pricing is per session: a swimmer entered in sessions 1 and 3 owes
+ * each session's rate, and one scalar would silently charge them twice at the
+ * wrong one. Nothing is defaulted — a race whose session has no configured
+ * price is counted but left unpriced, and the row is flagged
+ * `pricingComplete: false` so the desk sees an incomplete total instead of a
+ * confident wrong one. */
+export async function fetchPendingCashPayments(
+  priceBySession: ReadonlyMap<number, number>,
+): Promise<PendingPaymentAthlete[]> {
   try {
     const supabase = createClient();
     const { data, error } = await supabase
@@ -43,7 +63,7 @@ export async function fetchPendingCashPayments(): Promise<PendingPaymentAthlete[
       .select(
         // Qualify the FK — athletes has two (user_id and parent_id), so a
         // bare "users(...)" embed is ambiguous to PostgREST (PGRST201).
-        "id, athlete_id, events ( name, event_order ), athletes ( team_id, users!athletes_user_id_fkey ( full_name ), teams ( name ) )",
+        "id, athlete_id, events ( name, event_order, sessions ( session_number ) ), athletes ( team_id, users!athletes_user_id_fkey ( full_name ), teams ( name ) )",
       )
       .eq("status", "pending_payment");
     if (error || !data) return [];
@@ -63,12 +83,23 @@ export async function fetchPendingCashPayments(): Promise<PendingPaymentAthlete[
         raceNames: [],
         raceCount: 0,
         totalEgp: 0,
+        pricingComplete: true,
       };
       existing.entryIds.push(row.id);
       const event = firstOf(row.events);
       if (event?.name) existing.raceNames.push(event.name);
       existing.raceCount += 1;
-      existing.totalEgp += RACE_PRICE_EGP;
+
+      const sessionNumber = event ? firstOf(event.sessions)?.session_number : undefined;
+      const price = sessionNumber == null ? undefined : priceBySession.get(sessionNumber);
+      if (price == null) {
+        // Counted, deliberately not priced. Adding a zero would read as a free
+        // race; adding some other session's price would read as an authorised
+        // charge. Neither is true, so the shortfall is flagged instead.
+        existing.pricingComplete = false;
+      } else {
+        existing.totalEgp += price;
+      }
       byAthlete.set(row.athlete_id, existing);
     }
 

@@ -11,6 +11,7 @@ import { SkinsDeckSection } from "@/components/referee/skins-deck-section";
 import { resolveSkinsEventId } from "@/lib/skins-qualification";
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
+import { compareInRunningOrder } from "@/lib/category-order";
 import type { Gender, HeatGroup, PublishStatus, SessionRow } from "@/lib/supabase/types";
 import { heatTitle } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -237,13 +238,11 @@ export default function RefereePage() {
             lanes: (lanesByHeat.get(h.id) ?? []).sort((a, b) => a.laneNumber - b.laneNumber),
           };
         })
-        // The order they are actually swum.
-        .sort(
-          (a, b) =>
-            (a.sessionNumber ?? 0) - (b.sessionNumber ?? 0) ||
-            a.eventOrder - b.eventOrder ||
-            a.heatNumber - b.heatNumber,
-        );
+        // The order they are actually swum: session, race, then the category
+        // running order (14&U Women -> 14&U Men -> 17&U/Open Women -> Men).
+        // Ordering only — every heat stays scoreable at any time, so one
+        // disputed 14 & Under heat can never stall the rest of the meet.
+        .sort(compareInRunningOrder);
 
       setDeck(built);
     } catch {

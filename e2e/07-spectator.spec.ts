@@ -115,7 +115,7 @@ test.describe("Spectator, leaderboards & navigation", () => {
 
         const badge = page.getByText(roleLabel, { exact: true });
         // credEmail's live role may still be a pre-scope-lock value (e.g.
-        // coach.riptide is stale as 'team_captain', a role that no longer
+        // captain.riptide is stale as 'team_captain', a role that no longer
         // exists in ROLE_LABELS) until schema.sql/seed-demo.sql are
         // re-applied — the badge renders blank rather than showing a
         // stale/wrong label, which is correct, but leaves nothing to assert.
@@ -148,26 +148,24 @@ test.describe("Spectator, leaderboards & navigation", () => {
     });
 
     await login(page, CREDENTIALS.parent1);
-    await page.goto("/");
-    await page.waitForTimeout(1000);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
 
     // Home no longer surfaces a specific meet — picking one happens on
     // /meets, so the spectator path is Home -> Meets -> that meet's heats.
     const meetsLink = page.locator('main a[href="/meets"]').first();
-    await expect(meetsLink).toBeVisible();
+    await expect(meetsLink).toBeVisible({ timeout: 20_000 });
     await meetsLink.click();
-    await page.waitForURL("**/meets", { timeout: 10_000 });
-    await page.waitForTimeout(1500);
+    await page.waitForURL("**/meets", { timeout: 15_000 });
 
     const heatSheetLink = page.locator('a[href^="/events/"][href$="/heats"]').first();
-    await expect(heatSheetLink).toBeVisible();
+    await expect(heatSheetLink).toBeVisible({ timeout: 20_000 });
     await heatSheetLink.click();
-    await page.waitForURL(/\/events\/\d+\/heats/, { timeout: 10_000 });
-    await page.waitForTimeout(1000);
+    await page.waitForURL(/\/events\/\d+\/heats/, { timeout: 15_000 });
 
-    await page.goto("/leaderboards/all-time");
-    await page.waitForTimeout(1000);
-    await expect(page.getByRole("heading", { name: "All-Time SSC Records" })).toBeVisible();
+    await page.goto("/leaderboards/all-time", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "All-Time SSC Records" })).toBeVisible({
+      timeout: 20_000,
+    });
 
     expect(errors.filter((e) => !/favicon/i.test(e))).toEqual([]);
   });

@@ -1,6 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
 import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
-import { RACE_PRICE_EGP } from "@/lib/event-registration";
 import type { AgeGroup, EntryStatus, Gender } from "@/lib/supabase/types";
 
 export const RELAY_LEGS = 4;
@@ -47,9 +46,11 @@ export function genderRequirement(eventName: string): GenderRequirement {
   return { male: 2, female: 2 };
 }
 
-/** One race fee per swimmer, so a full squad is four fees. */
-export function relaySquadFeeEgp(legCount: number = RELAY_LEGS): number {
-  return legCount * RACE_PRICE_EGP;
+/** One race fee per swimmer, so a full squad is four fees.
+ * `relayPriceEgp` is meet_settings.relay_event_price_egp — per SWIMMER, which
+ * is why it multiplies by the leg count rather than standing alone. */
+export function relaySquadFeeEgp(relayPriceEgp: number, legCount: number = RELAY_LEGS): number {
+  return legCount * relayPriceEgp;
 }
 
 /** A..Z by creation order within (event, team). */

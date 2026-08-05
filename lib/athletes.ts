@@ -9,6 +9,7 @@ import type {
 import { firstOf } from "@/lib/live-heats";
 import { calculateAge } from "@/lib/age";
 import { describeError, failure, ok, type FetchResult } from "@/lib/fetch-policy";
+import { fetchWaBaseTimes, waPointsFor } from "@/lib/wa-points";
 
 /**
  * Display names for the age boards.
@@ -55,6 +56,10 @@ export interface PersonalBestView {
   volumeName?: string;
   // Age when this PB was set — never the athlete's current age.
   ageAtSwim: number;
+  /** World Aquatics points for this swim. null means the event has no base
+   * time on file (relays, Skins, the switch events) and is unrateable by
+   * design — render an em dash, never a 0. */
+  waPoints: number | null;
 }
 
 export interface CareerResultView {
@@ -73,6 +78,9 @@ export interface CareerResultView {
   // Age at this specific race (derived from date_of_birth + the volume's
   // meet_date) — never the athlete's current live age.
   ageAtSwim: number;
+  /** World Aquatics points, or null for an unrateable event / a DQ or NS
+   * (neither produced a time). Never 0 — see lib/wa-points.ts. */
+  waPoints: number | null;
 }
 
 export interface SeriesStandingView {
@@ -140,8 +148,8 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 23800, volumeName: "SSC Vol. 2" , ageAtSwim: 22 },
-      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 26500, volumeName: "SSC Vol. 1" , ageAtSwim: 21 },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 23800, volumeName: "SSC Vol. 2" , ageAtSwim: 22, waPoints: null },
+      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 26500, volumeName: "SSC Vol. 1" , ageAtSwim: 21, waPoints: null },
     ],
     careerResults: [
       {
@@ -158,6 +166,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T09:30:00Z",
         ageAtSwim: 21,
+        waPoints: null,
       },
       {
         id: "cr-2",
@@ -173,6 +182,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T14:10:00Z",
         ageAtSwim: 21,
+        waPoints: null,
       },
     ],
   },
@@ -205,7 +215,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 26800, volumeName: "SSC Vol. 1" , ageAtSwim: 16 },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 26800, volumeName: "SSC Vol. 1" , ageAtSwim: 16, waPoints: null },
     ],
     careerResults: [
       {
@@ -222,6 +232,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T11:00:00Z",
         ageAtSwim: 16,
+        waPoints: null,
       },
     ],
   },
@@ -245,7 +256,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 27100, volumeName: "SSC Vol. 1" , ageAtSwim: 15 },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 27100, volumeName: "SSC Vol. 1" , ageAtSwim: 15, waPoints: null },
     ],
     careerResults: [
       {
@@ -262,6 +273,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: "false_start",
         swamAt: "2026-10-02T11:05:00Z",
         ageAtSwim: 15,
+        waPoints: null,
       },
       {
         id: "cr-5",
@@ -277,6 +289,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T11:20:00Z",
         ageAtSwim: 15,
+        waPoints: null,
       },
     ],
   },
@@ -300,7 +313,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 24500, volumeName: "SSC Vol. 1" , ageAtSwim: 19 },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 24500, volumeName: "SSC Vol. 1" , ageAtSwim: 19, waPoints: null },
     ],
     careerResults: [
       {
@@ -317,6 +330,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T09:31:00Z",
         ageAtSwim: 19,
+        waPoints: null,
       },
     ],
   },
@@ -349,7 +363,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 31200, volumeName: "SSC Vol. 1" , ageAtSwim: 13 },
+      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 31200, volumeName: "SSC Vol. 1" , ageAtSwim: 13, waPoints: null },
     ],
     careerResults: [
       {
@@ -366,6 +380,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T14:00:00Z",
         ageAtSwim: 13,
+        waPoints: null,
       },
       {
         id: "cr-8",
@@ -381,6 +396,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T09:40:00Z",
         ageAtSwim: 13,
+        waPoints: null,
       },
     ],
   },
@@ -404,7 +420,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 25000, volumeName: "SSC Vol. 1" , ageAtSwim: 24 },
+      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 25000, volumeName: "SSC Vol. 1" , ageAtSwim: 24, waPoints: null },
     ],
     careerResults: [
       {
@@ -421,6 +437,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         dqCode: null,
         swamAt: "2026-10-02T09:32:00Z",
         ageAtSwim: 24,
+        waPoints: null,
       },
     ],
   },
@@ -624,6 +641,11 @@ export async function fetchAthleteProfile(
       heat_lanes: Array<{ results: CareerResultEmbed | CareerResultEmbed[] | null }> | null;
     };
 
+    // Twelve public rows, fetched once and applied to every line of the
+    // ledger. The alternative — one world_aquatics_points() RPC per result —
+    // is a round trip per table row.
+    const baseTimes = (await fetchWaBaseTimes()).data;
+
     const careerResults: CareerResultView[] = [];
     const pbMap = new Map<string, PersonalBestView>();
 
@@ -643,6 +665,18 @@ export async function fetchAthleteProfile(
         const result = firstOf(lane.results);
         if (!result || result.status !== "published") continue;
 
+        // A DQ or NS has no time, so it has no points either — null, which
+        // renders as an em dash. Zero would be a claim about the swim.
+        const waPoints =
+          result.result_outcome === "valid"
+            ? waPointsFor(baseTimes, {
+                stroke: event.stroke,
+                distanceM: event.distance_m,
+                gender: athleteRow.gender,
+                officialTimeMs: result.official_time_ms,
+              })
+            : null;
+
         careerResults.push({
           id: result.id,
           volumeName: volume?.name ?? "SSC",
@@ -657,6 +691,7 @@ export async function fetchAthleteProfile(
           dqCode: result.dq_code,
           swamAt: result.created_at,
           ageAtSwim,
+          waPoints,
         });
 
         if (result.result_outcome === "valid" && result.official_time_ms != null) {
@@ -669,6 +704,7 @@ export async function fetchAthleteProfile(
               bestTimeMs: result.official_time_ms,
               volumeName: volume?.name,
               ageAtSwim,
+              waPoints,
             });
           }
         }

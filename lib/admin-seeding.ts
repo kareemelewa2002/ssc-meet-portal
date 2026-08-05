@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { firstOf } from "@/lib/live-heats";
+import { compareByCategory } from "@/lib/category-order";
 import { seedEvent, type DraftHeat, type SeedableEntry } from "@/lib/seeding";
 import type { AgeGroup, Gender, HeatGroup } from "@/lib/supabase/types";
 
@@ -293,6 +294,10 @@ export async function fetchHeatPreview(eventId: string): Promise<PreviewHeat[]> 
     .order("heat_number", { ascending: true });
   if (error || !data) return [];
 
+  // heat_number alone is not the running order — it restarts per (heat group,
+  // gender), so ordering by it interleaves the boards. Sort by the category
+  // running order instead, the same order /referee and the spectator heat
+  // sheets use, so a printed sheet matches what is called on deck.
   return (data as unknown as RawPreviewHeat[]).map((heat) => ({
     heatId: heat.id,
     heatNumber: heat.heat_number,
@@ -315,7 +320,7 @@ export async function fetchHeatPreview(eventId: string): Promise<PreviewHeat[]> 
         };
       })
       .sort((a, b) => a.laneNumber - b.laneNumber),
-  }));
+  })).sort(compareByCategory);
 }
 
 /** Swaps which entry occupies two lanes (within the same or different heats)

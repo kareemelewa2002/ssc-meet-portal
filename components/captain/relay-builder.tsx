@@ -10,6 +10,7 @@ import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { useToast } from "@/hooks/use-toast";
 import { fetchVolumeByNumber } from "@/lib/volumes";
+import { fetchMeetSettings, settingsForSession, type MeetSettings, type SessionNumber } from "@/lib/meet-settings";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
 import {
   RELAY_LEGS,
@@ -43,6 +44,9 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
   const toast = useToast();
   const [volumeId, setVolumeId] = useState<string | null>(null);
   const [volumeName, setVolumeName] = useState<string>("this meet");
+  // Per-swimmer relay fee from the Control Unit. Null means it could not be
+  // read, and the fee line says so rather than quoting a stale figure.
+  const [settings, setSettings] = useState<MeetSettings[]>([]);
   const [teamId, setTeamId] = useState<string>(teams[0]?.id ?? "");
   const [events, setEvents] = useState<RelayEvent[]>([]);
   const [eventId, setEventId] = useState<string>("");
@@ -56,6 +60,16 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
 
   const event = events.find((e) => e.id === eventId) ?? null;
 
+  // Relay pricing is per session, so the fee follows the SELECTED event's
+  // session rather than the meet as a whole — a squad in the evening Skins
+  // session may not cost what a morning relay costs. null until an event is
+  // chosen, and the quote is withheld rather than guessed.
+  const relayPriceEgp =
+    event && volumeId && settings.length > 0
+      ? settingsForSession(settings, volumeId, event.sessionNumber as SessionNumber)
+          .relaySwimmerPriceEgp
+      : null;
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -64,10 +78,14 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
       if (cancelled || !vol.data) return;
       setVolumeId(vol.data.id);
       setVolumeName(vol.data.name);
-      const ev = await fetchRelayEvents(vol.data.id);
+      const [ev, cfg] = await Promise.all([
+        fetchRelayEvents(vol.data.id),
+        fetchMeetSettings(vol.data.id),
+      ]);
       if (cancelled) return;
       setEvents(ev.data);
-      setError(ev.error);
+      setSettings(cfg.data);
+      setError(ev.error ?? cfg.error);
       if (ev.data.length > 0) setEventId((prev) => prev || ev.data[0].id);
     })();
     return () => {
@@ -208,7 +226,9 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
               <Badge>{need.female} female</Badge>
               <Badge variant="outline">{AGE_GROUP_LABELS[ageGroup]}</Badge>
               <span className="text-muted-foreground">
-                {relaySquadFeeEgp()} EGP ({RELAY_LEGS} × race fee), payable at the desk
+                {relayPriceEgp == null
+                  ? "Squad fee unavailable — ask an admin at the desk"
+                  : `${relaySquadFeeEgp(relayPriceEgp)} EGP (${RELAY_LEGS} × ${relayPriceEgp} EGP race fee), payable at the desk`}
               </span>
             </div>
 

@@ -44,3 +44,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 .env.test
+
+# Agent worktrees and job scratch — full repo copies, never committed.
+.claude/

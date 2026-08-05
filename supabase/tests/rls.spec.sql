@@ -68,10 +68,14 @@ begin
       ('athlete01@ssc-demo.test', false, 'U14 athlete'),
       ('athlete13@ssc-demo.test', false, 'U17 athlete'),
       ('athlete25@ssc-demo.test', true,  'Open athlete'),
-      -- Captains a team, but has no athlete profile, so cannot FOUND one.
-      -- Captaincy and eligibility-to-found are deliberately different things;
-      -- conflating them once broke team creation outright.
-      ('coach.riptide@ssc-demo.test', false, 'team captain with no athlete profile'),
+      -- A seeded team captain. A captain IS an Open-age athlete who founded
+      -- the team, so eligibility must hold for them — this used to expect
+      -- false, back when the captain accounts had no athletes row at all and
+      -- so could never have created the teams they captain.
+      ('captain.riptide@ssc-demo.test', true, 'team captain (Open athlete)'),
+      -- A parent has no athlete profile and is not an admin: eligibility to
+      -- found a team is about being an Open-age swimmer, nothing else.
+      ('parent1@ssc-demo.test', false, 'parent with no athlete profile'),
       ('elewakareem2002@gmail.com', true, 'admin')
     ) as t(email, expected, label)
   loop
@@ -1521,6 +1525,307 @@ begin
 exception when others then
   perform set_config('role','postgres',true);
   perform ssc_test.check('DB-26','published-result lock', false, sqlerrm);
+end $$;
+
+-- =============================================================================
+-- DB-27 — meet_settings: everyone reads the price, only an admin sets it.
+-- =============================================================================
+-- The individual race price is quoted to a swimmer on the registration form
+-- before they have any special standing, so public read is deliberate. Write
+-- is admin-only for the obvious reason: a swimmer who could UPDATE this row
+-- could set their own entry fee to zero.
+--
+-- Read is checked as anon (a logged-out visitor), not merely as a signed-in
+-- athlete — "authenticated can read it" would pass even if the public policy
+-- were missing, since authenticated_view_* policies exist on other tables.
+do $$
+declare
+  v_volume uuid; v_athlete uuid; v_referee uuid; v_admin uuid;
+  v_price int; v_err text; v_after int;
+begin
+  perform set_config('role','postgres',true);
+
+  select id into v_volume from public.meet_volumes order by volume_number limit 1;
+  select u.id into v_athlete
+    from public.users u join public.athletes a on a.user_id = u.id
+    where u.role = 'athlete' order by u.id limit 1;
+  select id into v_referee from public.users where role='referee' order by id limit 1;
+  select id into v_admin   from public.users where role='admin'   order by id limit 1;
+
+  -- schema.sql seeds a row per (volume, session); without one nothing to test.
+  select individual_event_price_egp into v_price
+    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+  perform ssc_test.check('DB-27','every volume is seeded with a settings row',
+    v_price is not null, format('price=%s', v_price));
+
+  -- All THREE sessions, not just the first: the Control Unit opens a tab per
+  -- session, and a volume seeded with only session 1 would give two of those
+  -- tabs nothing to edit.
+  perform ssc_test.check('DB-27','all three sessions are seeded',
+    (select count(*) from public.meet_settings where meet_volume_id = v_volume) = 3,
+    format('rows=%s', (select count(*) from public.meet_settings where meet_volume_id = v_volume)));
+
+  perform ssc_test.check('DB-27','session_number is constrained to 1-3',
+    not exists (select 1 from public.meet_settings where session_number not in (1,2,3)),
+    'a session outside 1-3 exists');
+
+  perform ssc_test.check('DB-27','the seeded price is the 300 EGP column default',
+    v_price = 300, format('got %s', v_price));
+
+  -- 1. A logged-OUT visitor can read the price.
+  perform set_config('request.jwt.claim.sub', '', true);
+  perform set_config('request.jwt.claim.role', 'anon', true);
+  perform set_config('role','anon',true);
+  begin
+    select individual_event_price_egp into v_price
+      from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+    v_err := null;
+  exception when others then v_err := sqlerrm; v_price := null;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-27','anon can read the race price',
+    v_err is null and v_price = 300, format('%s (price %s)', coalesce(v_err,'ok'), v_price));
+
+  -- 2. An athlete can read it too (the registration form runs signed in).
+  perform ssc_test.act_as(v_athlete);
+  begin
+    select individual_event_price_egp into v_price
+      from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+    v_err := null;
+  exception when others then v_err := sqlerrm; v_price := null;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-27','an athlete can read the race price',
+    v_err is null and v_price = 300, format('%s (price %s)', coalesce(v_err,'ok'), v_price));
+
+  -- 3. An athlete CANNOT set their own entry fee.
+  perform ssc_test.act_as(v_athlete);
+  begin
+    update public.meet_settings set individual_event_price_egp = 0
+      where meet_volume_id = v_volume and session_number = 1;
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  select individual_event_price_egp into v_after
+    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+  -- RLS on UPDATE silently matches zero rows rather than raising, so the
+  -- stored value is the assertion — an error message alone would not prove
+  -- the write was refused.
+  perform ssc_test.check('DB-27','an athlete cannot change the race price',
+    v_after = 300, format('%s (stored %s)', v_err, v_after));
+
+  -- 4. Neither can a referee — deck officials score races, they do not price
+  --    them, and is_admin_or_referee() must not creep in here.
+  --    The value must satisfy the column's own check constraint (1..20): an
+  --    out-of-range 99 made this pass against a deliberately opened policy,
+  --    because the constraint rejected it before RLS was ever the reason.
+  perform ssc_test.act_as(v_referee);
+  begin
+    update public.meet_settings set athlete_event_limit = 6
+      where meet_volume_id = v_volume and session_number = 1;
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  select athlete_event_limit into v_after
+    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+  perform ssc_test.check('DB-27','a referee cannot change the event limit',
+    v_after = 4, format('%s (stored %s)', v_err, v_after));
+
+  -- 5. An athlete cannot INSERT a settings row for a volume that has none,
+  --    which would otherwise be a way around the UPDATE denial.
+  perform set_config('role','postgres',true);
+  delete from public.meet_settings
+    where meet_volume_id = (select id from public.meet_volumes order by volume_number desc limit 1);
+  perform ssc_test.act_as(v_athlete);
+  begin
+    insert into public.meet_settings (meet_volume_id, session_number, individual_event_price_egp)
+    values ((select id from public.meet_volumes order by volume_number desc limit 1), 1, 0);
+    v_err := 'no error raised';
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-27','an athlete cannot insert a settings row',
+    v_err ilike '%row-level security%', v_err);
+
+  -- 6. The admin route works — proving 3, 4 and 5 are role gates rather than
+  --    a table nobody can write at all.
+  perform ssc_test.act_as(v_admin);
+  begin
+    update public.meet_settings
+      set individual_event_price_egp = 450, athlete_event_limit = 6
+      where meet_volume_id = v_volume;
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform set_config('role','postgres',true);
+  select individual_event_price_egp into v_after
+    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+  perform ssc_test.check('DB-27','an admin can change the race price',
+    v_err is null and v_after = 450, format('%s (stored %s)', coalesce(v_err,'ok'), v_after));
+
+  -- Restore, so later runs and other assertions see the seeded values. The
+  -- INSERT rebuilds whatever step 5 deleted — all three sessions, not one.
+  update public.meet_settings
+    set individual_event_price_egp = 300, athlete_event_limit = 4
+    where meet_volume_id = v_volume;
+  insert into public.meet_settings (meet_volume_id, session_number)
+  select v.id, n from public.meet_volumes v cross join (values (1),(2),(3)) as t(n)
+  on conflict (meet_volume_id, session_number) do nothing;
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-27','meet_settings access control', false, sqlerrm);
+end $$;
+
+-- =============================================================================
+-- DB-28 — category_sort_order(): the running order of the four heat buckets.
+-- =============================================================================
+-- Mirrored in TypeScript by lib/category-order.ts, which is what the three
+-- heat lists actually sort with. Asserted here so the two cannot drift: a SQL
+-- copy that disagreed would order any server-side listing differently from
+-- every screen.
+do $$
+declare v_order int[]; v_skins int[];
+begin
+  perform set_config('role','postgres',true);
+
+  select array_agg(o order by n) into v_order from (values
+    (1, public.category_sort_order('U13_14','female')),
+    (2, public.category_sort_order('U13_14','male')),
+    (3, public.category_sort_order('U17_OPEN','female')),
+    (4, public.category_sort_order('U17_OPEN','male'))
+  ) as t(n, o);
+
+  perform ssc_test.check('DB-28','U13_14 W -> U13_14 M -> U17_OPEN W -> U17_OPEN M',
+    v_order[1] < v_order[2] and v_order[2] < v_order[3] and v_order[3] < v_order[4],
+    format('%s', v_order));
+
+  perform ssc_test.check('DB-28','the four buckets are distinct',
+    (select count(distinct o) from unnest(v_order) o) = 4, format('%s', v_order));
+
+  -- A legacy heat with no gender sorts last within its OWN board, never
+  -- folded in with the men's — a pre-split mixed heat is not a men's heat.
+  perform ssc_test.check('DB-28','a genderless legacy heat sorts last within its board',
+    public.category_sort_order('U13_14', null) > public.category_sort_order('U13_14','male')
+    and public.category_sort_order('U13_14', null) < public.category_sort_order('U17_OPEN','female')
+    and public.category_sort_order('U17_OPEN', null) > public.category_sort_order('U17_OPEN','male'),
+    format('U13_14 null=%s, U17_OPEN null=%s',
+      public.category_sort_order('U13_14', null),
+      public.category_sort_order('U17_OPEN', null)));
+
+  -- Skins rounds carry heat_group and gender like any other heat, so they
+  -- sort into the bucket their swimmers belong to rather than landing in a
+  -- block at one end of the programme.
+  select array_agg(public.category_sort_order(h.heat_group, h.gender) order by h.heat_number)
+    into v_skins
+  from public.heats h where h.skins_round is not null;
+  perform ssc_test.check('DB-28','Skins heats sort by the same four buckets',
+    v_skins is null or not exists (select 1 from unnest(v_skins) s where s not between 1 and 6),
+    format('%s', v_skins));
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-28','category_sort_order', false, sqlerrm);
+end $$;
+
+-- =============================================================================
+-- DB-29 — event_results carries DQ and NS, at the bottom and unplaced.
+-- =============================================================================
+-- The view used to filter to result_outcome = 'valid', so a disqualified
+-- swimmer was absent from the standings entirely — indistinguishable from one
+-- who never entered. They are now present with a NULL event_place (no place;
+-- a 0 would read as one) and is_ranked = false, which is what every table
+-- sorts on.
+do $$
+declare
+  v_admin uuid; v_event uuid; v_heat uuid;
+  v_entry_a uuid; v_entry_b uuid; v_lane_a uuid; v_lane_b uuid;
+  v_ath_a uuid; v_ath_b uuid;
+  v_place int; v_ranked boolean; v_rows int; v_points int;
+begin
+  perform set_config('role','postgres',true);
+
+  select id into v_admin from public.users where role='admin' order by id limit 1;
+
+  -- Reuse EXISTING entries, as DB-26 does: inserting one here would need the
+  -- admin role (enforce_entry_status_change) and would fire the heat
+  -- generator. Both entries must be unscored so this heat is the only thing
+  -- either swimmer has published in the event, and the event must be rateable
+  -- so the wa_points column can be asserted too.
+  select en.id, en.event_id, en.athlete_id into v_entry_a, v_event, v_ath_a
+  from public.entries en
+  join public.events ev  on ev.id = en.event_id
+  join public.athletes a on a.id = en.athlete_id
+  join public.wa_base_times b
+    on b.stroke = ev.stroke and b.distance_m = ev.distance_m and b.gender = a.gender
+  where ev.is_skins = false and ev.is_relay = false
+    and not exists (
+      select 1 from public.results r
+      join public.heat_lanes hl on hl.id = r.heat_lane_id
+      where hl.entry_id = en.id
+    )
+  order by en.id limit 1;
+
+  select en.id, en.athlete_id into v_entry_b, v_ath_b
+  from public.entries en
+  where en.event_id = v_event and en.id <> v_entry_a
+    and not exists (
+      select 1 from public.results r
+      join public.heat_lanes hl on hl.id = r.heat_lane_id
+      where hl.entry_id = en.id
+    )
+  order by en.id limit 1;
+
+  perform ssc_test.check('DB-29','precondition: two unscored entries in a rateable event',
+    v_event is not null and v_entry_a is not null and v_entry_b is not null,
+    format('event=%s a=%s b=%s', v_event, v_entry_a, v_entry_b));
+  if v_event is null or v_entry_a is null or v_entry_b is null then return; end if;
+
+  insert into public.heats (event_id, heat_group, gender, heat_number, heat_order, status)
+  values (v_event, 'U17_OPEN', 'male', 91, 91, 'published') returning id into v_heat;
+  insert into public.heat_lanes (heat_id, lane_number, entry_id)
+  values (v_heat, 4, v_entry_a) returning id into v_lane_a;
+  insert into public.heat_lanes (heat_id, lane_number, entry_id)
+  values (v_heat, 3, v_entry_b) returning id into v_lane_b;
+
+  perform ssc_test.act_as(v_admin);
+  insert into public.results (heat_lane_id, result_outcome, official_time_ms, status)
+  values (v_lane_a, 'valid', 29000, 'published');
+  insert into public.results (heat_lane_id, result_outcome, dq_code, status)
+  values (v_lane_b, 'dq', 'false_start', 'published');
+  perform set_config('role','postgres',true);
+
+  -- Boards are cumulative, so a swimmer produces up to three rows. Every one
+  -- of them must be unplaced for a DQ.
+  select count(*) into v_rows from public.event_results
+    where event_id = v_event and athlete_id = v_ath_b;
+  perform ssc_test.check('DB-29','the DQ appears in the standings rather than vanishing',
+    v_rows >= 1, format('rows=%s', v_rows));
+
+  select bool_and(event_place is null) into v_ranked
+  from public.event_results where event_id = v_event and athlete_id = v_ath_b;
+  perform ssc_test.check('DB-29','a DQ has no place on any board it belongs to',
+    v_ranked, format('all places null=%s', v_ranked));
+
+  select bool_and(is_ranked = false) into v_ranked
+  from public.event_results where event_id = v_event and athlete_id = v_ath_b;
+  perform ssc_test.check('DB-29','a DQ is never marked ranked', v_ranked,
+    format('all is_ranked false=%s', v_ranked));
+
+  select event_place, is_ranked, wa_points into v_place, v_ranked, v_points
+    from public.event_results
+    where event_id = v_event and athlete_id = v_ath_a
+    order by age_group limit 1;
+  perform ssc_test.check('DB-29','the valid swim is still placed and ranked',
+    v_place is not null and v_ranked = true, format('place=%s ranked=%s', v_place, v_ranked));
+
+  perform ssc_test.check('DB-29','a rateable valid swim carries World Aquatics points',
+    v_points is not null and v_points > 0, format('points=%s', v_points));
+
+  delete from public.heats where id = v_heat;
+exception when others then
+  perform set_config('role','postgres',true);
+  perform ssc_test.check('DB-29','event_results includes DQ/NS', false, sqlerrm);
 end $$;
 
 -- =============================================================================

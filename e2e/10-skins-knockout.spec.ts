@@ -16,9 +16,13 @@ import { clearSkinsNextRoundFixture, reopenSkinsRoundFixture } from "./fixtures/
  */
 
 async function openRefereeDeck(page: Page) {
-  await page.goto("/referee");
-  // The deck seeds each Skins board's opening round on load.
-  await page.waitForTimeout(4000);
+  // Avoid networkidle: the referee deck keeps a realtime channel open, so
+  // "idle" never arrives and the goto itself hits the test timeout.
+  await page.goto("/referee", { waitUntil: "domcontentloaded" });
+  // The deck loads qualifiers then materialises any missing Round of 6.
+  await expect(page.locator('[data-testid="skins-round-card"]').first()).toBeVisible({
+    timeout: 45_000,
+  });
 }
 
 test.describe("Skins knockout", () => {

@@ -451,7 +451,121 @@ create table if not exists public.sessions (
   unique (meet_volume_id, session_number)
 );
 
+-- Heat turnaround is deliberately NOT a column here: it is an admin dial, and
+-- it lives with the other dials on public.meet_settings, keyed by the same
+-- (meet_volume_id, session_number). This table answers "when does session 2
+-- run"; that one answers "how is session 2 configured".
 create index if not exists sessions_meet_volume_id_idx on public.sessions (meet_volume_id);
+
+-- An earlier draft of the Control Unit put turnaround here as well as on
+-- meet_settings. Two writable copies of one number is how they drift, so the
+-- column is dropped if a database picked it up.
+alter table public.sessions drop column if exists heat_turnaround_seconds;
+
+-- ---------------------------------------------------------------------------
+-- meet_settings — the Admin Control Unit's dials, one row per SESSION.
+-- ---------------------------------------------------------------------------
+-- Keyed (meet_volume_id, session_number) so each of the three sessions of a
+-- volume carries its own capacity, turnaround, event limit and pricing. A
+-- session of 100s does not turn over at the rate a session of 50s does, and a
+-- Skins session may be priced differently from a heats session, so a single
+-- meet-wide row would be wrong for at least one of them.
+--
+-- WHAT IS DELIBERATELY *NOT* HERE: session start and end times. public.sessions
+-- already owns them, already has the same (meet_volume_id, session_number)
+-- unique key, and is what every schedule/heat-sheet query already reads. A
+-- second writable copy here would be two sources of truth for one fact — the
+-- same mistake as the retired 'coach' role sitting alongside teams.captain_id,
+-- where the two could disagree and nothing said which one was right. The
+-- Control Unit edits the times on public.sessions; the default clock below is
+-- applied THERE, in the session backfill further down this file.
+--
+-- These columns are the source of truth for pricing. lib/event-registration.ts
+-- used to export a hard-coded RACE_PRICE_EGP = 300 that eight call sites
+-- multiplied by; the 300 survives ONLY as the column default below. A client
+-- that cannot read this table must show an error, never a plausible price:
+-- quoting a swimmer 300 EGP because the settings query FAILED is exactly the
+-- silent-fallback failure lib/fetch-policy.ts exists to prevent. A row that is
+-- simply ABSENT is a different thing — an unconfigured volume, not a failure —
+-- and lib/meet-settings.ts answers that with DEFAULT_MEET_SETTINGS.
+create table if not exists public.meet_settings (
+  id uuid primary key default gen_random_uuid(),
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
+  session_number integer not null check (session_number in (1, 2, 3)),
+  -- How many swimmers this session can physically take. Feeds the Control
+  -- Unit's derived event-limit ceiling; a planning figure, not a hard gate on
+  -- registration.
+  athlete_capacity integer not null default 200 check (athlete_capacity > 0),
+  -- Wall-clock budget for ONE heat: the swim plus clearing the water and
+  -- getting the next field behind the blocks. Mirrors
+  -- public.sessions.heat_turnaround_seconds, which stays the column the
+  -- seeding engine reads; this one is the Control Unit's planning dial.
+  heat_turnaround_seconds integer not null default 90
+    check (heat_turnaround_seconds > 0),
+  -- Cash on deck, per individual race entered.
+  individual_event_price_egp integer not null default 300
+    check (individual_event_price_egp >= 0),
+  -- Per SWIMMER on a relay squad, not per squad — a four-swimmer squad pays
+  -- four of these. Same shape as the individual fee so "one race fee per
+  -- swimmer" stays literally true (see lib/relays.ts relaySquadFeeEgp).
+  relay_swimmer_price_egp integer not null default 300
+    check (relay_swimmer_price_egp >= 0),
+  -- Replaces lib/event-registration.ts's flat MAX_EVENTS_PER_MEET = 4. The
+  -- Control Unit shows the admin the maximum the schedule can absorb, but
+  -- does NOT clamp this to it: the admin decides, the readout warns.
+  athlete_event_limit integer not null default 4
+    check (athlete_event_limit between 1 and 20),
+  updated_at timestamptz not null default now(),
+  unique (meet_volume_id, session_number)
+);
+
+create index if not exists meet_settings_meet_volume_id_idx
+  on public.meet_settings (meet_volume_id);
+
+comment on table public.meet_settings is
+  'Admin Control Unit settings, one row per (meet volume, session 1-3): '
+  'pricing, capacity, heat turnaround and the athlete event limit. Session '
+  'start/end times are NOT here — public.sessions owns those. The 300 EGP '
+  'defaults are the only surviving copy of the old hard-coded RACE_PRICE_EGP.';
+
+-- Backfill: every existing volume gets all three sessions' settings, and the
+-- three default clock windows land on public.sessions where the times live.
+-- Both are ON CONFLICT DO NOTHING, so re-running this file never overwrites a
+-- setting an admin has since changed — which is the whole point of doing it
+-- here rather than in seed-demo.sql, a file that deliberately destroys data.
+insert into public.meet_settings (meet_volume_id, session_number)
+select v.id, n
+from public.meet_volumes v
+cross join (values (1), (2), (3)) as s(n)
+on conflict (meet_volume_id, session_number) do nothing;
+
+-- The default clock window for each of the three sessions. Sessions that
+-- already exist keep the times they were scheduled with — this is the fallback
+-- used when a session is created without one, and the figure the Control Unit
+-- offers as a starting point. Kept in SQL rather than only in TypeScript so
+-- the database can create a well-formed session on its own.
+create or replace function public.default_session_window(p_session_number integer)
+returns table (start_time time, end_time time)
+language sql
+immutable
+as $$
+  -- s, e only: `select *` here would also return the `n` discriminator and
+  -- the function would not match its two-column return type.
+  select w.s, w.e from (values
+    (1, time '09:00', time '13:00'),
+    (2, time '13:30', time '17:00'),
+    (3, time '17:30', time '21:00')
+  ) as w(n, s, e)
+  where w.n = p_session_number;
+$$;
+
+comment on function public.default_session_window(integer) is
+  'Default start/end clock for sessions 1-3 (09:00-13:00, 13:30-17:00, '
+  '17:30-21:00). Existing sessions keep their scheduled times; this is the '
+  'starting point offered for a new one.';
+
+-- The set_updated_at trigger for this table is created alongside the others,
+-- below public.set_updated_at() itself.
 
 -- ---------------------------------------------------------------------------
 -- events
@@ -1574,6 +1688,10 @@ create or replace trigger meet_volumes_set_updated_at
   before update on public.meet_volumes
   for each row execute function public.set_updated_at();
 
+create or replace trigger meet_settings_set_updated_at
+  before update on public.meet_settings
+  for each row execute function public.set_updated_at();
+
 -- Only an admin may toggle team approval.
 create or replace function public.enforce_team_approval_change()
 returns trigger
@@ -2024,6 +2142,7 @@ alter table public.team_memberships enable row level security;
 alter table public.athletes enable row level security;
 alter table public.volume_team_affiliations enable row level security;
 alter table public.meet_volumes enable row level security;
+alter table public.meet_settings enable row level security;
 alter table public.sessions enable row level security;
 alter table public.events enable row level security;
 alter table public.entries enable row level security;
@@ -2182,6 +2301,19 @@ create policy "admins_full_access_meet_volumes" on public.meet_volumes
 drop policy if exists "public_view_meet_volumes" on public.meet_volumes;
 create policy "public_view_meet_volumes" on public.meet_volumes
   for select using (true);
+
+-- meet_settings is PUBLIC READ on purpose: the individual race price is
+-- quoted to a swimmer on the registration form before they have any special
+-- standing, so an anonymous visitor must be able to read it. Writes are
+-- admin-only — the Control Unit is an admin screen, and a swimmer who could
+-- edit this row could set their own entry fee to zero.
+drop policy if exists "public_view_meet_settings" on public.meet_settings;
+create policy "public_view_meet_settings" on public.meet_settings
+  for select using (true);
+
+drop policy if exists "admins_manage_meet_settings" on public.meet_settings;
+create policy "admins_manage_meet_settings" on public.meet_settings
+  for all using (public.is_admin()) with check (public.is_admin());
 
 drop policy if exists "admins_full_access_sessions" on public.sessions;
 create policy "admins_full_access_sessions" on public.sessions
@@ -2406,6 +2538,53 @@ create or replace trigger recompute_heat_finish_places_trigger
 --   * NT swimmers seed ahead of timed swimmers within a bucket (oldest first),
 --     matching how an unseeded entry is treated on deck.
 --   * Lanes fill from the middle out: 4, 3, 5, 2, 1, 6.
+--
+-- ---------------------------------------------------------------------------
+-- CATEGORY RUNNING ORDER
+-- ---------------------------------------------------------------------------
+-- The order the deck calls the boards of one event:
+--
+--   14 & Under Women -> 14 & Under Men -> 17 & Under/Open Women -> ... Men
+--
+-- Buckets are (heat_group, gender), NOT (age_group, gender). age_group has
+-- three values, but ordinary heats only ever carry heat_group, which folds
+-- 17 & Under in with Open — so "Open" in the running order means the combined
+-- U17_OPEN board, and there are four buckets, not six.
+--
+-- Skins heats fall out of this for free: materialise_skins_heat() sets
+-- heat_group ('U14' -> U13_14, everything else -> U17_OPEN) and gender like
+-- any other heat, so a Skins round sorts into the same bucket its swimmers
+-- would sort into. Within a bucket, skins_heat_number() already encodes
+-- category tens + round units, so U17 rounds precede Open rounds and each
+-- board runs 6 -> 4 -> 2 with its swim-off directly after the round it
+-- settles. Nothing special-cases Skins, and nothing dumps it at one end.
+--
+-- ORDERING ONLY. This decides the sequence heats are LISTED in. It is
+-- deliberately not a gate: a referee may still score any heat at any time,
+-- because a meet that deadlocks behind one disputed 14 & Under heat is worse
+-- than a meet scored slightly out of order.
+--
+-- Gender is nullable on legacy heats seeded before male and female were split
+-- into separate races. Those sort last within their own board rather than
+-- being silently folded into the men's, which would misstate what they are.
+create or replace function public.category_sort_order(
+  p_heat_group public.heat_group,
+  p_gender public.gender
+)
+returns integer
+language sql
+immutable
+as $$
+  select (case p_heat_group when 'U13_14' then 0 else 3 end)
+       + (case p_gender when 'female' then 1 when 'male' then 2 else 3 end);
+$$;
+
+comment on function public.category_sort_order(public.heat_group, public.gender) is
+  'Running order of the four heat buckets: U13_14 Women (1), U13_14 Men (2), '
+  'U17_OPEN Women (4), U17_OPEN Men (5). 3 and 6 are legacy heats with no '
+  'gender, which sort last within their own board. Ordering only — never a '
+  'gate on scoring.';
+
 -- ---------------------------------------------------------------------------
 -- WORLD AQUATICS POINTS
 -- ---------------------------------------------------------------------------
@@ -3410,12 +3589,21 @@ create trigger generate_heats_on_confirm_update
 -- Open. So one result produces up to three rows, one per board it belongs to.
 --
 -- Ranking is rank(), so equal times share a place and skip the next (1,1,3).
+--
+-- DQ AND NS ARE IN THIS VIEW. They used to be filtered out entirely, which
+-- meant a disqualified swimmer did not appear in the standings at all —
+-- indistinguishable from never having entered. They now carry a NULL
+-- event_place (they have no place; a 0 would read as one) and NULL time, and
+-- every consumer sorts them below all valid swims. `is_ranked` is the flag to
+-- sort on; see compareResultStanding() in lib/results.ts for the mirror.
 drop view if exists public.event_results;
 create or replace view public.event_results as
 with scored as (
   select
     ev.id                                             as event_id,
     ev.name                                           as event_name,
+    ev.stroke,
+    ev.distance_m,
     ev.session_id,
     s.meet_volume_id,
     coalesce(en.age_group_at_entry, a.age_group)      as own_age_group,
@@ -3428,7 +3616,14 @@ with scored as (
     hl.lane_number,
     r.official_time_ms,
     r.result_outcome,
-    r.dq_code
+    r.dq_code,
+    -- A swim only earns a place if it produced a time. DQ and NS never do.
+    (r.result_outcome = 'valid' and r.official_time_ms is not null) as is_ranked,
+    -- NULL for relays, Skins and the switch events, which have no base time
+    -- on file and are deliberately unrateable — callers must render that as
+    -- an em dash, never as zero points.
+    public.world_aquatics_points(ev.stroke, ev.distance_m, a.gender, r.official_time_ms)
+                                                      as wa_points
   from public.results r
   join public.heat_lanes hl on hl.id = r.heat_lane_id
   join public.heats h       on h.id = hl.heat_id
@@ -3439,8 +3634,7 @@ with scored as (
   join public.users u       on u.id = a.user_id
   left join public.teams t  on t.id = a.team_id
   where r.status = 'published'
-    and r.result_outcome = 'valid'
-    and r.official_time_ms is not null
+    and r.result_outcome is not null
 ),
 categorised as (
   select scored.*, cat.age_group, (cat.age_group <> scored.own_age_group) as is_open_entry
@@ -3484,16 +3678,25 @@ select
   official_time_ms,
   result_outcome,
   dq_code,
-  rank() over (
-    partition by event_id, age_group, gender
-    order by official_time_ms asc
-  )                                                 as event_place
+  is_ranked,
+  wa_points,
+  -- Partitioning on is_ranked as well restarts the numbering for the
+  -- unranked group, and the CASE then discards it: a DQ has no place, and
+  -- giving it "1" (or "0") would state something untrue about the swim.
+  case when is_ranked then
+    rank() over (
+      partition by event_id, age_group, gender, is_ranked
+      order by official_time_ms asc
+    )
+  end                                               as event_place
 from categorised;
 
 comment on view public.event_results is
   'Overall per-event standings across ALL heats, partitioned by event x age '
   'group x gender. Distinct from results.finish_place, which ranks only '
-  'within a single heat.';
+  'within a single heat. Includes DQ and NS rows with a NULL event_place and '
+  'is_ranked = false, so they can be shown honestly at the bottom of a '
+  'standing instead of vanishing from it.';
 
 
 -- ---------------------------------------------------------------------------
@@ -3712,11 +3915,22 @@ select v.id, s.session_number, s.name, v.meet_date, s.start_time, s.end_time
 from public.meet_volumes v
 cross join (
   values
-    (1, 'Session 1 — Morning', '09:00'::time, '12:00'::time),
-    (2, 'Session 2 — Afternoon', '14:00'::time, '17:00'::time),
-    (3, 'Session 3 — Skins', '17:00'::time, '19:00'::time)
+    (1, 'Session 1 — Morning', '09:00'::time, '13:00'::time),
+    (2, 'Session 2 — Afternoon', '13:30'::time, '17:00'::time),
+    (3, 'Session 3 — Skins', '17:30'::time, '21:00'::time)
 ) as s(session_number, name, start_time, end_time)
 where v.volume_number = 1
+on conflict (meet_volume_id, session_number) do nothing;
+
+-- Every volume gets all three Control Unit rows, on the column defaults.
+-- do-nothing, not do-update: re-running this file must never reset prices an
+-- admin has already changed on a live meet. This repeats the backfill next to
+-- the table definition deliberately — a volume created by the block above did
+-- not exist when that one ran.
+insert into public.meet_settings (meet_volume_id, session_number)
+select v.id, n
+from public.meet_volumes v
+cross join (values (1), (2), (3)) as t(n)
 on conflict (meet_volume_id, session_number) do nothing;
 
 -- System creator / first-boot admin. Subsequent admins must be promoted via

@@ -29,23 +29,29 @@ export function requireFixture(present: boolean, what: string) {
 /** Every account in supabase/seed-demo.sql shares this password. */
 export const SEED_PASSWORD = "Password123!";
 
-// Scope-locked to exactly 5 roles: admin, referee, coach, athlete, parent.
+// Scope-locked to exactly 4 roles: admin, referee, athlete, parent.
 // The Referee role is fully consolidated (lane assignment + time entry, one
 // account, no lane-claim/Chief tier) — there is no usher, entry_helper, or
-// chief_referee anymore.
+// chief_referee anymore. 'coach'/'team_captain' are retired too: a captain is
+// an Open-age (18+) athlete who founded the team, and captaincy is the
+// relationship teams.captain_id, never a role.
 export const CREDENTIALS = {
   admin: "elewakareem2002@gmail.com",
   // A single dedicated Referee account — seed-demo.sql no longer seeds a
   // pool of interchangeable referees.
   referee1: "referee1@ssc-demo.test",
-  captainRiptide: "coach.riptide@ssc-demo.test",
-  coachMarlins: "coach.marlins@ssc-demo.test",
+  // Open-age athletes who each captain one team (teams.captain_id).
+  captainRiptide: "captain.riptide@ssc-demo.test",
+  captainMarlins: "captain.marlins@ssc-demo.test",
   // The only seeded athlete with team_id = NULL. Every other athlete is on
   // a team, and the transfer lock blocks their join requests while a volume
   // is 'scheduled' — so this is the only account that can exercise the
   // join-request happy path.
   unattached: "athlete39@ssc-demo.test",
   parent1: "parent1@ssc-demo.test",
+  // The only parent with exactly one linked child (athlete40); parent1-3
+  // each have four.
+  parentSingleChild: "parent4@ssc-demo.test",
   approvedU14: "athlete01@ssc-demo.test",
   approvedU17: "athlete13@ssc-demo.test",
   approvedOpen: "athlete25@ssc-demo.test",
@@ -91,8 +97,13 @@ export async function logout(page: Page) {
   if (await trigger.count()) {
     await trigger.click();
     await page.getByText("Sign Out").click();
-    await page.waitForURL((url) => url.pathname === "/login", { timeout: 10_000 });
-  } else {
-    await page.context().clearCookies();
+    try {
+      await page.waitForURL((url) => url.pathname === "/login", { timeout: 15_000 });
+      return;
+    } catch {
+      // Fall through — a stuck menu must not strand the next login.
+    }
   }
+  await page.context().clearCookies();
+  await page.goto("/login", { waitUntil: "domcontentloaded" });
 }

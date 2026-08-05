@@ -111,3 +111,62 @@ export function scoreHeatResult(
 export function isEligibleForSkinsQualification(outcome: ResultOutcome): boolean {
   return outcome === "valid";
 }
+
+// ---------------------------------------------------------------------------
+// Standing order — where a swim sits in a result table.
+// ---------------------------------------------------------------------------
+
+/**
+ * Sort tier for one result: valid swims first, then DQ, then NS, then lanes
+ * with nothing recorded at all.
+ *
+ * This is the same fact scoreHeatResult() already encodes — DQ and NS score
+ * zero and NS is additionally excluded from Skins ranking — read as an
+ * ordering rather than as points. Deliberately NOT a second notion of
+ * validity: everything here keys off ResultOutcome, so a new outcome cannot
+ * be added to the scoring rules and silently forgotten by the tables.
+ *
+ * DQ ahead of NS because a DQ swam and an NS did not, which is the order a
+ * results sheet is read in. Both sit below every valid swim.
+ */
+export function resultStandingTier(outcome: ResultOutcome | null | undefined): number {
+  if (outcome === "valid") return 0;
+  if (outcome === "dq") return 1;
+  if (outcome === "no_show") return 2;
+  return 3;
+}
+
+export interface StandingSortable {
+  outcome: ResultOutcome | null | undefined;
+  /** Rank among the valid swims. Null on DQ/NS, which have no place. */
+  place?: number | null;
+  /** Tiebreaker when two rows share a tier and neither has a place. */
+  officialTimeMs?: number | null;
+}
+
+/**
+ * Comparator putting DQ and NS at the very bottom of a standing, below every
+ * valid swim, in every table that ranks results.
+ *
+ * Within the valid tier it ranks by place, falling back to time when a place
+ * has not been computed (a heat mid-entry) — never by lane number, which is
+ * where a swimmer was put, not how they finished.
+ */
+export function compareResultStanding(a: StandingSortable, b: StandingSortable): number {
+  const tier = resultStandingTier(a.outcome) - resultStandingTier(b.outcome);
+  if (tier !== 0) return tier;
+
+  const placeA = a.place ?? null;
+  const placeB = b.place ?? null;
+  if (placeA != null && placeB != null && placeA !== placeB) return placeA - placeB;
+  if (placeA != null && placeB == null) return -1;
+  if (placeA == null && placeB != null) return 1;
+
+  const timeA = a.officialTimeMs ?? null;
+  const timeB = b.officialTimeMs ?? null;
+  if (timeA != null && timeB != null && timeA !== timeB) return timeA - timeB;
+  if (timeA != null && timeB == null) return -1;
+  if (timeA == null && timeB != null) return 1;
+
+  return 0;
+}
