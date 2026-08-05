@@ -22,51 +22,36 @@ import {
   confirmCashPayment,
   type PendingPaymentAthlete,
 } from "@/lib/admin-cash-payments";
-import {
-  fetchMeetSettings,
-  individualPriceBySession,
-  uniformIndividualPriceEgp,
-} from "@/lib/meet-settings";
 import { fetchActiveVolume } from "@/lib/volumes";
+import { formatEgp, priceLineKindLabel } from "@/lib/pricing";
+import { tierLabel } from "@/lib/pricing";
+import { createClient } from "@/lib/supabase/client";
 
 export function CashPayments({ className }: { className?: string }) {
   const toast = useToast();
   const [rows, setRows] = useState<PendingPaymentAthlete[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [priceEgp, setPriceEgp] = useState<number | null>(null);
+  const [volumeId, setVolumeId] = useState<string | null>(null);
   const [busyAthleteId, setBusyAthleteId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // The desk cannot take money without knowing the price. No fallback:
-      // an admin collecting cash against a guessed figure is exactly the kind
-      // of plausible-looking wrong the fail-loud policy exists to prevent.
+      // The desk cannot take money without a volume to price against. No
+      // fallback: an admin collecting cash against a guessed figure is exactly
+      // the plausible-looking wrong the fail-loud policy exists to prevent.
       const vol = await fetchActiveVolume();
       if (!vol.data) {
         setError(vol.error ?? "No active meet volume, so there is no price to charge.");
         setRows([]);
         return;
       }
-      const settings = await fetchMeetSettings(vol.data.id);
-      if (settings.error) {
-        setError(settings.error);
-        setRows([]);
-        return;
-      }
-      if (settings.data.length === 0) {
-        setError(
-          `${vol.data.name} has no Control Unit settings — set the race price in /admin/control-unit before taking cash.`,
-        );
-        setRows([]);
-        return;
-      }
-      // Sessions may be priced differently, so each entry is charged its own
-      // session's rate. The headline price is shown only when all three agree.
-      setPriceEgp(uniformIndividualPriceEgp(settings.data));
-      setRows(await fetchPendingCashPayments(individualPriceBySession(settings.data)));
+      setVolumeId(vol.data.id);
+      // Each swimmer is priced by the database, at the tier in force right
+      // now — the price settles when they pay, not when they registered.
+      setRows(await fetchPendingCashPayments(vol.data.id));
     } catch (err) {
       setError(getErrorMessage(err, "Failed to load pending cash payments."));
     } finally {
@@ -82,12 +67,30 @@ export function CashPayments({ className }: { className?: string }) {
     setBusyAthleteId(row.athleteId);
     setError(null);
     try {
-      const res = await confirmCashPayment(row.entryIds);
+      if (!volumeId || !row.tier || !row.pricingComplete) {
+        throw new Error(
+          "This swimmer has no complete quote, so there is no figure to collect against.",
+        );
+      }
+
+      // Who took the money is part of the record, not decoration: a cash desk
+      // with no attribution cannot be reconciled afterwards.
+      const { data: auth } = await createClient().auth.getUser();
+
+      const res = await confirmCashPayment({
+        athleteId: row.athleteId,
+        meetVolumeId: volumeId,
+        entryIds: row.entryIds,
+        amountEgp: row.totalEgp,
+        tier: row.tier,
+        lines: row.lines,
+        collectedBy: auth.user?.id ?? null,
+      });
       if (!res.success) throw new Error(res.error ?? "Failed to confirm cash payment.");
       setRows((prev) => prev.filter((r) => r.athleteId !== row.athleteId));
       toast.success(
         "Payment confirmed — heats seeded",
-        `${row.athleteName} — ${row.totalEgp} EGP received. Their races are now in the heat sheet.`,
+        `${row.athleteName} — ${formatEgp(row.totalEgp)} received at the ${tierLabel(row.tier)} rate. Their races are now in the heat sheet.`,
       );
     } catch (err) {
       const message = getErrorMessage(err, "Failed to confirm cash payment.");
@@ -104,9 +107,10 @@ export function CashPayments({ className }: { className?: string }) {
         <div>
           <CardTitle>Cash on deck</CardTitle>
           <CardDescription>
-            Verify each swimmer&rsquo;s cash payment
-            {priceEgp != null ? ` (${priceEgp} EGP / race)` : ""} at the meet desk, then confirm
-            here. Confirming seeds their races into the heat sheet.
+            Verify each swimmer&rsquo;s cash payment at the meet desk, then confirm here.
+            Each total is their package at the tier in force right now, plus any race
+            surcharges and relay legs — expand a row to see the breakdown. Confirming
+            records what was collected and seeds their races into the heat sheet.
           </CardDescription>
         </div>
         <Button
@@ -166,10 +170,27 @@ export function CashPayments({ className }: { className?: string }) {
                         className="gap-1.5"
                       >
                         <Banknote className="size-3.5" />
-                        {row.pricingComplete
-                          ? `${row.totalEgp} EGP — Cash Payment Pending on Deck`
-                          : `At least ${row.totalEgp} EGP — a race is in a session with no price set`}
+                        {row.pricingComplete && row.tier
+                          ? `${formatEgp(row.totalEgp)} — ${tierLabel(row.tier)} rate, pending on deck`
+                          : "Price unavailable — do not collect until this loads"}
                       </Badge>
+                      {/* The derivation, not just the figure. A swimmer at the
+                          desk asking "why this much?" gets an answer without
+                          the admin having to recompute it — and what is shown
+                          here is exactly what gets stored as the receipt. */}
+                      {row.pricingComplete && row.lines.length > 0 && (
+                        <dl className="mt-2 space-y-0.5 text-[11px] text-muted-foreground">
+                          {row.lines.map((line, i) => (
+                            <div key={`${line.kind}-${i}`} className="flex justify-between gap-3">
+                              <dt className="truncate">
+                                <span className="opacity-60">{priceLineKindLabel(line.kind)}:</span>{" "}
+                                {line.label}
+                              </dt>
+                              <dd className="shrink-0 tabular-nums">{formatEgp(line.amountEgp)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

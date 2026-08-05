@@ -98,6 +98,11 @@ export interface RegisterableEvent {
   sessionNumber: number;
   /** Entered NT always — no seed time is asked for or accepted. */
   seedsAsNt: boolean;
+  /** Added on top of the athlete's package price for entering this race — a
+   * 400 IM costs more than a 50 Free. Per event, set in the Control Unit. */
+  surchargeEgp: number;
+  /** Maximum entries this race accepts, for the availability badge. */
+  capacityCap: number | null;
 }
 
 /** What the swimmer's seed time for one event will be, and why.
@@ -176,7 +181,7 @@ export async function fetchRegisterableEvents(meetVolumeId: string): Promise<Reg
     const sessionNumberById = new Map(sessions.map((s) => [s.id, s.session_number]));
     const { data: events, error } = await supabase
       .from("events")
-      .select("id, name, stroke, distance_m, session_id, is_skins, is_relay, seeds_as_nt")
+      .select("id, name, stroke, distance_m, session_id, is_skins, is_relay, seeds_as_nt, surcharge_egp, capacity_cap")
       .in("session_id", sessions.map((s) => s.id))
       .eq("is_skins", false)
       .eq("is_relay", false)
@@ -190,6 +195,11 @@ export async function fetchRegisterableEvents(meetVolumeId: string): Promise<Reg
       distanceM: e.distance_m,
       sessionNumber: sessionNumberById.get(e.session_id) ?? 0,
       seedsAsNt: e.seeds_as_nt ?? false,
+      // Null only on a row predating the column. Zero is the right reading —
+      // no surcharge configured means no surcharge charged, which is a real
+      // answer rather than a guess.
+      surchargeEgp: e.surcharge_egp ?? 0,
+      capacityCap: e.capacity_cap ?? null,
     }));
   } catch {
     return [];

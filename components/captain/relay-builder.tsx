@@ -10,7 +10,7 @@ import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { useToast } from "@/hooks/use-toast";
 import { fetchVolumeByNumber } from "@/lib/volumes";
-import { fetchMeetSettings, settingsForSession, type MeetSettings, type SessionNumber } from "@/lib/meet-settings";
+import { fetchMeetSettings, type MeetSettings } from "@/lib/meet-settings";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
 import {
   RELAY_LEGS,
@@ -46,7 +46,7 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
   const [volumeName, setVolumeName] = useState<string>("this meet");
   // Per-swimmer relay fee from the Control Unit. Null means it could not be
   // read, and the fee line says so rather than quoting a stale figure.
-  const [settings, setSettings] = useState<MeetSettings[]>([]);
+  const [settings, setSettings] = useState<MeetSettings | null>(null);
   const [teamId, setTeamId] = useState<string>(teams[0]?.id ?? "");
   const [events, setEvents] = useState<RelayEvent[]>([]);
   const [eventId, setEventId] = useState<string>("");
@@ -60,15 +60,12 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
 
   const event = events.find((e) => e.id === eventId) ?? null;
 
-  // Relay pricing is per session, so the fee follows the SELECTED event's
-  // session rather than the meet as a whole — a squad in the evening Skins
-  // session may not cost what a morning relay costs. null until an event is
-  // chosen, and the quote is withheld rather than guessed.
-  const relayPriceEgp =
-    event && volumeId && settings.length > 0
-      ? settingsForSession(settings, volumeId, event.sessionNumber as SessionNumber)
-          .relaySwimmerPriceEgp
-      : null;
+  // The relay fee is per SWIMMER, flat across the meet: it is not tiered and
+  // does not vary by session, so there is nothing to look up per event. null
+  // until the settings load, and the quote is withheld rather than guessed —
+  // a plausible price standing in for a failed read is the failure mode
+  // lib/fetch-policy.ts exists to prevent.
+  const relayPriceEgp = settings?.relaySwimmerPriceEgp ?? null;
 
   useEffect(() => {
     let cancelled = false;

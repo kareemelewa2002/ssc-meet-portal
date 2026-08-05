@@ -224,16 +224,45 @@ on conflict (meet_volume_id, session_number) do update
       start_time = excluded.start_time,
       end_time = excluded.end_time;
 
--- Control Unit dials, one row per session. DO NOTHING rather than DO UPDATE:
--- seed-demo.sql is destructive by design, but an admin's pricing is the one
--- thing here worth preserving across a reseed, and the column defaults already
--- give a fresh database the right values.
-insert into public.meet_settings (meet_volume_id, session_number)
-select mv.id, v.n
-from public.meet_volumes mv
-cross join (values (1), (2), (3)) as v(n)
+-- Control Unit dials, one row per volume, plus the pricing matrix and the tier
+-- windows. DO NOTHING rather than DO UPDATE throughout: seed-demo.sql is
+-- destructive by design, but an admin's pricing is the one thing here worth
+-- preserving across a reseed, and the column defaults already give a fresh
+-- database the right values.
+insert into public.meet_settings (meet_volume_id)
+select mv.id from public.meet_volumes mv
 where mv.volume_number = 1
-on conflict (meet_volume_id, session_number) do nothing;
+on conflict (meet_volume_id) do nothing;
+
+insert into public.pricing_packages (meet_volume_id, race_count, tier, price_egp)
+select mv.id, m.race_count, m.tier::public.pricing_tier, m.price_egp
+from public.meet_volumes mv
+cross join (values
+  (0, 'early_bird', 200), (0, 'standard', 300), (0, 'late', 400),
+  (1, 'early_bird', 200), (1, 'standard', 300), (1, 'late', 400),
+  (2, 'early_bird', 380), (2, 'standard', 560), (2, 'late', 740),
+  (3, 'early_bird', 540), (3, 'standard', 700), (3, 'late', 960),
+  (4, 'early_bird', 680), (4, 'standard', 900), (4, 'late', 1200)
+) as m(race_count, tier, price_egp)
+where mv.volume_number = 1
+on conflict (meet_volume_id, race_count, tier) do nothing;
+
+-- Vol. 1 is the fixture every spec registers against, so its tier windows are
+-- pinned around today rather than around meet_date: a demo database seeded
+-- months after the meet date would otherwise sit permanently in 'late', and
+-- every price assertion in the suite would depend on when it was run.
+insert into public.pricing_tiers (meet_volume_id, tier, starts_at, ends_at)
+select mv.id, w.tier::public.pricing_tier,
+       (current_date + w.starts_days)::timestamptz,
+       (current_date + w.ends_days)::timestamptz
+from public.meet_volumes mv
+cross join (values
+  ('early_bird', -60, -30),
+  ('standard',   -30,  30),
+  ('late',        30,  60)
+) as w(tier, starts_days, ends_days)
+where mv.volume_number = 1
+on conflict (meet_volume_id, tier) do nothing;
 
 -- Exact official Vol. 1 program. is_relay marks the 4x50/4x100 relay events
 -- (schedule-only — see the file header note); is_skins marks the single

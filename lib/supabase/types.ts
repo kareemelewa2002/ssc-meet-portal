@@ -51,7 +51,12 @@ export type AwardType = "best_swimmer" | "most_improved";
 
 export type ParentLinkStatus = "none" | "pending" | "verified";
 
-export type EntryStatus = "pending_payment" | "confirmed";
+/**
+ * 'hold_expired' is an unpaid entry whose capacity hold lapsed. The slot is
+ * released, but the entry survives — deleting it would make a swimmer's
+ * registration vanish with nothing left to reclaim.
+ */
+export type EntryStatus = "pending_payment" | "confirmed" | "hold_expired";
 
 export type AppSettingsRow = {
   id: boolean;
@@ -238,16 +243,147 @@ export type MeetVolumeRow = {
  * only the DB column default (see supabase/schema.sql). */
 /** One Control Unit row per (volume, session 1-3). Session start/end times are
  * NOT here — public.sessions owns those; see the table comment in schema.sql. */
+export type PricingTierValue = "early_bird" | "standard" | "late";
+
+export type EventAvailabilityValue = "available" | "selling_out_soon" | "full";
+
+export type NotificationCategoryValue =
+  | "team"
+  | "entry_payment"
+  | "waitlist"
+  | "results_schedule";
+
+export type WaitlistStatusValue =
+  | "waiting"
+  | "offered"
+  | "claimed"
+  | "expired"
+  | "withdrawn";
+
+export type EmailDeliveryStatusValue = "pending" | "sent" | "failed" | "skipped";
+
+/**
+ * One row per VOLUME. It was one row per session for a single release; pricing
+ * moved to packages counted across the whole meet, and turnaround moved to
+ * public.events, which left the per-session shape holding nothing.
+ */
 export type MeetSettingsRow = {
   id: string;
   meet_volume_id: string;
-  session_number: 1 | 2 | 3;
   athlete_capacity: number;
-  heat_turnaround_seconds: number;
-  individual_event_price_egp: number;
-  relay_swimmer_price_egp: number;
+  lane_count: number;
+  inter_session_break_minutes: number;
   athlete_event_limit: number;
+  registration_opens_at: string | null;
+  registration_closes_at: string | null;
+  late_registration_enabled: boolean;
+  hold_window_hours: number;
+  waitlist_claim_hours: number;
+  selling_out_threshold_percent: number;
+  default_event_capacity: number;
+  relay_swimmer_price_egp: number;
+  pinned_pricing_tier: PricingTierValue | null;
+  refund_percent: number;
+  refund_deadline_days: number | null;
+  refund_policy_note: string | null;
   updated_at: string;
+};
+
+export type PricingTierRow = {
+  id: string;
+  meet_volume_id: string;
+  tier: PricingTierValue;
+  starts_at: string;
+  ends_at: string;
+  created_at: string;
+};
+
+export type PricingPackageRow = {
+  id: string;
+  meet_volume_id: string;
+  /** 1-4 are the packages; 0 is the each-additional-race price. */
+  race_count: number;
+  tier: PricingTierValue;
+  price_egp: number;
+  updated_at: string;
+};
+
+export type RaceShapeTemplateRow = {
+  id: string;
+  distance_m: number | null;
+  stroke: string | null;
+  is_relay: boolean;
+  turnaround_seconds: number;
+  surcharge_egp: number;
+  updated_at: string;
+};
+
+export type EventWaitlistRow = {
+  id: string;
+  event_id: string;
+  athlete_id: string;
+  status: WaitlistStatusValue;
+  requested_at: string;
+  offered_at: string | null;
+  offer_expires_at: string | null;
+  resolved_at: string | null;
+};
+
+export type EntryPaymentRow = {
+  id: string;
+  athlete_id: string;
+  meet_volume_id: string;
+  tier: PricingTierValue;
+  amount_egp: number;
+  method: string;
+  external_reference: string | null;
+  collected_by: string | null;
+  collected_at: string;
+  note: string | null;
+};
+
+export type EntryPaymentItemRow = {
+  id: string;
+  payment_id: string;
+  entry_id: string | null;
+  kind: "package" | "surcharge" | "additional_race" | "relay";
+  label: string;
+  amount_egp: number;
+};
+
+export type NotificationRow = {
+  id: string;
+  user_id: string;
+  category: NotificationCategoryValue;
+  title: string;
+  body: string;
+  link_url: string | null;
+  metadata: Record<string, unknown>;
+  read_at: string | null;
+  created_at: string;
+};
+
+export type NotificationPreferenceRow = {
+  user_id: string;
+  category: NotificationCategoryValue;
+  email_enabled: boolean;
+  updated_at: string;
+};
+
+export type EmailOutboxRow = {
+  id: string;
+  notification_id: string | null;
+  user_id: string;
+  to_email: string;
+  subject: string;
+  body: string;
+  status: EmailDeliveryStatusValue;
+  is_digest: boolean;
+  scheduled_for: string;
+  attempts: number;
+  last_error: string | null;
+  sent_at: string | null;
+  created_at: string;
 };
 
 export type SessionRow = {
@@ -273,6 +409,14 @@ export type EventRow = {
   /** The 50m stroke-switch events: always entered NT, seeded from World
    * Aquatics points instead of a seed time. */
   seeds_as_nt: boolean;
+  /** Wall-clock budget for one heat of THIS race. Seeded from the race-shape
+   * template on insert, editable per event — a 50 sprint and a 400 IM do not
+   * clear the pool at the same rate. */
+  turnaround_seconds: number | null;
+  /** Added to the athlete's package price for entering this race. */
+  surcharge_egp: number | null;
+  /** Maximum entries this race accepts. */
+  capacity_cap: number | null;
   created_at: string;
 };
 
@@ -284,6 +428,8 @@ export type EntryRow = {
   is_nt: boolean;
   status: EntryStatus;
   age_group_at_entry: AgeGroup | null;
+  /** When an unpaid entry stops holding its capacity slot. Null once paid. */
+  hold_expires_at: string | null;
   created_at: string;
 };
 
@@ -457,6 +603,15 @@ export type Database = {
       volume_team_affiliations: Table<VolumeTeamAffiliationRow>;
       meet_volumes: Table<MeetVolumeRow>;
       meet_settings: Table<MeetSettingsRow>;
+      pricing_tiers: Table<PricingTierRow>;
+      pricing_packages: Table<PricingPackageRow>;
+      race_shape_templates: Table<RaceShapeTemplateRow>;
+      event_waitlist: Table<EventWaitlistRow>;
+      entry_payments: Table<EntryPaymentRow>;
+      entry_payment_items: Table<EntryPaymentItemRow>;
+      notifications: Table<NotificationRow>;
+      notification_preferences: Table<NotificationPreferenceRow>;
+      email_outbox: Table<EmailOutboxRow>;
       wa_base_times: Table<WaBaseTimeRow>;
       sessions: Table<SessionRow>;
       events: Table<EventRow>;
@@ -543,6 +698,73 @@ export type Database = {
           p_time_ms: number;
         };
         Returns: number | null;
+      };
+      active_pricing_tier: {
+        Args: { p_meet_volume_id: string };
+        Returns: PricingTierValue;
+      };
+      quote_athlete_entries: {
+        Args: {
+          p_athlete_id: string;
+          p_meet_volume_id: string;
+          p_include_statuses?: string[];
+        };
+        Returns: {
+          kind: "package" | "additional_race" | "surcharge" | "relay";
+          label: string;
+          entry_id: string | null;
+          amount_egp: number;
+          tier: PricingTierValue;
+        }[];
+      };
+      event_capacity: {
+        Args: { p_event_id: string };
+        Returns: {
+          capacity_cap: number;
+          paid_count: number;
+          held_count: number;
+          free_count: number;
+          availability: EventAvailabilityValue;
+        }[];
+      };
+      events_capacity_bulk: {
+        Args: { p_event_ids: string[] };
+        Returns: {
+          event_id: string;
+          capacity_cap: number;
+          paid_count: number;
+          held_count: number;
+          free_count: number;
+          availability: EventAvailabilityValue;
+        }[];
+      };
+      waitlist_position: {
+        Args: { p_event_id: string; p_athlete_id: string };
+        Returns: number | null;
+      };
+      reclaim_entry_slot: {
+        Args: { p_entry_id: string };
+        Returns: boolean;
+      };
+      claim_waitlist_offer: {
+        Args: { p_waitlist_id: string };
+        Returns: boolean;
+      };
+      sweep_expired_holds: {
+        Args: Record<string, never>;
+        Returns: {
+          holds_expired: number;
+          offers_made: number;
+          offers_lapsed: number;
+        }[];
+      };
+      offer_waitlist_slots: {
+        Args: { p_event_id: string };
+        Returns: number;
+      };
+      pending_cash_total: {
+        Args: { p_meet_volume_id: string };
+        Returns: { athlete_count: number; total_egp: number }[];
       };
     };
     Enums: {
