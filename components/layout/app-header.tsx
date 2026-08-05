@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 import type { UserRole } from "@/lib/supabase/types";
 
 export interface AppHeaderProps {
@@ -99,7 +100,11 @@ export function AppHeader({ title, className }: AppHeaderProps) {
         </h1>
       )}
 
-      <div className="shrink-0">
+      <div className="flex shrink-0 items-center gap-1">
+        {/* Sits OUTSIDE the account menu on purpose: a waitlist offer with a
+            24-hour clock should be one glance away, not two taps inside a
+            dropdown someone opens once a week. */}
+        {!loading && user && <NotificationBell />}
         {loading ? (
           <div className="size-9 animate-pulse rounded-full bg-muted" />
         ) : user ? (

@@ -25,6 +25,17 @@ import {
 } from "@/lib/event-registration";
 import { fetchMeetSettings, type MeetSettings } from "@/lib/meet-settings";
 import {
+  AVAILABILITY_LABELS,
+  availabilityVariant,
+  describeAvailability,
+  fetchEventCapacities,
+  joinWaitlist,
+  leaveWaitlist,
+  fetchAthleteWaitlist,
+  type EventCapacity,
+  type WaitlistEntry,
+} from "@/lib/capacity";
+import {
   fetchPricingMatrix,
   fetchTierWindows,
   activeTier,
@@ -40,6 +51,7 @@ import { CLOCK_TIME_ERROR, formatTimeMs, parseTimeToMs } from "@/lib/format";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
 import type { AgeGroup, MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { getErrorMessage } from "@/lib/utils";
 
 interface EventDraft {
   selected: boolean;
@@ -62,6 +74,9 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   const [settings, setSettings] = useState<MeetSettings | null>(null);
   const [matrix, setMatrix] = useState<PricingMatrixCell[]>([]);
   const [tierWindows, setTierWindows] = useState<TierWindow[]>([]);
+  const [capacities, setCapacities] = useState<Map<string, EventCapacity>>(new Map());
+  const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
+  const [waitlistBusy, setWaitlistBusy] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [events, setEvents] = useState<RegisterableEvent[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
@@ -97,8 +112,12 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           fetchTierWindows(volResult.data.id),
         ]);
         loadedEvents = ev;
+        // Capacity for every listed race in ONE round trip. Per-race calls
+        // would be one request per row on a twenty-race form.
+        const caps = await fetchEventCapacities(ev.map((e) => e.id));
         if (!cancelled) {
           setEvents(ev);
+          setCapacities(caps.data);
           setTeams(tm.data.filter((t) => t.approved_by_admin));
           setSettings(cfg.data);
           setMatrix(mx.data);
@@ -165,6 +184,11 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           loadedEvents.map((e) => e.id),
         );
         if (!cancelled) setEnteredEventIds(entered);
+
+        // Queue standing, so a race this swimmer is already waiting on reads
+        // "Waiting — #3" rather than offering to join a second time.
+        const queued = await fetchAthleteWaitlist(athleteRow.id);
+        if (!cancelled) setWaitlist(queued.data);
 
         // From volume 2 the seed time comes from the swimmer's own history,
         // so the form shows what will be used instead of asking for it.
@@ -320,6 +344,36 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   };
 
   const selectedCount = Object.values(drafts).filter((d) => d.selected).length;
+
+  /**
+   * Join or leave a full race's queue.
+   *
+   * Position comes back from the database rather than being counted here: the
+   * queue moves while the page is open, and a number computed client-side goes
+   * stale the moment someone ahead withdraws.
+   */
+  const toggleWaitlist = async (eventId: string) => {
+    if (!athlete) return;
+    setWaitlistBusy(eventId);
+    setError(null);
+    try {
+      const existing = waitlist.find((w) => w.eventId === eventId);
+      if (existing) {
+        const res = await leaveWaitlist(eventId, athlete.id);
+        if (!res.success) throw new Error(res.error ?? "Could not leave the waitlist.");
+        setWaitlist((prev) => prev.filter((w) => w.eventId !== eventId));
+      } else {
+        const res = await joinWaitlist(eventId, athlete.id);
+        if (!res.success) throw new Error(res.error ?? "Could not join the waitlist.");
+        const refreshed = await fetchAthleteWaitlist(athlete.id);
+        setWaitlist(refreshed.data);
+      }
+    } catch (err) {
+      setError(getErrorMessage(err, "Waitlist update failed."));
+    } finally {
+      setWaitlistBusy(null);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!athlete || !volume) return;
@@ -517,22 +571,72 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
                   {sessionEvents.map((ev) => {
                     const draft = drafts[ev.id];
                     const alreadyEntered = enteredEventIds.has(ev.id);
+                    const capacity = capacities.get(ev.id);
+                    const isFull = capacity?.availability === "full";
+                    const queued = waitlist.find((w) => w.eventId === ev.id);
                     return (
                       <div key={ev.id} className="space-y-2 rounded-lg border p-3">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium">
-                            {ev.distanceM}m {ev.stroke}
+                          <span className="min-w-0">
+                            <span className="font-medium">
+                              {ev.distanceM}m {ev.stroke}
+                            </span>
+                            {/* Availability is stated on every race, not only
+                                on full ones. A swimmer choosing between twenty
+                                races needs to know which are about to go, and
+                                a badge that only ever appears when it is too
+                                late tells them nothing in time. */}
+                            {capacity && (
+                              <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                                <Badge
+                                  variant={availabilityVariant(capacity.availability)}
+                                  className="text-[10px]"
+                                  data-testid={`availability-${ev.id}`}
+                                >
+                                  {AVAILABILITY_LABELS[capacity.availability]}
+                                </Badge>
+                                <span className="text-[11px] text-muted-foreground">
+                                  {describeAvailability(capacity)}
+                                </span>
+                              </span>
+                            )}
+                            {ev.surchargeEgp > 0 && (
+                              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                                +{ev.surchargeEgp} EGP surcharge on this race
+                              </span>
+                            )}
                           </span>
+
                           {alreadyEntered ? (
-                            <Badge variant="outline" className="h-9 px-4">
+                            <Badge variant="outline" className="h-9 shrink-0 px-4">
                               Already Entered
                             </Badge>
+                          ) : isFull && !draft?.selected ? (
+                            // Full races cannot be selected. Offering a
+                            // Select button that fails on submit would waste
+                            // the swimmer's time and lose their other picks.
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={queued ? "secondary" : "outline"}
+                              className="min-h-[48px] shrink-0 px-4"
+                              disabled={waitlistBusy === ev.id || !athlete}
+                              onClick={() => void toggleWaitlist(ev.id)}
+                            >
+                              {waitlistBusy === ev.id ? (
+                                <Loader2 className="size-4 animate-spin" />
+                              ) : queued ? (
+                                `Waiting — #${queued.position ?? "?"}`
+                              ) : (
+                                "Join waitlist"
+                              )}
+                            </Button>
                           ) : (
                             <Button
                               type="button"
                               size="sm"
                               variant={draft?.selected ? "default" : "outline"}
-                              className="min-h-[48px] px-4"
+                              className="min-h-[48px] shrink-0 px-4"
                               disabled={!draft?.selected && selectedCount >= remainingSlots}
                               onClick={() => toggleEvent(ev.id)}
                             >

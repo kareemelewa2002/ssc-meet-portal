@@ -1528,12 +1528,16 @@ exception when others then
 end $$;
 
 -- =============================================================================
--- DB-27 — meet_settings: everyone reads the price, only an admin sets it.
+-- DB-27 — meet_settings: everyone reads the dials, only an admin sets them.
 -- =============================================================================
--- The individual race price is quoted to a swimmer on the registration form
--- before they have any special standing, so public read is deliberate. Write
--- is admin-only for the obvious reason: a swimmer who could UPDATE this row
--- could set their own entry fee to zero.
+-- This table was keyed (volume, session) for one release and is one row per
+-- VOLUME now — the per-session assertions this block used to make are gone
+-- with the shape they tested. The individual race price left too: it is the
+-- matrix in public.pricing_packages, covered by DB-30 and DB-31.
+--
+-- What remains here is still a money surface (the relay fee) and still
+-- public-read, because the registration form quotes it to a swimmer who has no
+-- special standing yet.
 --
 -- Read is checked as anon (a logged-out visitor), not merely as a signed-in
 -- athlete — "authenticated can read it" would pass even if the public policy
@@ -1541,7 +1545,7 @@ end $$;
 do $$
 declare
   v_volume uuid; v_athlete uuid; v_referee uuid; v_admin uuid;
-  v_price int; v_err text; v_after int;
+  v_relay int; v_err text; v_after int; v_rows int;
 begin
   perform set_config('role','postgres',true);
 
@@ -1552,67 +1556,62 @@ begin
   select id into v_referee from public.users where role='referee' order by id limit 1;
   select id into v_admin   from public.users where role='admin'   order by id limit 1;
 
-  -- schema.sql seeds a row per (volume, session); without one nothing to test.
-  select individual_event_price_egp into v_price
-    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+  select relay_swimmer_price_egp into v_relay
+    from public.meet_settings where meet_volume_id = v_volume;
   perform ssc_test.check('DB-27','every volume is seeded with a settings row',
-    v_price is not null, format('price=%s', v_price));
+    v_relay is not null, format('relay=%s', v_relay));
 
-  -- All THREE sessions, not just the first: the Control Unit opens a tab per
-  -- session, and a volume seeded with only session 1 would give two of those
-  -- tabs nothing to edit.
-  perform ssc_test.check('DB-27','all three sessions are seeded',
-    (select count(*) from public.meet_settings where meet_volume_id = v_volume) = 3,
-    format('rows=%s', (select count(*) from public.meet_settings where meet_volume_id = v_volume)));
+  -- Exactly one. The old shape seeded three per volume, and a database that
+  -- was migrated rather than rebuilt must not have left the other two behind:
+  -- a duplicate row here means two answers to "what does a relay leg cost".
+  select count(*) into v_rows from public.meet_settings where meet_volume_id = v_volume;
+  perform ssc_test.check('DB-27','exactly one settings row per volume',
+    v_rows = 1, format('rows=%s', v_rows));
 
-  perform ssc_test.check('DB-27','session_number is constrained to 1-3',
-    not exists (select 1 from public.meet_settings where session_number not in (1,2,3)),
-    'a session outside 1-3 exists');
+  perform ssc_test.check('DB-27','the seeded relay fee is the 300 EGP column default',
+    v_relay = 300, format('got %s', v_relay));
 
-  perform ssc_test.check('DB-27','the seeded price is the 300 EGP column default',
-    v_price = 300, format('got %s', v_price));
-
-  -- 1. A logged-OUT visitor can read the price.
+  -- 1. A logged-OUT visitor can read it.
   perform set_config('request.jwt.claim.sub', '', true);
   perform set_config('request.jwt.claim.role', 'anon', true);
   perform set_config('role','anon',true);
   begin
-    select individual_event_price_egp into v_price
-      from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+    select relay_swimmer_price_egp into v_relay
+      from public.meet_settings where meet_volume_id = v_volume;
     v_err := null;
-  exception when others then v_err := sqlerrm; v_price := null;
+  exception when others then v_err := sqlerrm; v_relay := null;
   end;
   perform set_config('role','postgres',true);
-  perform ssc_test.check('DB-27','anon can read the race price',
-    v_err is null and v_price = 300, format('%s (price %s)', coalesce(v_err,'ok'), v_price));
+  perform ssc_test.check('DB-27','anon can read the relay fee',
+    v_err is null and v_relay = 300, format('%s (relay %s)', coalesce(v_err,'ok'), v_relay));
 
   -- 2. An athlete can read it too (the registration form runs signed in).
   perform ssc_test.act_as(v_athlete);
   begin
-    select individual_event_price_egp into v_price
-      from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+    select relay_swimmer_price_egp into v_relay
+      from public.meet_settings where meet_volume_id = v_volume;
     v_err := null;
-  exception when others then v_err := sqlerrm; v_price := null;
+  exception when others then v_err := sqlerrm; v_relay := null;
   end;
   perform set_config('role','postgres',true);
-  perform ssc_test.check('DB-27','an athlete can read the race price',
-    v_err is null and v_price = 300, format('%s (price %s)', coalesce(v_err,'ok'), v_price));
+  perform ssc_test.check('DB-27','an athlete can read the relay fee',
+    v_err is null and v_relay = 300, format('%s (relay %s)', coalesce(v_err,'ok'), v_relay));
 
-  -- 3. An athlete CANNOT set their own entry fee.
+  -- 3. An athlete CANNOT set their own relay fee.
   perform ssc_test.act_as(v_athlete);
   begin
-    update public.meet_settings set individual_event_price_egp = 0
-      where meet_volume_id = v_volume and session_number = 1;
+    update public.meet_settings set relay_swimmer_price_egp = 0
+      where meet_volume_id = v_volume;
     v_err := 'no error raised';
   exception when others then v_err := sqlerrm;
   end;
   perform set_config('role','postgres',true);
-  select individual_event_price_egp into v_after
-    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+  select relay_swimmer_price_egp into v_after
+    from public.meet_settings where meet_volume_id = v_volume;
   -- RLS on UPDATE silently matches zero rows rather than raising, so the
   -- stored value is the assertion — an error message alone would not prove
   -- the write was refused.
-  perform ssc_test.check('DB-27','an athlete cannot change the race price',
+  perform ssc_test.check('DB-27','an athlete cannot change the relay fee',
     v_after = 300, format('%s (stored %s)', v_err, v_after));
 
   -- 4. Neither can a referee — deck officials score races, they do not price
@@ -1623,13 +1622,13 @@ begin
   perform ssc_test.act_as(v_referee);
   begin
     update public.meet_settings set athlete_event_limit = 6
-      where meet_volume_id = v_volume and session_number = 1;
+      where meet_volume_id = v_volume;
     v_err := 'no error raised';
   exception when others then v_err := sqlerrm;
   end;
   perform set_config('role','postgres',true);
   select athlete_event_limit into v_after
-    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
+    from public.meet_settings where meet_volume_id = v_volume;
   perform ssc_test.check('DB-27','a referee cannot change the event limit',
     v_after = 4, format('%s (stored %s)', v_err, v_after));
 
@@ -1640,8 +1639,8 @@ begin
     where meet_volume_id = (select id from public.meet_volumes order by volume_number desc limit 1);
   perform ssc_test.act_as(v_athlete);
   begin
-    insert into public.meet_settings (meet_volume_id, session_number, individual_event_price_egp)
-    values ((select id from public.meet_volumes order by volume_number desc limit 1), 1, 0);
+    insert into public.meet_settings (meet_volume_id, relay_swimmer_price_egp)
+    values ((select id from public.meet_volumes order by volume_number desc limit 1), 0);
     v_err := 'no error raised';
   exception when others then v_err := sqlerrm;
   end;
@@ -1654,25 +1653,25 @@ begin
   perform ssc_test.act_as(v_admin);
   begin
     update public.meet_settings
-      set individual_event_price_egp = 450, athlete_event_limit = 6
+      set relay_swimmer_price_egp = 450, athlete_event_limit = 6
       where meet_volume_id = v_volume;
     v_err := null;
   exception when others then v_err := sqlerrm;
   end;
   perform set_config('role','postgres',true);
-  select individual_event_price_egp into v_after
-    from public.meet_settings where meet_volume_id = v_volume and session_number = 1;
-  perform ssc_test.check('DB-27','an admin can change the race price',
+  select relay_swimmer_price_egp into v_after
+    from public.meet_settings where meet_volume_id = v_volume;
+  perform ssc_test.check('DB-27','an admin can change the relay fee',
     v_err is null and v_after = 450, format('%s (stored %s)', coalesce(v_err,'ok'), v_after));
 
   -- Restore, so later runs and other assertions see the seeded values. The
-  -- INSERT rebuilds whatever step 5 deleted — all three sessions, not one.
+  -- INSERT rebuilds whatever step 5 deleted.
   update public.meet_settings
-    set individual_event_price_egp = 300, athlete_event_limit = 4
+    set relay_swimmer_price_egp = 300, athlete_event_limit = 4
     where meet_volume_id = v_volume;
-  insert into public.meet_settings (meet_volume_id, session_number)
-  select v.id, n from public.meet_volumes v cross join (values (1),(2),(3)) as t(n)
-  on conflict (meet_volume_id, session_number) do nothing;
+  insert into public.meet_settings (meet_volume_id)
+  select v.id from public.meet_volumes v
+  on conflict (meet_volume_id) do nothing;
 exception when others then
   perform set_config('role','postgres',true);
   perform ssc_test.check('DB-27','meet_settings access control', false, sqlerrm);
@@ -1826,6 +1825,364 @@ begin
 exception when others then
   perform set_config('role','postgres',true);
   perform ssc_test.check('DB-29','event_results includes DQ/NS', false, sqlerrm);
+end $$;
+
+
+-- =============================================================================
+-- DB-30..DB-38 — Control Unit, pricing, capacity, payments and notifications
+-- =============================================================================
+-- These tables are new and every one of them is either a money surface or a
+-- private one, so each assertion below includes a NEGATIVE CONTROL: the thing
+-- that must be refused is attempted, and the test fails if it succeeds. A
+-- policy suite that only proves the allowed path passes proves nothing.
+
+-- DB-30: the pricing matrix is public read, admin write.
+do $$
+declare
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_vol uuid;
+  v_visible int;
+  v_wrote boolean := false;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+  perform ssc_test.act_as(v_athlete);
+
+  -- Allowed: a swimmer must be able to read prices before they have any
+  -- standing at all, or the registration form has nothing to quote.
+  select count(*) into v_visible from public.pricing_packages where meet_volume_id = v_vol;
+
+  -- Refused: a swimmer who could write here could set their own entry fee.
+  begin
+    update public.pricing_packages set price_egp = 0 where meet_volume_id = v_vol;
+    -- RLS makes this a silent no-op rather than an error, so the proof is that
+    -- nothing actually changed.
+    v_wrote := exists (
+      select 1 from public.pricing_packages
+      where meet_volume_id = v_vol and price_egp = 0 and race_count > 0
+    );
+  exception when insufficient_privilege then
+    v_wrote := false;
+  end;
+
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check(
+    'DB-30', 'pricing_packages: public read, athlete cannot rewrite prices',
+    v_visible > 0 and not v_wrote,
+    format('visible=%s athlete_wrote=%s', v_visible, v_wrote));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-30', 'pricing_packages read/write gates', false, sqlerrm);
+end $$;
+
+-- DB-31: an admin CAN write the matrix. The positive half of DB-30 — without
+-- it, a policy that refuses everyone would pass DB-30 and break the app.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_vol uuid;
+  v_before int;
+  v_after int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+  select price_egp into v_before from public.pricing_packages
+   where meet_volume_id = v_vol and race_count = 1 and tier = 'standard';
+
+  perform ssc_test.act_as(v_admin);
+  update public.pricing_packages set price_egp = v_before + 5
+   where meet_volume_id = v_vol and race_count = 1 and tier = 'standard';
+  select price_egp into v_after from public.pricing_packages
+   where meet_volume_id = v_vol and race_count = 1 and tier = 'standard';
+  -- Restore, so later assertions and reruns see the seeded value.
+  update public.pricing_packages set price_egp = v_before
+   where meet_volume_id = v_vol and race_count = 1 and tier = 'standard';
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-31', 'pricing_packages: an admin can change a price',
+    v_after = v_before + 5,
+    format('before=%s after=%s', v_before, v_after));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-31', 'admin can change a price', false, sqlerrm);
+end $$;
+
+-- DB-32: a notification is addressed to one person and nobody else.
+do $$
+declare
+  v_owner uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_other uuid := ssc_test.user_id('athlete02@ssc-demo.test');
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_own int;
+  v_others int;
+  v_admin_sees int;
+begin
+  perform public.raise_notification(
+    v_owner, 'team', 'DB-32 probe', 'body', null, '{}'::jsonb);
+
+  perform ssc_test.act_as(v_owner);
+  select count(*) into v_own from public.notifications where title = 'DB-32 probe';
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.act_as(v_other);
+  select count(*) into v_others from public.notifications where title = 'DB-32 probe';
+  perform set_config('role', 'postgres', true);
+
+  -- Admins are checked explicitly. There is no operational reason to read
+  -- someone's notification feed, and an admin-can-see-everything policy copied
+  -- from the other tables would be a privacy hole nobody noticed.
+  perform ssc_test.act_as(v_admin);
+  select count(*) into v_admin_sees from public.notifications where title = 'DB-32 probe';
+
+  perform set_config('role', 'postgres', true);
+  delete from public.notifications where title = 'DB-32 probe';
+
+  perform ssc_test.check(
+    'DB-32', 'notifications: owner reads, nobody else does (admins included)',
+    v_own = 1 and v_others = 0 and v_admin_sees = 0,
+    format('own=%s other=%s admin=%s', v_own, v_others, v_admin_sees));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-32', 'notification visibility', false, sqlerrm);
+end $$;
+
+-- DB-33: email_outbox is readable by NO signed-in user. It holds message
+-- bodies and recipient addresses and is drained only by the service key.
+do $$
+declare
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_queued int;
+  v_athlete_sees int;
+  v_admin_sees int;
+begin
+  perform public.raise_notification(
+    v_athlete, 'waitlist', 'DB-33 probe', 'body', null, '{}'::jsonb);
+  select count(*) into v_queued from public.email_outbox where subject = 'DB-33 probe';
+
+  perform ssc_test.act_as(v_athlete);
+  select count(*) into v_athlete_sees from public.email_outbox where subject = 'DB-33 probe';
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.act_as(v_admin);
+  select count(*) into v_admin_sees from public.email_outbox where subject = 'DB-33 probe';
+  perform set_config('role', 'postgres', true);
+
+  delete from public.email_outbox where subject = 'DB-33 probe';
+  delete from public.notifications where title = 'DB-33 probe';
+
+  perform ssc_test.check(
+    'DB-33', 'email_outbox: queued as postgres, invisible to every user',
+    v_queued = 1 and v_athlete_sees = 0 and v_admin_sees = 0,
+    format('queued=%s athlete=%s admin=%s', v_queued, v_athlete_sees, v_admin_sees));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-33', 'email_outbox invisibility', false, sqlerrm);
+end $$;
+
+-- DB-34: waitlist and payment email cannot be opted out of, and the database
+-- is what refuses it — not the UI.
+do $$
+declare
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_refused boolean := false;
+  v_optional_ok boolean := false;
+begin
+  perform ssc_test.act_as(v_athlete);
+
+  begin
+    insert into public.notification_preferences (user_id, category, email_enabled)
+    values (v_athlete, 'waitlist', false);
+  exception when check_violation then
+    v_refused := true;
+  end;
+
+  -- The other half: an optional category MUST still be mutable, or the
+  -- constraint is simply blocking everything.
+  begin
+    insert into public.notification_preferences (user_id, category, email_enabled)
+    values (v_athlete, 'results_schedule', false)
+    on conflict (user_id, category) do update set email_enabled = false;
+    v_optional_ok := true;
+  exception when others then
+    v_optional_ok := false;
+  end;
+
+  perform set_config('role', 'postgres', true);
+  delete from public.notification_preferences where user_id = v_athlete;
+
+  perform ssc_test.check(
+    'DB-34', 'notification_preferences: critical categories cannot be muted',
+    v_refused and v_optional_ok,
+    format('waitlist_refused=%s results_mutable=%s', v_refused, v_optional_ok));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-34', 'mandatory notification categories', false, sqlerrm);
+end $$;
+
+-- DB-35: payments are readable by the swimmer, writable only by an admin.
+do $$
+declare
+  v_athlete_user uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_athlete uuid;
+  v_vol uuid;
+  v_own int;
+  v_forged boolean := false;
+begin
+  select id into v_athlete from public.athletes where user_id = v_athlete_user;
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+
+  insert into public.entry_payments (athlete_id, meet_volume_id, tier, amount_egp, collected_by)
+  values (v_athlete, v_vol, 'standard', 700, null);
+
+  perform ssc_test.act_as(v_athlete_user);
+
+  select count(*) into v_own from public.entry_payments
+   where athlete_id = v_athlete and amount_egp = 700;
+
+  -- Refused: a swimmer who could insert here could mark themselves paid.
+  begin
+    insert into public.entry_payments (athlete_id, meet_volume_id, tier, amount_egp)
+    values (v_athlete, v_vol, 'early_bird', 0);
+    v_forged := true;
+  exception when others then
+    v_forged := false;
+  end;
+
+  perform set_config('role', 'postgres', true);
+  delete from public.entry_payments where athlete_id = v_athlete;
+
+  perform ssc_test.check(
+    'DB-35', 'entry_payments: swimmer reads own receipts, cannot forge one',
+    v_own = 1 and not v_forged,
+    format('own=%s forged=%s', v_own, v_forged));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-35', 'entry_payments gates', false, sqlerrm);
+end $$;
+
+-- DB-36: a swimmer cannot queue-jump by inserting a waitlist row for someone
+-- else, nor withdraw a rival.
+do $$
+declare
+  v_user uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_self uuid;
+  v_rival uuid;
+  v_event uuid;
+  v_own_ok boolean := false;
+  v_forged boolean := false;
+begin
+  select id into v_self from public.athletes where user_id = v_user;
+  select id into v_rival from public.athletes where user_id <> v_user limit 1;
+  select e.id into v_event from public.events e
+   join public.sessions s on s.id = e.session_id
+   join public.meet_volumes mv on mv.id = s.meet_volume_id
+   where mv.volume_number = 1 and e.is_relay = false limit 1;
+
+  perform ssc_test.act_as(v_user);
+
+  begin
+    insert into public.event_waitlist (event_id, athlete_id) values (v_event, v_self);
+    v_own_ok := true;
+  exception when others then
+    v_own_ok := false;
+  end;
+
+  begin
+    insert into public.event_waitlist (event_id, athlete_id) values (v_event, v_rival);
+    v_forged := true;
+  exception when others then
+    v_forged := false;
+  end;
+
+  perform set_config('role', 'postgres', true);
+  delete from public.event_waitlist where event_id = v_event;
+
+  perform ssc_test.check(
+    'DB-36', 'event_waitlist: joins for self only, never for another swimmer',
+    v_own_ok and not v_forged,
+    format('self=%s other=%s', v_own_ok, v_forged));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-36', 'event_waitlist ownership', false, sqlerrm);
+end $$;
+
+-- DB-37: reclaim_entry_slot is SECURITY DEFINER, so it bypasses RLS and has
+-- to check ownership itself. If that check were ever dropped, any signed-in
+-- user could reclaim anyone's place by id — and no RLS policy would stop them.
+do $$
+declare
+  v_user uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_other uuid := ssc_test.user_id('athlete02@ssc-demo.test');
+  v_entry uuid;
+  v_blocked boolean := false;
+begin
+  select en.id into v_entry
+  from public.entries en
+  join public.athletes a on a.id = en.athlete_id
+  where a.user_id = v_user limit 1;
+
+  if v_entry is null then
+    perform ssc_test.check('DB-37', 'reclaim_entry_slot ownership check', true,
+      'skipped — no seeded entry for athlete1');
+    return;
+  end if;
+
+  perform ssc_test.act_as(v_other);
+  begin
+    perform public.reclaim_entry_slot(v_entry);
+    v_blocked := false;
+  exception when others then
+    v_blocked := true;
+  end;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-37', 'reclaim_entry_slot: refuses another swimmer''s entry',
+    v_blocked,
+    format('blocked=%s', v_blocked));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-37', 'reclaim_entry_slot ownership check', false, sqlerrm);
+end $$;
+
+-- DB-38: capacity ignores a lapsed hold WITHOUT the sweep having run. This is
+-- the guarantee that a failed or paused scheduled job degrades notification
+-- timeliness and nothing else — a race must never read as full because a
+-- background task did not fire.
+do $$
+declare
+  v_event uuid;
+  v_entry uuid;
+  v_held_before int;
+  v_held_after int;
+  v_status text;
+begin
+  select e.id into v_event from public.events e
+   join public.sessions s on s.id = e.session_id
+   join public.meet_volumes mv on mv.id = s.meet_volume_id
+   where mv.volume_number = 1 and e.is_relay = false
+     and exists (select 1 from public.entries en
+                  where en.event_id = e.id and en.status = 'pending_payment')
+   limit 1;
+
+  select id into v_entry from public.entries
+   where event_id = v_event and status = 'pending_payment' limit 1;
+
+  select held_count into v_held_before from public.event_capacity(v_event);
+
+  update public.entries set hold_expires_at = now() - interval '1 hour' where id = v_entry;
+
+  select held_count into v_held_after from public.event_capacity(v_event);
+  select status::text into v_status from public.entries where id = v_entry;
+
+  -- Restore.
+  update public.entries set hold_expires_at = now() + interval '48 hours' where id = v_entry;
+
+  perform ssc_test.check(
+    'DB-38', 'event_capacity: releases a lapsed hold before the sweep runs',
+    v_held_after = v_held_before - 1 and v_status = 'pending_payment',
+    format('before=%s after=%s status_untouched=%s', v_held_before, v_held_after, v_status));
+exception when others then
+  perform ssc_test.check('DB-38', 'capacity without the sweep', false, sqlerrm);
 end $$;
 
 -- =============================================================================

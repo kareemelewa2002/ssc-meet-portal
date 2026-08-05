@@ -273,3 +273,39 @@ not a code change.
 Sending needs a secret key, so it cannot happen in the browser. This introduces
 the first server-side code in the repo: a route handler under `app/api/` holding
 the Resend key and the Supabase service key, draining `email_outbox`.
+
+---
+
+## 7. Operating it
+
+### Environment
+
+See `.env.local.example`. The three that are new:
+
+| Variable | Effect if unset |
+| --- | --- |
+| `SUPABASE_SERVICE_ROLE_KEY` | Both route handlers return 500. Nothing else breaks. |
+| `RESEND_API_KEY` | Notices queue in `email_outbox` and never send. The dispatcher reports this as a normal state, not an error. |
+| `RESEND_FROM_EMAIL` | Sends from `onboarding@resend.dev`, which reaches only the Resend account owner. |
+| `CRON_SECRET` | `/api/cron/process-expired-holds` refuses every request. `pg_cron` is unaffected. |
+
+`lib/supabase/service.ts` imports `server-only`, so a client component that
+reaches for the service key fails the build rather than shipping it to a
+browser. That import is the safety mechanism — do not remove it.
+
+### Two schedulers, one function
+
+`pg_cron` runs `public.sweep_expired_holds()` every 15 minutes from inside
+Postgres. `/api/cron/process-expired-holds` calls the same function for a
+host-level scheduler. Running both is harmless: the sweep only acts on rows
+whose deadline has actually passed.
+
+### Going live with email
+
+1. Add a domain in Resend and publish its SPF/DKIM records.
+2. Set `RESEND_FROM_EMAIL` to an address on that domain.
+3. Queued rows drain on the next dispatch. Nothing accumulated in the meantime
+   is lost.
+
+Until step 2, `POST /api/notifications/dispatch` returns `testMode: true` — the
+messages it reports as sent went to the account owner and to nobody else.
