@@ -60,13 +60,25 @@ export const CREDENTIALS = {
   cashPending: "athlete02@ssc-demo.test",
 } as const;
 
-/** Logs in via the real /login form and waits for the post-login redirect. */
+/**
+ * Logs in via the real /login form and waits for the post-login redirect.
+ *
+ * The 30s budget is not padding. Local GoTrue occasionally takes well over 15s
+ * to answer a sign-in when a suite run has already put dozens through it, and
+ * because every spec funnels through this helper the failure landed on a
+ * DIFFERENT test each run — 02-registration one run, 03-swimmer-entry the
+ * next, each passing on its own. That reads as flakiness in whatever spec drew
+ * the short straw, which sends you looking at the wrong code entirely.
+ *
+ * A sign-in that is genuinely broken still fails here; it just no longer fails
+ * for being slow.
+ */
 export async function login(page: Page, email: string, password: string = SEED_PASSWORD) {
   await page.goto("/login");
   await page.locator("#login-email").fill(email);
   await page.locator("#login-password").fill(password);
   await page.locator('button[type="submit"]').click();
-  await page.waitForURL((url) => url.pathname !== "/login", { timeout: 15_000 });
+  await page.waitForURL((url) => url.pathname !== "/login", { timeout: 30_000 });
 }
 
 /**
