@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { SlidersHorizontal, Wand2 } from "lucide-react";
+import { ShieldCheck, SlidersHorizontal, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { UserRoleManagement } from "@/components/admin/user-role-management";
@@ -34,6 +34,12 @@ const ADMIN_PAGES = [
     label: "Seeding",
     description: "Seed entries into heats and publish sheets",
     icon: Wand2,
+  },
+  {
+    href: "/admin/audit-logs",
+    label: "Audit Log",
+    description: "Role changes, payment overrides, pricing changes",
+    icon: ShieldCheck,
   },
 ] as const;
 

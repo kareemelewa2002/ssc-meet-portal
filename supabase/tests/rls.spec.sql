@@ -2849,6 +2849,302 @@ exception when others then
 end $$;
 
 -- =============================================================================
+-- DB-54..DB-60 — admin_actions: the append-only admin audit log. Every
+-- assertion here is a money/permission surface, so each pairs the allowed
+-- path with a negative control, same as DB-30 onward.
+-- =============================================================================
+
+-- DB-54: SELECT is admin-only. A row is produced first (a real pricing bump,
+-- reverted after) rather than relying on an earlier test having left one
+-- behind, so this block proves its own claim regardless of run order.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_referee uuid := ssc_test.user_id('referee1@ssc-demo.test');
+  v_parent uuid := ssc_test.user_id('parent1@ssc-demo.test');
+  v_vol uuid;
+  v_before int;
+  v_admin_reads int;
+  v_athlete_reads int;
+  v_referee_reads int;
+  v_parent_reads int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+  select price_egp into v_before from public.pricing_packages
+   where meet_volume_id = v_vol and race_count = 1 and tier = 'standard';
+
+  perform ssc_test.act_as(v_admin);
+  update public.pricing_packages set price_egp = v_before + 7
+   where meet_volume_id = v_vol and race_count = 1 and tier = 'standard';
+  update public.pricing_packages set price_egp = v_before
+   where meet_volume_id = v_vol and race_count = 1 and tier = 'standard';
+  select count(*) into v_admin_reads from public.admin_actions;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.act_as(v_athlete);
+  select count(*) into v_athlete_reads from public.admin_actions;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.act_as(v_referee);
+  select count(*) into v_referee_reads from public.admin_actions;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.act_as(v_parent);
+  select count(*) into v_parent_reads from public.admin_actions;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-54', 'admin_actions: admin reads, no other role sees a single row',
+    v_admin_reads > 0 and v_athlete_reads = 0 and v_referee_reads = 0 and v_parent_reads = 0,
+    format('admin=%s athlete=%s referee=%s parent=%s',
+      v_admin_reads, v_athlete_reads, v_referee_reads, v_parent_reads));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-54', 'admin_actions read gate', false, sqlerrm);
+end $$;
+
+-- DB-55: nobody — not even an admin — can UPDATE or DELETE an existing row.
+-- There is no update/delete policy at all, so RLS refuses both by default;
+-- this proves that refusal actually holds rather than assuming an absent
+-- policy behaves the way it is supposed to.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_row_id uuid;
+  v_update_blocked boolean := true;
+  v_delete_blocked boolean := true;
+  v_rows_affected int;
+begin
+  select id into v_row_id from public.admin_actions order by created_at desc limit 1;
+
+  perform ssc_test.act_as(v_admin);
+
+  update public.admin_actions set details = '{"tampered": true}'::jsonb where id = v_row_id;
+  get diagnostics v_rows_affected = row_count;
+  v_update_blocked := v_rows_affected = 0;
+
+  delete from public.admin_actions where id = v_row_id;
+  get diagnostics v_rows_affected = row_count;
+  v_delete_blocked := v_rows_affected = 0;
+
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-55', 'admin_actions is append-only: admin cannot UPDATE or DELETE a row',
+    v_update_blocked and v_delete_blocked and exists (select 1 from public.admin_actions where id = v_row_id),
+    format('update_blocked=%s delete_blocked=%s', v_update_blocked, v_delete_blocked));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-55', 'admin_actions append-only', false, sqlerrm);
+end $$;
+
+-- DB-56: a role change writes a ROLE_CHANGE row with the actor and the
+-- before/after role — both directions of a promote-then-revert, so the
+-- fixture account's role ends the run exactly where it started.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_before int;
+  v_after_promote int;
+  v_after_revert int;
+  v_details jsonb;
+begin
+  select count(*) into v_before from public.admin_actions
+   where action = 'ROLE_CHANGE' and target_id = v_athlete;
+
+  perform ssc_test.act_as(v_admin);
+  update public.users set role = 'referee' where id = v_athlete;
+  select count(*) into v_after_promote from public.admin_actions
+   where action = 'ROLE_CHANGE' and target_id = v_athlete;
+  select details into v_details from public.admin_actions
+   where action = 'ROLE_CHANGE' and target_id = v_athlete
+   order by created_at desc limit 1;
+
+  update public.users set role = 'athlete' where id = v_athlete;
+  select count(*) into v_after_revert from public.admin_actions
+   where action = 'ROLE_CHANGE' and target_id = v_athlete;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-56', 'a role change writes a ROLE_CHANGE row with actor and previous/new role',
+    v_after_promote = v_before + 1 and v_after_revert = v_before + 2
+      and (v_details ->> 'previous_role') = 'athlete' and (v_details ->> 'new_role') = 'referee',
+    format('before=%s after_promote=%s after_revert=%s details=%s',
+      v_before, v_after_promote, v_after_revert, v_details));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  update public.users set role = 'athlete' where id = v_athlete;
+  perform ssc_test.check('DB-56', 'role change audit row', false, sqlerrm);
+end $$;
+
+-- DB-57: a cash payment (an entry_payments insert, the same write the Cash
+-- Payments desk performs) writes a PAYMENT_OVERRIDE row carrying the amount.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_athlete_id uuid;
+  v_vol uuid;
+  v_payment_id uuid;
+  v_before int;
+  v_after int;
+  v_details jsonb;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+  select id into v_athlete_id from public.athletes a
+   where a.user_id = ssc_test.user_id('athlete01@ssc-demo.test');
+
+  select count(*) into v_before from public.admin_actions
+   where action = 'PAYMENT_OVERRIDE' and target_table = 'entry_payments';
+
+  perform ssc_test.act_as(v_admin);
+  insert into public.entry_payments (athlete_id, meet_volume_id, tier, amount_egp, method, collected_by)
+  values (v_athlete_id, v_vol, 'standard', 555, 'cash', v_admin)
+  returning id into v_payment_id;
+
+  select count(*) into v_after from public.admin_actions
+   where action = 'PAYMENT_OVERRIDE' and target_table = 'entry_payments';
+  select details into v_details from public.admin_actions
+   where action = 'PAYMENT_OVERRIDE' and target_id = v_payment_id;
+  perform set_config('role', 'postgres', true);
+
+  delete from public.entry_payments where id = v_payment_id;
+
+  perform ssc_test.check(
+    'DB-57', 'a cash entry payment writes a PAYMENT_OVERRIDE row',
+    v_after = v_before + 1 and (v_details ->> 'amount_egp')::int = 555,
+    format('before=%s after=%s details=%s', v_before, v_after, v_details));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-57', 'cash payment audit row', false, sqlerrm);
+end $$;
+
+-- DB-58: a pricing_packages price change writes a PRICING_UPDATE row; an
+-- update that resubmits the SAME price does not manufacture a second one —
+-- the WHEN clause on the trigger is what this proves.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_vol uuid;
+  v_before_price int;
+  v_before_count int;
+  v_after_change int;
+  v_after_noop int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+  select price_egp into v_before_price from public.pricing_packages
+   where meet_volume_id = v_vol and race_count = 2 and tier = 'standard';
+
+  select count(*) into v_before_count from public.admin_actions
+   where action = 'PRICING_UPDATE' and target_table = 'pricing_packages';
+
+  perform ssc_test.act_as(v_admin);
+  update public.pricing_packages set price_egp = v_before_price + 9
+   where meet_volume_id = v_vol and race_count = 2 and tier = 'standard';
+  select count(*) into v_after_change from public.admin_actions
+   where action = 'PRICING_UPDATE' and target_table = 'pricing_packages';
+
+  -- No-op: same price written again.
+  update public.pricing_packages set price_egp = v_before_price + 9
+   where meet_volume_id = v_vol and race_count = 2 and tier = 'standard';
+  select count(*) into v_after_noop from public.admin_actions
+   where action = 'PRICING_UPDATE' and target_table = 'pricing_packages';
+
+  update public.pricing_packages set price_egp = v_before_price
+   where meet_volume_id = v_vol and race_count = 2 and tier = 'standard';
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-58', 'a real price change is logged once; a no-op resubmission is not',
+    v_after_change = v_before_count + 1 and v_after_noop = v_after_change,
+    format('before=%s after_change=%s after_noop=%s', v_before_count, v_after_change, v_after_noop));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-58', 'pricing_packages audit row', false, sqlerrm);
+end $$;
+
+-- DB-59: a pricing_tiers window change (the Standard tier's end date moved
+-- out a day, then restored) writes a PRICING_UPDATE row.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_vol uuid;
+  v_before_ends timestamptz;
+  v_before_count int;
+  v_after_count int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+  select ends_at into v_before_ends from public.pricing_tiers
+   where meet_volume_id = v_vol and tier = 'standard';
+
+  select count(*) into v_before_count from public.admin_actions
+   where action = 'PRICING_UPDATE' and target_table = 'pricing_tiers';
+
+  perform ssc_test.act_as(v_admin);
+  update public.pricing_tiers set ends_at = v_before_ends + interval '1 day'
+   where meet_volume_id = v_vol and tier = 'standard';
+  select count(*) into v_after_count from public.admin_actions
+   where action = 'PRICING_UPDATE' and target_table = 'pricing_tiers';
+
+  update public.pricing_tiers set ends_at = v_before_ends
+   where meet_volume_id = v_vol and tier = 'standard';
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-59', 'a pricing tier window change writes a PRICING_UPDATE row',
+    v_after_count = v_before_count + 1,
+    format('before=%s after=%s', v_before_count, v_after_count));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-59', 'pricing_tiers audit row', false, sqlerrm);
+end $$;
+
+-- DB-60: a write with no authenticated actor at all (a raw superuser
+-- connection, exactly the context schema.sql and seed-*.sql run under) is
+-- NOT logged. Without this guard, every re-application of schema.sql — which
+-- is meant to be safely re-runnable — would manufacture audit rows for
+-- events that never happened in the app. Uses pricing_packages rather than a
+-- role change: enforce_role_change_trigger independently requires
+-- is_admin() to allow a role change at all, which would make this test
+-- fail for the wrong reason (the write itself refused) rather than the one
+-- it means to check (the write succeeds, as any superuser write does, but
+-- goes unlogged). role = 'postgres' already bypasses RLS regardless of
+-- is_admin(), which is what makes this scenario reachable at all.
+do $$
+declare
+  v_vol uuid;
+  v_before_price int;
+  v_before_count int;
+  v_after_count int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+  select price_egp into v_before_price from public.pricing_packages
+   where meet_volume_id = v_vol and race_count = 3 and tier = 'standard';
+
+  perform set_config('role', 'postgres', true);
+  perform set_config('request.jwt.claim.sub', '', true);
+
+  select count(*) into v_before_count from public.admin_actions
+   where action = 'PRICING_UPDATE' and target_table = 'pricing_packages';
+  update public.pricing_packages set price_egp = v_before_price + 3
+   where meet_volume_id = v_vol and race_count = 3 and tier = 'standard';
+  select count(*) into v_after_count from public.admin_actions
+   where action = 'PRICING_UPDATE' and target_table = 'pricing_packages';
+
+  update public.pricing_packages set price_egp = v_before_price
+   where meet_volume_id = v_vol and race_count = 3 and tier = 'standard';
+
+  perform ssc_test.check(
+    'DB-60', 'a superuser write with no authenticated actor is not logged',
+    v_after_count = v_before_count,
+    format('before=%s after=%s', v_before_count, v_after_count));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-60', 'unauthenticated write is not logged', false, sqlerrm);
+end $$;
+
+-- =============================================================================
 -- Report
 -- =============================================================================
 \echo ''

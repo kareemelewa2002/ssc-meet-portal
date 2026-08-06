@@ -1,10 +1,18 @@
 import { test, expect } from "@playwright/test";
+import { createClient } from "@supabase/supabase-js";
 import { CREDENTIALS, login, requireFixture } from "./helpers";
 import {
   createPendingPaymentFixture,
   createPendingTeamFixture,
   createSubmittedHeatCardFixture,
 } from "./fixtures/heat-fixture";
+
+function serviceClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  );
+}
 
 test.describe("Admin dashboard", () => {
   test.beforeEach(async ({ page }) => {
@@ -100,6 +108,12 @@ test.describe("Admin dashboard", () => {
     requireFixture(payment !== null, "an entry that can be put into pending_payment");
     if (!payment) return;
 
+    // Before/after counts, not a timestamp window: comparing a Node-process
+    // timestamp against the DB server's own `now()` is exactly the kind of
+    // check a little clock drift between the test runner and the local
+    // Supabase container quietly breaks. A count only needs both reads to
+    // agree with each other, not with the wall clock.
+    const auditCountBefore = await paymentOverrideAuditCount();
     try {
       await page.goto("/admin");
       await page.getByRole("button", { name: "Cash Payments" }).click();
@@ -113,11 +127,38 @@ test.describe("Admin dashboard", () => {
       await row.getByRole("button", { name: "Confirm Payment" }).click();
       await page.waitForTimeout(1500);
       await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);
+
+      // The confirm click is a raw `entry_payments` insert (see
+      // admins_manage_entry_payments in schema.sql) — no dedicated RPC to
+      // assert against — so the audit trail is the only server-side proof
+      // this action actually happened, beyond the toast disappearing.
+      //
+      // Polled, not read once: the row is committed the instant the insert
+      // returns, but this assertion reads it back over a fresh REST request
+      // on a separate connection, and under a full parallel suite run that
+      // request can simply be slower than a fixed 1500ms budget accounts for
+      // — not eventual consistency, just ordinary request latency under
+      // load. A single timed read turned that latency into a false failure.
+      await expect
+        .poll(() => paymentOverrideAuditCount(), {
+          message: "a PAYMENT_OVERRIDE row should be written for this confirm",
+          timeout: 15_000,
+        })
+        .toBe(auditCountBefore + 1);
     } finally {
       await payment.cleanup();
     }
   });
 });
+
+async function paymentOverrideAuditCount(): Promise<number> {
+  const { count } = await serviceClient()
+    .from("admin_actions")
+    .select("id", { count: "exact", head: true })
+    .eq("action", "PAYMENT_OVERRIDE")
+    .eq("target_table", "entry_payments");
+  return count ?? 0;
+}
 
 test.describe("Seeding dashboard", () => {
   test.beforeEach(async ({ page }) => {

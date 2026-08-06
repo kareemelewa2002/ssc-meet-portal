@@ -204,6 +204,20 @@ export type TeamAnnouncementRow = {
   updated_at: string;
 };
 
+/** One append-only row per privileged write: a role change, a payment
+ * override/cash confirmation, or a pricing change. Written exclusively by
+ * database triggers (see log_admin_action() in schema.sql) — never inserted
+ * from application code directly. */
+export type AdminActionRow = {
+  id: string;
+  created_at: string;
+  actor_id: string;
+  action: string;
+  target_table: string;
+  target_id: string | null;
+  details: Record<string, unknown>;
+};
+
 export type RelayLegRow = {
   id: string;
   squad_id: string;
@@ -634,6 +648,7 @@ export type Database = {
       relay_legs: Table<RelayLegRow>;
       relay_squad_payments: Table<RelaySquadPaymentRow>;
       team_announcements: Table<TeamAnnouncementRow>;
+      admin_actions: Table<AdminActionRow>;
       performance_highlights: Table<PerformanceHighlightRow>;
       athletes: Table<AthleteRow>;
       volume_team_affiliations: Table<VolumeTeamAffiliationRow>;

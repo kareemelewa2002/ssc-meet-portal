@@ -159,6 +159,12 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "public", table: "relay_squads", trigger: "set_relay_squad_hold_expiry_trigger" },
   { schema: "public", table: "team_announcements", trigger: "team_announcements_set_updated_at" },
   { schema: "public", table: "team_announcements", trigger: "notify_team_announcement_trigger" },
+  // Admin audit log.
+  { schema: "public", table: "users", trigger: "audit_user_role_change_trigger" },
+  { schema: "public", table: "entry_payments", trigger: "audit_entry_payment_insert_trigger" },
+  { schema: "public", table: "relay_squad_payments", trigger: "audit_relay_squad_payment_insert_trigger" },
+  { schema: "public", table: "pricing_packages", trigger: "audit_pricing_package_change_trigger" },
+  { schema: "public", table: "pricing_tiers", trigger: "audit_pricing_tier_change_trigger" },
 ];
 
 /** Retired triggers, with what each one actually breaks if it survives. Any

@@ -2539,6 +2539,218 @@ end;
 $$;
 
 -- =============================================================================
+-- ADMIN AUDIT LOG — append-only record of privileged writes: role changes,
+-- payment overrides/cash confirmations, and pricing changes. Exists so "who
+-- changed X, to what, and when" has an answer that survives the UI that made
+-- the change — the same reasoning entry_payments already exists for: a
+-- financial or permission fact, once true, must be written down somewhere
+-- that outlives whatever screen produced it.
+-- =============================================================================
+create table if not exists public.admin_actions (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  actor_id uuid not null references public.users (id),
+  action text not null,
+  target_table text not null,
+  target_id uuid,
+  details jsonb not null default '{}'::jsonb
+);
+
+create index if not exists admin_actions_created_at_idx
+  on public.admin_actions (created_at desc);
+create index if not exists admin_actions_actor_idx
+  on public.admin_actions (actor_id, created_at desc);
+create index if not exists admin_actions_action_idx
+  on public.admin_actions (action, created_at desc);
+
+comment on table public.admin_actions is
+  'Append-only audit trail of privileged writes: who (actor_id), what '
+  '(action / target_table / target_id), and the before/after in details. '
+  'Written exclusively by the trigger functions below — nothing in '
+  'application code inserts here directly, so the log cannot go stale from '
+  'a screen that forgets to call it. There is no UPDATE or DELETE policy on '
+  'this table, on purpose: once written, a row cannot be changed or removed '
+  'by anyone, including an admin, through PostgREST. Only a direct '
+  'superuser connection (a migration) can touch an existing row, which is '
+  'the correct amount of friction for an audit trail.';
+
+alter table public.admin_actions enable row level security;
+
+drop policy if exists "admins_read_admin_actions" on public.admin_actions;
+create policy "admins_read_admin_actions" on public.admin_actions
+  for select using (public.is_admin());
+
+drop policy if exists "admins_insert_admin_actions" on public.admin_actions;
+create policy "admins_insert_admin_actions" on public.admin_actions
+  for insert with check (public.is_admin());
+
+-- No update or delete policy, deliberately. RLS denies a command by default
+-- when no policy grants it — there is nothing here that ever allows one, for
+-- any role, including an admin. That is what makes the log append-only
+-- rather than merely a convention nobody violates yet.
+
+-- log_admin_action() writes one audit row. In practice called only from the
+-- trigger functions below, so the audit trail is a property of the tables it
+-- covers rather than something a screen has to remember to invoke — but it
+-- is a plain callable function like any other in this schema (PostgREST
+-- exposes it as an RPC), so it enforces its own admin check rather than
+-- trusting that every caller will only ever be a trigger. SECURITY DEFINER
+-- so it can read auth.uid() regardless of the caller's own grants (every
+-- other function in this schema that touches auth.uid() follows the same
+-- pattern), which also means RLS on admin_actions is bypassed for this
+-- specific insert — the is_admin() check below is what stands in its place.
+--
+-- Silently does nothing when there is no authenticated actor (auth.uid() is
+-- null) — the case for every direct-SQL write during schema.sql /
+-- seed-*.sql application, run over a superuser psql connection with no JWT
+-- at all. Seeding a demo admin's role or a volume's default pricing matrix
+-- is bootstrapping, not a privileged action taken through the app, and
+-- logging it would mean every re-application of schema.sql (which is meant
+-- to be safely re-runnable) manufactures audit rows for events that never
+-- happened in the app.
+create or replace function public.log_admin_action(
+  p_action text,
+  p_target_table text,
+  p_target_id uuid,
+  p_details jsonb default '{}'::jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null then
+    return;
+  end if;
+  if not public.is_admin() then
+    raise exception 'Only an admin action may write to the audit log.';
+  end if;
+  insert into public.admin_actions (actor_id, action, target_table, target_id, details)
+  values (auth.uid(), p_action, p_target_table, p_target_id, coalesce(p_details, '{}'::jsonb));
+end;
+$$;
+
+-- ROLE_CHANGE — fires only when role actually changes value; a name/phone
+-- edit on the same row does not need an audit row.
+create or replace function public.audit_user_role_change()
+returns trigger
+language plpgsql
+as $$
+begin
+  perform public.log_admin_action(
+    'ROLE_CHANGE',
+    'users',
+    new.id,
+    jsonb_build_object('previous_role', old.role, 'new_role', new.role)
+  );
+  return new;
+end;
+$$;
+
+create or replace trigger audit_user_role_change_trigger
+  after update on public.users
+  for each row
+  when (old.role is distinct from new.role)
+  execute function public.audit_user_role_change();
+
+-- PAYMENT_OVERRIDE — entry_payments and (wired below, once that table
+-- exists) relay_squad_payments are the same category of event, an admin
+-- recording money collected outside any payment gateway, but NEW/OLD in a
+-- trigger function are a generic `record`, not a fixed row type: a single
+-- shared function with a `case tg_table_name when ... then new.col` branch
+-- per table still fails at runtime with "record has no field X" for
+-- whichever table's branch is NOT the one that matched, because every branch
+-- of the CASE is resolved against the actual record regardless of which one
+-- executes. One small function per table avoids that, at the cost of two
+-- near-identical functions instead of one.
+create or replace function public.audit_entry_payment_insert()
+returns trigger
+language plpgsql
+as $$
+begin
+  perform public.log_admin_action(
+    'PAYMENT_OVERRIDE',
+    'entry_payments',
+    new.id,
+    jsonb_build_object(
+      'athlete_id', new.athlete_id,
+      'meet_volume_id', new.meet_volume_id,
+      'tier', new.tier,
+      'amount_egp', new.amount_egp,
+      'method', new.method
+    )
+  );
+  return new;
+end;
+$$;
+
+create or replace trigger audit_entry_payment_insert_trigger
+  after insert on public.entry_payments
+  for each row execute function public.audit_entry_payment_insert();
+
+-- PRICING_UPDATE — pricing_packages and pricing_tiers each get their own
+-- function for the same reason audit_entry_payment_insert() is not shared
+-- with relay_squad_payments (see comment above); each is gated on the field
+-- that actually defines "a price changed" for that table, so a Control Unit
+-- save that resubmits identical numbers (or only bumps updated_at) does not
+-- manufacture a no-op audit row.
+create or replace function public.audit_pricing_package_change()
+returns trigger
+language plpgsql
+as $$
+begin
+  perform public.log_admin_action(
+    'PRICING_UPDATE',
+    'pricing_packages',
+    new.id,
+    jsonb_build_object(
+      'meet_volume_id', new.meet_volume_id,
+      'race_count', new.race_count,
+      'tier', new.tier,
+      'previous_price_egp', old.price_egp,
+      'new_price_egp', new.price_egp
+    )
+  );
+  return new;
+end;
+$$;
+
+create or replace trigger audit_pricing_package_change_trigger
+  after update on public.pricing_packages
+  for each row
+  when (old.price_egp is distinct from new.price_egp)
+  execute function public.audit_pricing_package_change();
+
+create or replace function public.audit_pricing_tier_change()
+returns trigger
+language plpgsql
+as $$
+begin
+  perform public.log_admin_action(
+    'PRICING_UPDATE',
+    'pricing_tiers',
+    new.id,
+    jsonb_build_object(
+      'meet_volume_id', new.meet_volume_id,
+      'tier', new.tier,
+      'previous_starts_at', old.starts_at,
+      'previous_ends_at', old.ends_at,
+      'new_starts_at', new.starts_at,
+      'new_ends_at', new.ends_at
+    )
+  );
+  return new;
+end;
+$$;
+
+create or replace trigger audit_pricing_tier_change_trigger
+  after update on public.pricing_tiers
+  for each row
+  when (old.starts_at is distinct from new.starts_at or old.ends_at is distinct from new.ends_at)
+  execute function public.audit_pricing_tier_change();
+
+-- =============================================================================
 -- 4. SIGN-UP / PRIVILEGE-ESCALATION GUARDS
 -- =============================================================================
 
@@ -4609,6 +4821,33 @@ create index if not exists relay_squad_payments_squad_idx
 comment on table public.relay_squad_payments is
   'One row per PAID relay squad. The captain is billed for the whole squad, '
   'not each swimmer individually — see the comment on relay_squads above.';
+
+-- Same PAYMENT_OVERRIDE category as entry_payments' own trigger above, but
+-- its own function rather than a shared one — see the comment on
+-- audit_entry_payment_insert() for why a `case tg_table_name` dispatch does
+-- not actually work here.
+create or replace function public.audit_relay_squad_payment_insert()
+returns trigger
+language plpgsql
+as $$
+begin
+  perform public.log_admin_action(
+    'PAYMENT_OVERRIDE',
+    'relay_squad_payments',
+    new.id,
+    jsonb_build_object(
+      'squad_id', new.squad_id,
+      'amount_egp', new.amount_egp,
+      'method', new.method
+    )
+  );
+  return new;
+end;
+$$;
+
+create or replace trigger audit_relay_squad_payment_insert_trigger
+  after insert on public.relay_squad_payments
+  for each row execute function public.audit_relay_squad_payment_insert();
 
 -- ---------------------------------------------------------------------------
 -- public.quote_relay_squad_egp — what a squad costs, and whether it can be

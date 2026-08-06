@@ -587,14 +587,151 @@ seed times confirmed still present and readable in the print-rendered output.
 
 ---
 
-## 10. Test Suite & Findings
+## 10. Admin Audit Log
+
+### Trigger-driven, not app-called — because there was nothing to call
+
+`admin_actions` (append-only: `actor_id`, `action`, `target_table`,
+`target_id`, `details jsonb`) is written exclusively by `AFTER` triggers, via
+one shared `public.log_admin_action()`. This wasn't the first design
+considered — a `log_admin_action()` called explicitly from the app's payment
+and role-change code paths looked simpler at first — but a look at those
+paths first (per Rule 2) found none of the three audited surfaces
+(`users.role`, `entry_payments`, `pricing_packages` / `pricing_tiers`) go
+through a dedicated RPC at all: `components/admin/user-role-management.tsx`
+does a plain `supabase.from("users").update({ role })`, cash confirmation is
+a plain `.from("entry_payments").insert(...)`, and Control Unit pricing saves
+are plain `.update()` calls, every one of them gated by RLS alone, exactly
+per §1's "RLS is the enforcement layer, not the app". There was no call site
+to add an audit call to that wouldn't eventually be bypassed by some other
+future write to the same table — a trigger is the only place that sees every
+write regardless of which code path produced it, which is also why every
+other cross-cutting rule in this schema (`enforce_role_change`,
+`set_entry_hold_expiry`, `sync_athlete_team_on_membership_accept`) is a
+trigger and not an app-level call.
+
+### One trigger function per table, not a shared dispatcher
+
+The first pass wrote one shared function per category (`audit_payment_insert()`
+for both `entry_payments` and `relay_squad_payments`, `audit_pricing_change()`
+for both `pricing_packages` and `pricing_tiers`), keyed on `tg_table_name`
+inside a `case` expression. Caught by the scratch-cluster RLS suite the first
+time it ran against `seed-demo.sql` (which updates `pricing_packages` during
+its own seeding pass): `record "new" has no field "race_count"` — thrown
+while processing a `pricing_tiers` row, which has no such column. `NEW`/`OLD`
+inside a multi-table trigger function are the generic Postgres `record` type,
+not a fixed row type, and every branch of a `case` expression referencing
+`new.<column>` is resolved against the actual record at runtime regardless of
+which branch's condition matched — a branch that is never taken still fails
+if the column it names does not exist on that particular row. Fixed by
+splitting into `audit_entry_payment_insert()`, `audit_relay_squad_payment_insert()`,
+`audit_pricing_package_change()`, `audit_pricing_tier_change()` — five small,
+single-table functions instead of two shared ones. The scratch-cluster suite
+catching this before it ever reached a real database is exactly the class of
+bug §6's migration-safety section describes: obvious once seen, invisible
+until something actually re-runs the schema against real data.
+
+### `SECURITY DEFINER`, with its own `is_admin()` check standing in for RLS
+
+`log_admin_action()` is `security definer` — every other function in this
+schema that reads `auth.uid()` is, for the same reason: a plain
+(`security invoker`) function run from a trigger executes with the *caller's*
+grants, and the `authenticated` Postgres role has no `USAGE` on the `auth`
+schema, so a first attempt without this hit `permission denied for schema auth`
+the moment a real (non-superuser) admin session triggered a write — caught by
+the RLS suite regressing an already-passing pricing assertion (DB-31) the
+moment the new trigger was added to `pricing_packages`.
+
+`security definer` functions in this schema are owned by a superuser, which
+means Postgres's row-level security is bypassed entirely for whatever the
+function itself writes — the `admins_insert_admin_actions` RLS policy on
+`admin_actions` is real and correct, but it is never actually consulted for
+this specific insert path. `log_admin_action()` therefore re-checks
+`is_admin()` itself before writing, exactly like `confirm_relay_squad_payment()`
+already does for the same reason (see §6) — without that inline check, the
+function would be safely un-callable from a trigger but *unsafely* callable
+directly as a client RPC (PostgREST exposes every `public` schema function by
+default), since a non-admin's direct `rpc("log_admin_action", …)` call would
+otherwise sail straight through with no RLS check to stop it.
+
+### Silently skipped, not logged, when there is no authenticated actor
+
+`actor_id` is `not null`, and `log_admin_action()` returns early — writing
+nothing — when `auth.uid()` is null. This is not an edge case handled
+defensively; it is hit on every single application of `schema.sql` and
+`seed-demo.sql`/`seed-played-meet.sql`, all of which run over a raw superuser
+`psql` connection with no JWT at all. Seeding a demo admin's role or
+confirming a batch of demo payments is bootstrapping test fixtures, not a
+privileged action taken through the app, and without this guard every
+re-application of `schema.sql` — which this project's whole schema-safety
+model depends on being safely re-runnable (see §1, §6) — would manufacture
+audit rows for events that never happened in the app. Verified directly (RLS
+suite DB-60): a superuser write with no JWT claim still succeeds (`role =
+'postgres'` bypasses RLS regardless), and produces zero new `admin_actions`
+rows.
+
+### No UPDATE or DELETE policy — append-only by omission, not by a rule that says no
+
+`admin_actions` has RLS enabled and exactly two policies: `SELECT` (admin
+only) and `INSERT` (admin only, though see above — in practice only ever hit
+by a superuser-owned trigger function, whose own `is_admin()` check is what
+actually gates it). There is no `UPDATE` or no `DELETE` policy at all.
+Postgres RLS denies a command by default when no policy grants it for that
+command, on that table, for that role — so immutability here is a *property
+of what's absent*, not an explicit `USING (false)` rule that could be
+mistaken for a placeholder and "completed" later. Verified (RLS suite
+DB-55): an admin session attempting either an `UPDATE` or a `DELETE` against
+an existing row affects zero rows, and the row is still there afterward.
+
+### UI reads batch actor names rather than embedding
+
+`lib/audit-log.ts` fetches `admin_actions` and separately batches
+`(id, full_name, email)` for the distinct `actor_id`s in the page, the same
+pattern `lib/relay-payments.ts` uses for captain names (see §6) — the
+hand-maintained `Database` type in `lib/supabase/types.ts` carries no FK
+relationship metadata, so a PostgREST embed (`admin_actions.select("*, users(...)")`)
+fails TypeScript inference the same way every other embed in this codebase
+does. `/admin/audit-logs` filters by action type, admin, and a date range
+(plain `<input type="date">`, no new dependency), with an expandable row
+revealing `details` as formatted JSON — built with a plain `<table>` and a
+`useState`-driven expand rather than a new component, since this codebase has
+no collapsible/accordion primitive to reach for yet and one table's worth of
+rows did not justify adding one. The page carries no client-side `is_admin()`
+redirect — consistent with every other `/admin/*` page in this app (`/admin`,
+`/admin/seeding`, `/admin/control-unit`), none of which gate client-side;
+RLS returning nothing to a non-admin already is the gate, and adding a
+redundant client check here would be the one `/admin` page that does it
+differently for no reason.
+
+### A verification-script finding: `expect.poll()`, not a fixed sleep, for a trigger-driven side effect
+
+The Playwright assertion that a Cash Payments confirm produces a matching
+`admin_actions` row (`e2e/06-admin.spec.ts`) initially read the count once,
+after a fixed `waitForTimeout(1500)`. It failed twice under a full parallel
+suite run despite the underlying insert and trigger being independently
+proven correct three separate ways (the RLS suite, a direct `psql`
+reproduction against the persistent instance, and — on inspection after the
+"failure" — the row actually present in the database with the exact expected
+timestamp). The gap was never eventual consistency; Postgres commits are
+immediate. It was ordinary request latency (a second, separate REST request,
+racing a UI click handler, under load from 70+ other specs running at once)
+exceeding a fixed budget that had no margin. Replaced with `expect.poll(...)`
+polling up to 15s. The general lesson, not specific to this one test: a
+side effect produced by a database trigger rather than the awaited
+client call itself needs to be *polled for*, not read once after a guessed
+delay — the same reasoning `login()`'s own extended timeout in
+`e2e/helpers.ts` already documents for GoTrue under load.
+
+---
+
+## 11. Test Suite & Findings
 
 ### Baseline
 
 | Suite | Count | Command |
 | --- | --- | --- |
-| RLS assertions, scratch Postgres cluster | 194 | `npm run test:rls` |
-| Schema drift guard (trigger/policy/column inventory) | 56 checks | `npm run db:verify` |
+| RLS assertions, scratch Postgres cluster | 202 | `npm run test:rls` |
+| Schema drift guard (trigger/policy/column inventory) | 59 checks | `npm run db:verify` |
 | Vitest unit tests | 292 | `npm run test` |
 | Playwright E2E specs | 71 | `npx playwright test` |
 
