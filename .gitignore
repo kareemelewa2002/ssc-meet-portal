@@ -36,6 +36,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.local.example
+# Was missing this exception, so the "Option A — local stack" instructions in
+# .env.test.example's own header never actually reached anyone who cloned the
+# repo — the template describing how to configure a local Supabase stack
+# existed only on whichever machine last edited it locally. .env.test itself
+# stays ignored; only the documented template is meant to be shared.
+!.env.test.example
 
 # vercel
 .vercel

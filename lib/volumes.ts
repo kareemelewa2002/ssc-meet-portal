@@ -1,6 +1,8 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
-import type { MeetVolumeRow, SessionRow } from "@/lib/supabase/types";
+import type { Database, MeetVolumeRow } from "@/lib/supabase/types";
+import type { SessionRow } from "@/lib/supabase/types";
 
 /** Mirrors the real supabase/schema.sql seed data, used when Supabase isn't reachable. */
 export const DEMO_VOLUMES: MeetVolumeRow[] = [
@@ -10,6 +12,7 @@ export const DEMO_VOLUMES: MeetVolumeRow[] = [
     name: "SSC Vol. 1",
     meet_date: "2026-10-02",
     status: "scheduled",
+    is_public: true,
     created_at: "",
     updated_at: "",
   },
@@ -19,6 +22,7 @@ export const DEMO_VOLUMES: MeetVolumeRow[] = [
     name: "SSC Vol. 2",
     meet_date: null,
     status: "planned",
+    is_public: false,
     created_at: "",
     updated_at: "",
   },
@@ -41,9 +45,21 @@ export function slugifyVolumeName(name: string): string {
  * NaN, which 400s against the integer volume_number column outright rather
  * than just finding nothing, so the numeric path is only ever attempted
  * when volId genuinely parses as a positive integer.
+ *
+ * `client` is optional and exists for exactly one caller:
+ * app/events/[volId]/layout.tsx, a Server Component. That layout is the
+ * enforcement point for is_public — a signed-in non-admin must get "not
+ * found" for a hidden volume, and RLS is what makes that true. But
+ * lib/supabase/client.ts's browser client cannot see a Server Component's
+ * request cookies, so calling it there would authenticate as nobody and make
+ * the admin bypass silently stop working. Passing the server client through
+ * is what keeps the real session — and therefore RLS's is_admin() check —
+ * intact. Every other caller omits it and gets the ordinary browser client,
+ * unchanged from before.
  */
 export async function fetchVolumeByNumber(
   volId: string | number,
+  client?: SupabaseClient<Database>,
 ): Promise<FetchResult<MeetVolumeRow | null>> {
   const raw = String(volId).trim();
   const asNumber = Number(raw);
@@ -58,23 +74,31 @@ export async function fetchVolumeByNumber(
     const numeric = await runQuery<MeetVolumeRow | null>(
       `Loading meet volume ${raw}`,
       async () => {
-        const supabase = createClient();
+        const supabase = client ?? createClient();
         return supabase.from("meet_volumes").select("*").eq("volume_number", asNumber).maybeSingle();
       },
       { empty: null, demo },
     );
     // A successful lookup that simply found nothing falls through to the slug
     // path below; only a real failure short-circuits with its error intact.
+    //
+    // That "found nothing" case is now also what a HIDDEN volume looks like
+    // to a non-admin caller: RLS returns zero rows rather than the real one,
+    // so this is indistinguishable from the volume not existing at all — the
+    // intended behavior, since confirming existence is part of what stays
+    // hidden.
     if (numeric.error) return numeric;
     if (numeric.data) return numeric;
   }
 
   // Slug path — slugifying happens in JS, not SQL (no slug column), so this
-  // matches client-side over the full (small) volume list.
+  // matches client-side over the full (small) volume list. RLS already
+  // limited that list to whatever this caller may see, so no separate
+  // visibility check is needed here either.
   const all = await runQuery<MeetVolumeRow[]>(
     `Resolving meet volume "${raw}"`,
     async () => {
-      const supabase = createClient();
+      const supabase = client ?? createClient();
       return supabase.from("meet_volumes").select("*");
     },
     { empty: [], demo: DEMO_VOLUMES },
@@ -83,6 +107,41 @@ export async function fetchVolumeByNumber(
 
   const match = all.data.find((v) => slugifyVolumeName(v.name) === raw.toLowerCase()) ?? null;
   return ok(match);
+}
+
+/**
+ * Every volume this caller may see, RLS-scoped — for admin tooling that needs
+ * to pick among them (the Control Unit's volume selector). No status/is_public
+ * filter is applied here in app code: the point of the RLS policy on
+ * meet_volumes is that it IS that filter, so an admin session naturally gets
+ * every volume including planned/unpublished ones, and any other caller gets
+ * only the public ones, with nothing in TypeScript re-deciding the rule.
+ */
+export async function fetchAllVolumes(): Promise<FetchResult<MeetVolumeRow[]>> {
+  return runQuery<MeetVolumeRow[]>(
+    "Loading meet volumes",
+    async () => {
+      const supabase = createClient();
+      return supabase.from("meet_volumes").select("*").order("volume_number", { ascending: true });
+    },
+    { empty: [], demo: DEMO_VOLUMES },
+  );
+}
+
+/** Publishes or unpublishes a volume. Admin-only at the RLS layer
+ * (admins_full_access_meet_volumes) — this call fails silently-as-a-no-op for
+ * anyone else, same as every other admin-only write in this app. */
+export async function saveVolumeVisibility(
+  volumeId: string,
+  isPublic: boolean,
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("meet_volumes")
+    .update({ is_public: isPublic })
+    .eq("id", volumeId);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
 }
 
 /** The most recent non-"planned" volume — the one currently being run

@@ -202,10 +202,21 @@ on conflict (name) do update
 -- ---------------------------------------------------------------------------
 -- 3. Meet Volume & Schedule — SSC Vol. 1, exact official program.
 -- ---------------------------------------------------------------------------
-insert into public.meet_volumes (volume_number, name, meet_date, status)
-values (1, 'SSC Vol. 1', date '2026-10-02', 'scheduled')
+-- is_public is explicit here, not left to the column default. On a database
+-- being UPGRADED, schema.sql's own backfill sets is_public = true for any
+-- volume that already exists at scheduled/completed. But on a FRESH database
+-- — exactly what npm run test:rls and db:reset:test build — schema.sql runs
+-- first against an EMPTY meet_volumes table, so that backfill has nothing to
+-- act on; this INSERT is what creates the row, and without is_public spelled
+-- out here it would take the column default of false. Every RLS assertion and
+-- E2E spec in this suite assumes Vol. 1 is the normal, public, running meet —
+-- silently defaulting it to hidden would fail dozens of them for a reason
+-- that has nothing to do with the code under test.
+insert into public.meet_volumes (volume_number, name, meet_date, status, is_public)
+values (1, 'SSC Vol. 1', date '2026-10-02', 'scheduled', true)
 on conflict (volume_number) do update
-  set name = excluded.name, meet_date = excluded.meet_date, status = excluded.status;
+  set name = excluded.name, meet_date = excluded.meet_date, status = excluded.status,
+      is_public = excluded.is_public;
 
 insert into public.sessions (meet_volume_id, session_number, name, meet_date, start_time, end_time)
 select mv.id, v.session_number, v.name, mv.meet_date, v.start_time, v.end_time

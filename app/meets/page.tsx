@@ -17,10 +17,15 @@ import type { MeetVolumeRow } from "@/lib/supabase/types";
 /**
  * Meets index — the live meet plus every past meet.
  *
- * Volumes with status 'planned' are deliberately NOT listed: the old
- * "Coming Soon" cards advertised meets that had no date, no schedule and no
- * entries, so they were pure noise on a page whose whole job is "what can I
- * look at right now".
+ * No status/is_public filter here. public.meet_volumes' RLS policy
+ * (is_admin() or (is_public and status <> 'planned')) IS that filter now: a
+ * signed-in athlete's query only ever returns public, non-planned volumes,
+ * and an admin's own query returns everything, including their own drafts.
+ * Re-adding `.neq("status", "planned")` here would just be a second, looser
+ * copy of a rule the database already enforces exactly — and the reason
+ * status 'planned' was excluded in the first place (a card with no date is
+ * noise) is now part of what RLS decides, not something this page decides
+ * on its own.
  */
 async function fetchMeets(): Promise<FetchResult<MeetVolumeRow[]>> {
   try {
@@ -28,7 +33,6 @@ async function fetchMeets(): Promise<FetchResult<MeetVolumeRow[]>> {
     const { data, error } = await supabase
       .from("meet_volumes")
       .select("*")
-      .neq("status", "planned")
       .order("volume_number", { ascending: false });
     if (error) return failure(describeError("Loading meets", error), []);
     return ok(data ?? []);

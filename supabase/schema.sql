@@ -492,9 +492,48 @@ create table if not exists public.meet_volumes (
   name text not null,
   meet_date date,
   status public.volume_status not null default 'planned',
+  -- Whether this volume is announced to the public. Deliberately a SEPARATE
+  -- axis from `status`: status is the meet's own lifecycle (has a date been
+  -- set, has it happened), is_public is a business decision an admin makes
+  -- explicitly ("clients have agreed to this, tell the world"). A volume can
+  -- be fully scheduled and internally ready while is_public stays false —
+  -- that gap is the whole point of the column: it is the window in which a
+  -- meet gets built and priced before anyone announces it.
+  --
+  -- VISIBILITY RULE (enforced in RLS below, not just in app code):
+  --   public sees a volume  <=>  is_public = true AND status <> 'planned'
+  -- A 'planned' volume has no meet_date and nothing scheduled — flipping
+  -- is_public on one does not make it a public "Coming Soon" card; it stays
+  -- hidden until it also becomes 'scheduled'. Admins bypass this rule
+  -- entirely (see is_admin() in every policy that reads this table).
+  is_public boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+-- Idempotent column add for databases created before is_public existed.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'meet_volumes' and column_name = 'is_public'
+  ) then
+    alter table public.meet_volumes add column is_public boolean not null default false;
+
+    -- Backfill ONLY on first creation of the column. Every volume that is
+    -- already visible today (status <> 'planned') gets is_public = true, so
+    -- this migration does not silently take a live, already-public meet
+    -- offline the moment it runs. A volume already sitting at 'planned'
+    -- stays is_public = false, which changes nothing for it — it was already
+    -- hidden by status alone.
+    --
+    -- This block cannot fire on a later re-run of this file (the IF NOT
+    -- EXISTS guard above sees the column already exists), so an admin who
+    -- has since deliberately unpublished a scheduled volume will never have
+    -- that choice silently reverted by re-applying schema.sql.
+    update public.meet_volumes set is_public = true where status <> 'planned';
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------------
 -- volume_team_affiliations — which team an athlete represented for a given
@@ -3499,18 +3538,57 @@ drop policy if exists "admins_full_access_meet_volumes" on public.meet_volumes;
 create policy "admins_full_access_meet_volumes" on public.meet_volumes
   for all using (public.is_admin()) with check (public.is_admin());
 
+-- Was `using (true)` — fully public over the REST API regardless of anything
+-- app code checked. A Next.js route gate does nothing against a direct
+-- `GET /rest/v1/meet_volumes` call: that request never touches the route at
+-- all. This is the actual enforcement of the is_public visibility rule; the
+-- gates in app/events/[volId]/layout.tsx and the /meets, /leaderboards
+-- listings are UX on top of it, not the boundary itself.
 drop policy if exists "public_view_meet_volumes" on public.meet_volumes;
 create policy "public_view_meet_volumes" on public.meet_volumes
-  for select using (true);
+  for select using (public.is_admin() or (is_public and status <> 'planned'));
+
+-- ---------------------------------------------------------------------------
+-- public.volume_is_public — the ONE place "is this volume visible" is
+-- defined, for every child table below to call.
+-- ---------------------------------------------------------------------------
+-- Deliberately excludes the admin bypass — each policy below adds
+-- `public.is_admin() or public.volume_is_public(...)` explicitly, so the
+-- admin exception stays visible at every call site rather than hidden inside
+-- a shared helper. What IS shared, and must only ever be written once, is the
+-- definition of "public" itself: is_public = true AND status <> 'planned'.
+-- A volume that no longer exists (bad id) reads as not public, not as an
+-- error — coalesce rather than a bare boolean subquery, which would produce
+-- NULL (falsy in a USING clause, but worth being explicit about).
+create or replace function public.volume_is_public(p_meet_volume_id uuid)
+returns boolean
+language sql
+stable
+as $$
+  select coalesce(
+    (select mv.is_public and mv.status <> 'planned'
+       from public.meet_volumes mv
+      where mv.id = p_meet_volume_id),
+    false
+  );
+$$;
+
+comment on function public.volume_is_public(uuid) is
+  'Whether a volume is publicly visible: is_public AND status <> ''planned''. '
+  'The single definition of that rule — every "public read" policy on a '
+  'volume-scoped table calls this rather than repeating the predicate.';
 
 -- meet_settings is PUBLIC READ on purpose: the individual race price is
 -- quoted to a swimmer on the registration form before they have any special
 -- standing, so an anonymous visitor must be able to read it. Writes are
 -- admin-only — the Control Unit is an admin screen, and a swimmer who could
 -- edit this row could set their own entry fee to zero.
+-- Was `using (true)`. A hidden volume's prices must not be readable just
+-- because its id is known — the whole point of is_public is defeated if the
+-- pricing matrix stays open while the volume row is closed.
 drop policy if exists "public_view_meet_settings" on public.meet_settings;
 create policy "public_view_meet_settings" on public.meet_settings
-  for select using (true);
+  for select using (public.is_admin() or public.volume_is_public(meet_volume_id));
 
 drop policy if exists "admins_manage_meet_settings" on public.meet_settings;
 create policy "admins_manage_meet_settings" on public.meet_settings
@@ -3521,17 +3599,21 @@ create policy "admins_manage_meet_settings" on public.meet_settings
 -- quoted a price, and told which tier that price belongs to and when it ends,
 -- before they have any standing at all. Writes are admin-only throughout — a
 -- swimmer who could write any of these could set their own entry fee.
+-- Was `using (true)`. Same reasoning as meet_settings above: a hidden
+-- volume's tier calendar is part of what "hidden" has to mean.
 drop policy if exists "public_view_pricing_tiers" on public.pricing_tiers;
 create policy "public_view_pricing_tiers" on public.pricing_tiers
-  for select using (true);
+  for select using (public.is_admin() or public.volume_is_public(meet_volume_id));
 
 drop policy if exists "admins_manage_pricing_tiers" on public.pricing_tiers;
 create policy "admins_manage_pricing_tiers" on public.pricing_tiers
   for all using (public.is_admin()) with check (public.is_admin());
 
+-- Was `using (true)`. Same reasoning: the package matrix is pricing detail
+-- exactly like meet_settings and pricing_tiers, hidden along with the volume.
 drop policy if exists "public_view_pricing_packages" on public.pricing_packages;
 create policy "public_view_pricing_packages" on public.pricing_packages
-  for select using (true);
+  for select using (public.is_admin() or public.volume_is_public(meet_volume_id));
 
 drop policy if exists "admins_manage_pricing_packages" on public.pricing_packages;
 create policy "admins_manage_pricing_packages" on public.pricing_packages
@@ -3640,17 +3722,38 @@ drop policy if exists "admins_full_access_sessions" on public.sessions;
 create policy "admins_full_access_sessions" on public.sessions
   for all using (public.is_admin()) with check (public.is_admin());
 
+-- Was `using (true)`. A hidden volume's session windows and dates are exactly
+-- the "details" nobody has agreed to yet — they must not be readable just
+-- because someone knows or guesses the volume's id.
+--
+-- NOTE ON BLAST RADIUS: this also gates the referee scoring deck and any
+-- other internal tool that reads sessions/events directly, not only the
+-- three public routes named in the original ask. For today's data that
+-- changes nothing (Vol 1 stays public via the backfill above; Vol 2 has no
+-- sessions to read). It does mean is_public = false can no longer be used
+-- later as a way to "pause" an already-running, already-public meet without
+-- also cutting off referees mid-meet — documented in TECH_STACK_DECISIONS.md.
 drop policy if exists "public_view_sessions" on public.sessions;
 create policy "public_view_sessions" on public.sessions
-  for select using (true);
+  for select using (public.is_admin() or public.volume_is_public(meet_volume_id));
 
 drop policy if exists "admins_full_access_events" on public.events;
 create policy "admins_full_access_events" on public.events
   for all using (public.is_admin()) with check (public.is_admin());
 
+-- Was `using (true)`. events has no meet_volume_id of its own — it reaches
+-- one through session_id — so this cannot call volume_is_public() directly
+-- the way the other child tables do; it joins to sessions first.
 drop policy if exists "public_view_events" on public.events;
 create policy "public_view_events" on public.events
-  for select using (true);
+  for select using (
+    public.is_admin()
+    or exists (
+      select 1 from public.sessions s
+      where s.id = events.session_id
+        and public.volume_is_public(s.meet_volume_id)
+    )
+  );
 
 -- ---------------------------------------------------------------------------
 -- entries

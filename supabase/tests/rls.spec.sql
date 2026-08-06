@@ -2186,6 +2186,210 @@ exception when others then
 end $$;
 
 -- =============================================================================
+-- DB-39..DB-44 — is_public visibility: the actual enforcement, not app code
+-- =============================================================================
+-- These mutate meet_volumes.status / is_public on the seeded volumes, so every
+-- block restores what it changed — later assertions in this file, and every
+-- other run of this suite, depend on volume_number = 1 reading as the normal
+-- public, scheduled meet.
+
+-- DB-39: is_public=true alone does NOT make a 'planned' volume visible. This
+-- is the "both required" rule, and it is the one a single-column test would
+-- never catch — a policy that only checked is_public would pass a naive test
+-- and still leak a dateless placeholder to the public.
+do $$
+declare
+  v_vol uuid;
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_before record;
+  v_visible int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 2;
+  select status, is_public into v_before from public.meet_volumes where id = v_vol;
+
+  update public.meet_volumes set status = 'planned', is_public = true where id = v_vol;
+
+  perform ssc_test.act_as(v_athlete);
+  select count(*) into v_visible from public.meet_volumes where id = v_vol;
+  perform set_config('role', 'postgres', true);
+
+  update public.meet_volumes set status = v_before.status, is_public = v_before.is_public
+   where id = v_vol;
+
+  perform ssc_test.check(
+    'DB-39', 'planned + is_public=true still hides the volume from a non-admin',
+    v_visible = 0, format('visible=%s', v_visible));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-39', 'planned + public stays hidden', false, sqlerrm);
+end $$;
+
+-- DB-40: scheduled + is_public=true IS visible — the positive half of DB-39.
+-- Without this, a policy that hid everything would also pass DB-39.
+do $$
+declare
+  v_vol uuid;
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_before record;
+  v_visible int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 2;
+  select status, is_public into v_before from public.meet_volumes where id = v_vol;
+
+  update public.meet_volumes set status = 'scheduled', is_public = true where id = v_vol;
+
+  perform ssc_test.act_as(v_athlete);
+  select count(*) into v_visible from public.meet_volumes where id = v_vol;
+  perform set_config('role', 'postgres', true);
+
+  update public.meet_volumes set status = v_before.status, is_public = v_before.is_public
+   where id = v_vol;
+
+  perform ssc_test.check(
+    'DB-40', 'scheduled + is_public=true is visible to a non-admin',
+    v_visible = 1, format('visible=%s', v_visible));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-40', 'scheduled + public is visible', false, sqlerrm);
+end $$;
+
+-- DB-41: an admin sees a hidden volume regardless — proves the bypass exists,
+-- so DB-39's zero-visibility result is "hidden from the public", not
+-- "unreadable by anyone including the admin who needs to build it".
+do $$
+declare
+  v_vol uuid;
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_before record;
+  v_visible int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 2;
+  select status, is_public into v_before from public.meet_volumes where id = v_vol;
+
+  update public.meet_volumes set status = 'planned', is_public = false where id = v_vol;
+
+  perform ssc_test.act_as(v_admin);
+  select count(*) into v_visible from public.meet_volumes where id = v_vol;
+  perform set_config('role', 'postgres', true);
+
+  update public.meet_volumes set status = v_before.status, is_public = v_before.is_public
+   where id = v_vol;
+
+  perform ssc_test.check(
+    'DB-41', 'an admin sees a fully hidden (planned, unpublished) volume',
+    v_visible = 1, format('visible=%s', v_visible));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-41', 'admin bypass on meet_volumes', false, sqlerrm);
+end $$;
+
+-- DB-42: a non-admin cannot flip is_public themselves. Read access being
+-- gated is only half the story — if anyone could also WRITE the flag, they
+-- could publish the meet they are not supposed to know exists yet.
+do $$
+declare
+  v_vol uuid;
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_before boolean;
+  v_after boolean;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 2;
+  select is_public into v_before from public.meet_volumes where id = v_vol;
+
+  perform ssc_test.act_as(v_athlete);
+  update public.meet_volumes set is_public = true where id = v_vol;
+  perform set_config('role', 'postgres', true);
+
+  select is_public into v_after from public.meet_volumes where id = v_vol;
+  perform ssc_test.check(
+    'DB-42', 'a non-admin cannot flip is_public',
+    v_after = v_before, format('before=%s after=%s', v_before, v_after));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-42', 'is_public write is admin-only', false, sqlerrm);
+end $$;
+
+-- DB-43: the cascade actually reaches the child tables — sessions, events,
+-- meet_settings, pricing_packages, pricing_tiers all stayed `using (true)`
+-- until this change, so a hidden volume's schedule and prices were one
+-- direct REST call away from anyone who knew its id. Using volume 1 (which
+-- has real seeded sessions/events/pricing, unlike the empty volume 2) so
+-- there is something to actually hide and then reveal.
+do $$
+declare
+  v_vol uuid;
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_sessions_before int; v_events_before int; v_settings_before int;
+  v_packages_before int; v_tiers_before int;
+  v_sessions_after int; v_events_after int; v_settings_after int;
+  v_packages_after int; v_tiers_after int;
+begin
+  select id into v_vol from public.meet_volumes where volume_number = 1;
+
+  perform ssc_test.act_as(v_athlete);
+  select count(*) into v_sessions_before from public.sessions where meet_volume_id = v_vol;
+  select count(*) into v_events_before from public.events e
+    join public.sessions s on s.id = e.session_id where s.meet_volume_id = v_vol;
+  select count(*) into v_settings_before from public.meet_settings where meet_volume_id = v_vol;
+  select count(*) into v_packages_before from public.pricing_packages where meet_volume_id = v_vol;
+  select count(*) into v_tiers_before from public.pricing_tiers where meet_volume_id = v_vol;
+  perform set_config('role', 'postgres', true);
+
+  update public.meet_volumes set is_public = false where id = v_vol;
+
+  perform ssc_test.act_as(v_athlete);
+  select count(*) into v_sessions_after from public.sessions where meet_volume_id = v_vol;
+  select count(*) into v_events_after from public.events e
+    join public.sessions s on s.id = e.session_id where s.meet_volume_id = v_vol;
+  select count(*) into v_settings_after from public.meet_settings where meet_volume_id = v_vol;
+  select count(*) into v_packages_after from public.pricing_packages where meet_volume_id = v_vol;
+  select count(*) into v_tiers_after from public.pricing_tiers where meet_volume_id = v_vol;
+  perform set_config('role', 'postgres', true);
+
+  -- Restore before asserting, so a failed assertion here does not leave the
+  -- seeded live volume hidden for every test that runs after this one.
+  update public.meet_volumes set is_public = true where id = v_vol;
+
+  perform ssc_test.check(
+    'DB-43', 'hiding a volume also hides its sessions/events/pricing, not just its own row',
+    v_sessions_before > 0 and v_events_before > 0 and v_settings_before > 0
+      and v_packages_before > 0 and v_tiers_before > 0
+      and v_sessions_after = 0 and v_events_after = 0 and v_settings_after = 0
+      and v_packages_after = 0 and v_tiers_after = 0,
+    format(
+      'before: sessions=%s events=%s settings=%s packages=%s tiers=%s | after: sessions=%s events=%s settings=%s packages=%s tiers=%s',
+      v_sessions_before, v_events_before, v_settings_before, v_packages_before, v_tiers_before,
+      v_sessions_after, v_events_after, v_settings_after, v_packages_after, v_tiers_after));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  update public.meet_volumes set is_public = true
+   where id = (select id from public.meet_volumes where volume_number = 1);
+  perform ssc_test.check('DB-43', 'cascade to child tables', false, sqlerrm);
+end $$;
+
+-- DB-44: race_shape_templates is NOT volume-scoped (no meet_volume_id column
+-- at all — it is the shared default table every volume's events are seeded
+-- from) and must stay untouched by this change. If a future edit accidentally
+-- routed it through volume_is_public(), every template row would vanish for
+-- every non-admin, since there is no meet_volume_id to join on.
+do $$
+declare
+  v_athlete uuid := ssc_test.user_id('athlete01@ssc-demo.test');
+  v_visible int;
+begin
+  perform ssc_test.act_as(v_athlete);
+  select count(*) into v_visible from public.race_shape_templates;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-44', 'race_shape_templates stays public read regardless of any volume',
+    v_visible > 0, format('visible=%s', v_visible));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-44', 'race_shape_templates unaffected', false, sqlerrm);
+end $$;
+
+-- =============================================================================
 -- Report
 -- =============================================================================
 \echo ''

@@ -234,6 +234,10 @@ export type MeetVolumeRow = {
   name: string;
   meet_date: string | null;
   status: VolumeStatus;
+  /** Announced to the public. A volume is visible to non-admins only when
+   * BOTH this is true AND status !== 'planned' — see volume_is_public() in
+   * schema.sql, the single enforced definition of that rule. */
+  is_public: boolean;
   created_at: string;
   updated_at: string;
 };

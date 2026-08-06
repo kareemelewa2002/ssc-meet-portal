@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Save } from "lucide-react";
+import { AlertTriangle, Eye, EyeOff, Loader2, Save } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -53,7 +53,7 @@ import {
   type PricingMatrixCell,
   type TierWindow,
 } from "@/lib/pricing";
-import { fetchActiveVolume } from "@/lib/volumes";
+import { fetchAllVolumes, saveVolumeVisibility } from "@/lib/volumes";
 import type { MeetVolumeRow } from "@/lib/supabase/types";
 
 /**
@@ -150,6 +150,7 @@ function NumberField({
 export default function ControlUnitPage() {
   const toast = useToast();
 
+  const [allVolumes, setAllVolumes] = useState<MeetVolumeRow[]>([]);
   const [volume, setVolume] = useState<MeetVolumeRow | null>(null);
   const [settings, setSettings] = useState<MeetSettings | null>(null);
   const [sessions, setSessions] = useState<SessionSchedule[]>([]);
@@ -159,25 +160,44 @@ export default function ControlUnitPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  /**
+   * `preferredVolumeId` picks which volume to load: fetchAllVolumes() is
+   * RLS-scoped, so an admin session gets every volume back — including
+   * 'planned' ones that used to be invisible to this page entirely, back
+   * when it loaded whatever fetchActiveVolume() picked. Without that, there
+   * was no way to reach a not-yet-scheduled volume here to build and price it
+   * before publishing it — the toggle below would have had nothing to toggle.
+   *
+   * With no preference given, the most recently CREATED volume (highest
+   * volume_number) is opened, matching what fetchActiveVolume() used to
+   * default to for the common case of exactly one volume being actively
+   * worked on.
+   */
+  const load = useCallback(async (preferredVolumeId?: string) => {
     setLoading(true);
     setError(null);
     try {
-      const vol = await fetchActiveVolume();
-      if (!vol.data) {
-        setError(vol.error ?? "No active meet volume to configure.");
+      const vols = await fetchAllVolumes();
+      setAllVolumes(vols.data);
+      if (vols.data.length === 0) {
+        setError(vols.error ?? "No meet volumes exist yet.");
         return;
       }
-      setVolume(vol.data);
+
+      const target =
+        vols.data.find((v) => v.id === preferredVolumeId) ??
+        [...vols.data].sort((a, b) => b.volume_number - a.volume_number)[0];
+      setVolume(target);
 
       const [cfg, sch, evs, mx, tw] = await Promise.all([
-        fetchMeetSettingsForEditing(vol.data.id),
-        fetchSessionSchedules(vol.data.id),
-        fetchScheduledEvents(vol.data.id),
-        fetchPricingMatrix(vol.data.id),
-        fetchTierWindows(vol.data.id),
+        fetchMeetSettingsForEditing(target.id),
+        fetchSessionSchedules(target.id),
+        fetchScheduledEvents(target.id),
+        fetchPricingMatrix(target.id),
+        fetchTierWindows(target.id),
       ]);
 
       setSettings(cfg.data);
@@ -198,7 +218,7 @@ export default function ControlUnitPage() {
             })),
       );
 
-      setError(firstError(cfg, sch, evs, mx, tw));
+      setError(firstError(cfg, sch, evs, mx, tw, vols));
     } finally {
       setLoading(false);
     }
@@ -207,6 +227,50 @@ export default function ControlUnitPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Publishing is deliberately its OWN action, not a field bundled into the
+   * big "Save Control Unit" button below. That button saves a dozen unrelated
+   * dials at once — turnaround, surcharges, refund policy — and an admin
+   * fixing one of those must never accidentally announce an unagreed meet to
+   * clients as a side effect of an unrelated save. This fires immediately, on
+   * its own, with its own confirmation.
+   */
+  const togglePublish = async () => {
+    if (!volume) return;
+    const next = !volume.is_public;
+    setPublishing(true);
+    setError(null);
+    try {
+      const result = await saveVolumeVisibility(volume.id, next);
+      if (!result.success) throw new Error(result.error ?? "Could not update visibility.");
+
+      const updated = { ...volume, is_public: next };
+      setVolume(updated);
+      setAllVolumes((prev) => prev.map((v) => (v.id === volume.id ? updated : v)));
+
+      if (next && volume.status === "planned") {
+        toast.success(
+          "Marked public",
+          `${volume.name} is set to public, but stays hidden while it is still 'planned' — ` +
+            "give it a meet_date and set it to 'scheduled' for it to actually appear anywhere.",
+        );
+      } else {
+        toast.success(
+          next ? "Published" : "Unpublished",
+          next
+            ? `${volume.name} is now visible on /meets, /leaderboards and its own pages.`
+            : `${volume.name} is hidden from everyone except admins again.`,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not update visibility.";
+      setError(message);
+      toast.error("Could not update visibility", message);
+    } finally {
+      setPublishing(false);
+    }
+  };
 
   const patch = (changes: Partial<MeetSettings>) =>
     setSettings((prev) => (prev ? { ...prev, ...changes } : prev));
@@ -333,6 +397,69 @@ export default function ControlUnitPage() {
         </div>
 
         {error && <DataErrorBanner error={error} subject="the Control Unit" onRetry={() => void load()} />}
+
+        {/* ---------------------------------------------------------------- */}
+        <Section
+          title="Meet"
+          description="Which volume this page is editing, and whether it is visible to anyone outside admins."
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="volume-select">Editing</Label>
+            <select
+              id="volume-select"
+              className="min-h-[48px] w-full rounded-md border bg-background px-3 text-sm"
+              value={volume?.id ?? ""}
+              onChange={(e) => void load(e.target.value)}
+            >
+              {allVolumes.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name} — {v.status}
+                  {v.is_public ? ", public" : ", hidden"}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Every volume you can see, including ones that are not public yet — this list is
+              scoped by the database to what an admin is allowed to see, the same rule that
+              hides an unpublished volume from everyone else.
+            </p>
+          </div>
+
+          {volume && (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border-2 border-dashed p-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium">
+                  {volume.is_public ? "Public" : "Hidden from clients"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {volume.is_public && volume.status !== "planned"
+                    ? "Visible on /meets, /leaderboards and its own event pages."
+                    : volume.is_public && volume.status === "planned"
+                      ? "Marked public, but still hidden: a 'planned' volume with no meet_date " +
+                        "stays invisible either way, so this alone will not make it appear yet."
+                      : "Nobody but an admin can see this volume's name, schedule or pricing " +
+                        "anywhere — including over the API directly, not just on the site."}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant={volume.is_public ? "outline" : "default"}
+                className="min-h-[48px] shrink-0 gap-2"
+                disabled={publishing}
+                onClick={() => void togglePublish()}
+              >
+                {publishing ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : volume.is_public ? (
+                  <EyeOff className="size-4" />
+                ) : (
+                  <Eye className="size-4" />
+                )}
+                {volume.is_public ? "Unpublish" : "Publish to clients"}
+              </Button>
+            </div>
+          )}
+        </Section>
 
         {/* ---------------------------------------------------------------- */}
         <Section

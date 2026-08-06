@@ -20,14 +20,20 @@ export default async function LeaderboardsPage() {
   let volumes: { volume_number: number; name: string; status: string }[] = [];
 
   try {
+    // No status/is_public filter applied here. public.meet_volumes' RLS
+    // policy already returns exactly the right set for whoever is signed
+    // in — public, non-planned volumes for anyone else, everything for an
+    // admin. This runs through the SERVER client specifically because it is
+    // a Server Component: that client carries the real request cookies, so
+    // an admin's own session is what RLS's is_admin() actually sees. Filtering
+    // status here too would just be a second, weaker copy of the rule the
+    // database already enforces exactly.
     const supabase = await createClient();
     const { data } = await supabase
       .from("meet_volumes")
       .select("volume_number, name, status")
       .order("volume_number", { ascending: false });
-    // A volume with no confirmed date has no races and therefore no
-    // standings — listing it would be a dead link.
-    volumes = (data ?? []).filter((v) => v.status !== "planned");
+    volumes = data ?? [];
   } catch {
     // The all-time boards need no volume at all, so they stay reachable.
   }

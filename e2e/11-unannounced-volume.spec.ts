@@ -5,11 +5,23 @@ import { createClient } from "@supabase/supabase-js";
 /**
  * An unannounced meet must not be reachable by guessing its URL.
  *
- * /meets and /leaderboards already filter status = 'planned', but those only
- * decide what is LISTED. Before the gate in app/events/[volId]/layout.tsx,
- * typing /events/2/register rendered an unannounced volume's name, sessions
- * and prices to anybody. Absent from the index is not the same as private,
- * and this suite is what keeps those two from drifting apart again.
+ * /meets and /leaderboards decide what is LISTED — that alone was never
+ * enough, because before app/events/[volId]/layout.tsx existed, typing
+ * /events/2/register rendered an unannounced volume's name, sessions and
+ * prices to anybody signed in who guessed the number. Absent from an index is
+ * not the same as private.
+ *
+ * WHAT ACTUALLY ENFORCES THIS NOW: not this file, and not the layout either.
+ * public.meet_volumes' RLS policy — is_admin() or (is_public and
+ * status <> 'planned') — is the single definition of "who may see this
+ * volume", and the layout just queries through fetchVolumeByNumber() and
+ * treats an empty result as not-found. This suite still only manipulates
+ * `status`, which is sufficient on its own here (is_public defaults to false
+ * on volume 2 already, so status='planned' alone is enough to prove the
+ * "hidden" path) — but it is is_public, not status, that an admin actually
+ * flips in normal use. See publish-toggle.spec.ts for coverage of that flag
+ * directly, exercised through the Control Unit UI rather than by mutating the
+ * database underneath the app.
  */
 
 function serviceClient() {
