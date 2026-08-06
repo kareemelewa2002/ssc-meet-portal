@@ -230,12 +230,94 @@ end $$;
 
 -- Meet event registration entries start unpaid; only an admin (payment
 -- webhook / manual confirmation) may move one to 'confirmed'.
+--
+-- 'hold_expired' is what an unpaid entry becomes when its hold window lapses:
+-- the slot is released back to the race and the entry stops counting against
+-- capacity, but the entry itself SURVIVES. Deleting it would make an athlete's
+-- registration vanish with no trace and no way to reclaim it; this way both the
+-- athlete and the admin can still see it, and [Pay now] can re-acquire the slot
+-- if the race still has room.
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'entry_status') then
     create type public.entry_status as enum (
       'pending_payment',
       'confirmed'
+    );
+  end if;
+end $$;
+
+-- Deliberately NOT wrapped in a DO block. ALTER TYPE ... ADD VALUE may not be
+-- used in the same transaction that adds it, and a DO block is a transaction —
+-- the bare statement with IF NOT EXISTS autocommits and is idempotent on its
+-- own, which is what re-running this file needs.
+alter type public.entry_status add value if not exists 'hold_expired';
+
+-- The three pricing phases. Which one is in force is decided by date, unless an
+-- admin has pinned one (see public.meet_settings.pinned_pricing_tier).
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'pricing_tier') then
+    create type public.pricing_tier as enum (
+      'early_bird',
+      'standard',
+      'late'
+    );
+  end if;
+end $$;
+
+-- What a race looks like to a swimmer deciding whether to enter it. Derived
+-- from live capacity, never stored — see public.event_capacity().
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'event_availability') then
+    create type public.event_availability as enum (
+      'available',
+      'selling_out_soon',
+      'full'
+    );
+  end if;
+end $$;
+
+-- Notification categories. The split is not cosmetic: 'entry_payment' and
+-- 'waitlist' carry clocks — a missed hold expiry or a missed 24h claim window
+-- costs the athlete their slot — so those two cannot be muted. See
+-- public.notification_preferences.
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'notification_category') then
+    create type public.notification_category as enum (
+      'team',
+      'entry_payment',
+      'waitlist',
+      'results_schedule'
+    );
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'email_delivery_status') then
+    create type public.email_delivery_status as enum (
+      'pending',
+      'sent',
+      'failed',
+      'skipped'
+    );
+  end if;
+end $$;
+
+-- Waitlist entries are a queue, and a queue needs to say where each member is
+-- in it. 'offered' is the only state with a deadline attached.
+do $$
+begin
+  if not exists (select 1 from pg_type where typname = 'waitlist_status') then
+    create type public.waitlist_status as enum (
+      'waiting',
+      'offered',
+      'claimed',
+      'expired',
+      'withdrawn'
     );
   end if;
 end $$;
@@ -463,81 +545,184 @@ create index if not exists sessions_meet_volume_id_idx on public.sessions (meet_
 alter table public.sessions drop column if exists heat_turnaround_seconds;
 
 -- ---------------------------------------------------------------------------
--- meet_settings — the Admin Control Unit's dials, one row per SESSION.
+-- meet_settings — the Admin Control Unit's dials, one row per VOLUME.
 -- ---------------------------------------------------------------------------
--- Keyed (meet_volume_id, session_number) so each of the three sessions of a
--- volume carries its own capacity, turnaround, event limit and pricing. A
--- session of 100s does not turn over at the rate a session of 50s does, and a
--- Skins session may be priced differently from a heats session, so a single
--- meet-wide row would be wrong for at least one of them.
+-- This table was keyed (meet_volume_id, session_number) for exactly one
+-- release. It is now one row per volume, because pricing moved to packages
+-- counted across the WHOLE meet: an athlete who swims two races in Session 1
+-- and one in Session 2 has entered a three-race package, not two packages, and
+-- there is no way to assemble a cross-session basket price out of per-session
+-- unit prices. The migration that collapses the old shape is directly below.
 --
--- WHAT IS DELIBERATELY *NOT* HERE: session start and end times. public.sessions
--- already owns them, already has the same (meet_volume_id, session_number)
--- unique key, and is what every schedule/heat-sheet query already reads. A
--- second writable copy here would be two sources of truth for one fact — the
--- same mistake as the retired 'coach' role sitting alongside teams.captain_id,
--- where the two could disagree and nothing said which one was right. The
--- Control Unit edits the times on public.sessions; the default clock below is
--- applied THERE, in the session backfill further down this file.
+-- Session-level differentiation did not disappear, it moved to where it can
+-- actually be expressed: a race that costs more (a 400 IM, a Skins race) says
+-- so through its own surcharge on public.events, per race rather than per
+-- session.
 --
--- These columns are the source of truth for pricing. lib/event-registration.ts
--- used to export a hard-coded RACE_PRICE_EGP = 300 that eight call sites
--- multiplied by; the 300 survives ONLY as the column default below. A client
--- that cannot read this table must show an error, never a plausible price:
--- quoting a swimmer 300 EGP because the settings query FAILED is exactly the
--- silent-fallback failure lib/fetch-policy.ts exists to prevent. A row that is
--- simply ABSENT is a different thing — an unconfigured volume, not a failure —
--- and lib/meet-settings.ts answers that with DEFAULT_MEET_SETTINGS.
+-- WHAT IS DELIBERATELY *NOT* HERE:
+--
+--   * Session start and end times. public.sessions owns them and is what every
+--     schedule/heat-sheet query already reads. A second writable copy would be
+--     two sources of truth for one fact — the same mistake as the retired
+--     'coach' role sitting alongside teams.captain_id, where the two could
+--     disagree and nothing said which one was right.
+--   * Heat turnaround. It is per EVENT now (public.events.turnaround_seconds):
+--     a 50m sprint clears the pool far faster than a 400 IM or a relay, and one
+--     number averaged across them is wrong in both directions. Session duration
+--     is summed from the events actually scheduled in it.
+--   * The individual race price. That is the pricing matrix — see
+--     public.pricing_packages.
+--   * Results display. Whether World Aquatics points show, and whether DQ/NS
+--     sort to the bottom, are correctness rather than preference. An admin
+--     should not be able to configure results into being misleading.
+--
+-- A client that cannot read this table must show an error, never a plausible
+-- number: quoting a swimmer a price because the settings query FAILED is
+-- exactly the silent-fallback failure lib/fetch-policy.ts exists to prevent. A
+-- row that is simply ABSENT is a different thing — an unconfigured volume, not
+-- a failure — and lib/meet-settings.ts answers that with DEFAULT_MEET_SETTINGS.
 create table if not exists public.meet_settings (
   id uuid primary key default gen_random_uuid(),
   meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
-  session_number integer not null check (session_number in (1, 2, 3)),
-  -- How many swimmers this session can physically take. Feeds the Control
-  -- Unit's derived event-limit ceiling; a planning figure, not a hard gate on
-  -- registration.
+
+  -- --- Capacity and schedule ------------------------------------------------
+  -- How many swimmers one session can physically take. Feeds the Control
+  -- Unit's derived event-limit ceiling; a planning figure, not a hard gate.
   athlete_capacity integer not null default 200 check (athlete_capacity > 0),
-  -- Wall-clock budget for ONE heat: the swim plus clearing the water and
-  -- getting the next field behind the blocks. Mirrors
-  -- public.sessions.heat_turnaround_seconds, which stays the column the
-  -- seeding engine reads; this one is the Control Unit's planning dial.
-  heat_turnaround_seconds integer not null default 90
-    check (heat_turnaround_seconds > 0),
-  -- Cash on deck, per individual race entered.
-  individual_event_price_egp integer not null default 300
-    check (individual_event_price_egp >= 0),
-  -- Per SWIMMER on a relay squad, not per squad — a four-swimmer squad pays
-  -- four of these. Same shape as the individual fee so "one race fee per
-  -- swimmer" stays literally true (see lib/relays.ts relaySquadFeeEgp).
-  relay_swimmer_price_egp integer not null default 300
-    check (relay_swimmer_price_egp >= 0),
+  -- Lanes in the pool. Was hardcoded; it belongs to the capacity arithmetic.
+  lane_count integer not null default 8 check (lane_count between 1 and 20),
+  -- Dead time between sessions — warm-up, clearing the deck, officials' break.
+  inter_session_break_minutes integer not null default 30
+    check (inter_session_break_minutes >= 0),
   -- Replaces lib/event-registration.ts's flat MAX_EVENTS_PER_MEET = 4. The
   -- Control Unit shows the admin the maximum the schedule can absorb, but
-  -- does NOT clamp this to it: the admin decides, the readout warns.
+  -- does NOT clamp this to it: the admin decides, the readout warns. It may
+  -- exceed 4, which is why the pricing matrix needs an additional-race price.
   athlete_event_limit integer not null default 4
     check (athlete_event_limit between 1 and 20),
+
+  -- --- Registration window --------------------------------------------------
+  registration_opens_at timestamptz,
+  registration_closes_at timestamptz,
+  -- Lets an admin keep taking entries past the close without moving the
+  -- published deadline (which athletes may have screenshotted).
+  late_registration_enabled boolean not null default false,
+
+  -- --- Holds, capacity signalling and the waitlist --------------------------
+  -- How long an unpaid entry keeps its slot. The compromise between two
+  -- failure modes: count only paid entries and an athlete can be told after
+  -- registering that the race is full; hold unpaid slots forever and a
+  -- reserve-and-never-pay pattern locks a race out.
+  hold_window_hours integer not null default 48
+    check (hold_window_hours between 1 and 720),
+  -- How long the athlete at the head of a waitlist has to claim a freed slot
+  -- before it passes to the next in line.
+  waitlist_claim_hours integer not null default 24
+    check (waitlist_claim_hours between 1 and 168),
+  -- At or below this share of a race's cap remaining, the race reads
+  -- "selling out soon" rather than "available".
+  selling_out_threshold_percent integer not null default 20
+    check (selling_out_threshold_percent between 0 and 100),
+  -- Starting capacity for a race that has not been given its own cap.
+  default_event_capacity integer not null default 64
+    check (default_event_capacity > 0),
+
+  -- --- Pricing --------------------------------------------------------------
+  -- Per SWIMMER on a relay squad, not per squad — a four-swimmer squad pays
+  -- four of these. A relay leg does NOT count toward the athlete's individual
+  -- race package; it is charged on top. Flat, not tiered.
+  relay_swimmer_price_egp integer not null default 300
+    check (relay_swimmer_price_egp >= 0),
+  -- Overrides the date windows on public.pricing_tiers when set. Null means
+  -- "decide by date", which is the normal state; a value here is an admin
+  -- deliberately holding a tier open (extending a deadline, covering an
+  -- outage). Stored rather than inferred so the override survives a reload and
+  -- is visible to anyone reading the table.
+  pinned_pricing_tier public.pricing_tier,
+
+  -- --- Refunds --------------------------------------------------------------
+  -- What a withdrawing athlete gets back, and until when. 0 with a null
+  -- deadline is "no refunds", which is a policy, not an absence of one.
+  refund_percent integer not null default 0 check (refund_percent between 0 and 100),
+  refund_deadline_days integer check (refund_deadline_days >= 0),
+  refund_policy_note text,
+
   updated_at timestamptz not null default now(),
-  unique (meet_volume_id, session_number)
+  unique (meet_volume_id)
 );
+
+-- Migration off the one-release-only per-session shape. Keeps session 1's row
+-- as the volume's row and discards 2 and 3: their prices are superseded by the
+-- package matrix, and their capacity/turnaround by per-event values, so there
+-- is nothing in them worth merging. Guarded on the column still existing, so
+-- this is a no-op on a fresh database and on any subsequent run.
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'meet_settings'
+      and column_name = 'session_number'
+  ) then
+    delete from public.meet_settings where session_number <> 1;
+    alter table public.meet_settings
+      drop constraint if exists meet_settings_meet_volume_id_session_number_key;
+    alter table public.meet_settings drop column session_number;
+  end if;
+end $$;
+
+-- Columns retired into other tables. Dropped rather than left dormant: a stale
+-- writable price column is exactly how two sources of truth for one number get
+-- created, and someone would eventually read it.
+alter table public.meet_settings drop column if exists heat_turnaround_seconds;
+alter table public.meet_settings drop column if exists individual_event_price_egp;
+
+-- Existing databases predating the columns above.
+alter table public.meet_settings
+  add column if not exists lane_count integer not null default 8,
+  add column if not exists inter_session_break_minutes integer not null default 30,
+  add column if not exists registration_opens_at timestamptz,
+  add column if not exists registration_closes_at timestamptz,
+  add column if not exists late_registration_enabled boolean not null default false,
+  add column if not exists hold_window_hours integer not null default 48,
+  add column if not exists waitlist_claim_hours integer not null default 24,
+  add column if not exists selling_out_threshold_percent integer not null default 20,
+  add column if not exists default_event_capacity integer not null default 64,
+  add column if not exists pinned_pricing_tier public.pricing_tier,
+  add column if not exists refund_percent integer not null default 0,
+  add column if not exists refund_deadline_days integer,
+  add column if not exists refund_policy_note text;
+
+-- The unique key changed shape along with the table.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.meet_settings'::regclass
+      and conname = 'meet_settings_meet_volume_id_key'
+  ) then
+    alter table public.meet_settings
+      add constraint meet_settings_meet_volume_id_key unique (meet_volume_id);
+  end if;
+end $$;
 
 create index if not exists meet_settings_meet_volume_id_idx
   on public.meet_settings (meet_volume_id);
 
 comment on table public.meet_settings is
-  'Admin Control Unit settings, one row per (meet volume, session 1-3): '
-  'pricing, capacity, heat turnaround and the athlete event limit. Session '
-  'start/end times are NOT here — public.sessions owns those. The 300 EGP '
-  'defaults are the only surviving copy of the old hard-coded RACE_PRICE_EGP.';
+  'Admin Control Unit dials, one row per meet volume: capacity, lanes, holds, '
+  'waitlist windows, registration window, refund policy, relay price and the '
+  'pricing-tier pin. Session times live on public.sessions; heat turnaround '
+  'and race surcharge live per-event on public.events; the individual race '
+  'price is the matrix in public.pricing_packages.';
 
--- Backfill: every existing volume gets all three sessions' settings, and the
--- three default clock windows land on public.sessions where the times live.
--- Both are ON CONFLICT DO NOTHING, so re-running this file never overwrites a
--- setting an admin has since changed — which is the whole point of doing it
--- here rather than in seed-demo.sql, a file that deliberately destroys data.
-insert into public.meet_settings (meet_volume_id, session_number)
-select v.id, n
-from public.meet_volumes v
-cross join (values (1), (2), (3)) as s(n)
-on conflict (meet_volume_id, session_number) do nothing;
+-- Backfill: every existing volume gets a settings row, and the three default
+-- clock windows land on public.sessions where the times live. Both are ON
+-- CONFLICT DO NOTHING, so re-running this file never overwrites a setting an
+-- admin has since changed — which is the whole point of doing it here rather
+-- than in seed-demo.sql, a file that deliberately destroys data.
+insert into public.meet_settings (meet_volume_id)
+select v.id from public.meet_volumes v
+on conflict (meet_volume_id) do nothing;
 
 -- The default clock window for each of the three sessions. Sessions that
 -- already exist keep the times they were scheduled with — this is the fallback
@@ -563,6 +748,152 @@ comment on function public.default_session_window(integer) is
   'Default start/end clock for sessions 1-3 (09:00-13:00, 13:30-17:00, '
   '17:30-21:00). Existing sessions keep their scheduled times; this is the '
   'starting point offered for a new one.';
+
+-- ---------------------------------------------------------------------------
+-- pricing_tiers — when each of the three pricing phases is in force.
+-- ---------------------------------------------------------------------------
+-- Dates decide the active tier; meet_settings.pinned_pricing_tier overrides
+-- them when an admin needs to hold one open. Both live in the Control Unit.
+--
+-- The windows are stored as timestamptz rather than date because a tier
+-- boundary is a moment, not a day: "Early Bird ends on the 20th" has to mean a
+-- specific instant or two athletes paying minutes apart get different answers
+-- depending on the server's idea of midnight.
+create table if not exists public.pricing_tiers (
+  id uuid primary key default gen_random_uuid(),
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
+  tier public.pricing_tier not null,
+  starts_at timestamptz not null,
+  ends_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  unique (meet_volume_id, tier),
+  constraint pricing_tiers_window_ordered check (ends_at > starts_at)
+);
+
+create index if not exists pricing_tiers_meet_volume_id_idx
+  on public.pricing_tiers (meet_volume_id);
+
+comment on table public.pricing_tiers is
+  'Date window for each of the three pricing phases, per volume. The active '
+  'tier is the one whose window contains now(), unless '
+  'meet_settings.pinned_pricing_tier overrides it.';
+
+-- ---------------------------------------------------------------------------
+-- pricing_packages — the 4 x 3 matrix.
+-- ---------------------------------------------------------------------------
+-- race_count 1-4 are the four packages. race_count 0 is NOT a package: it is
+-- the "each additional race" price, used for a race added after payment and
+-- for every race beyond the fourth when an admin has raised
+-- athlete_event_limit above 4. Storing it as a row in the same table rather
+-- than a column on meet_settings keeps one place to look up "what does a race
+-- cost at tier T", and it is tiered exactly like the packages are.
+--
+-- Per the pricing decision, the additional-race price is the 1-race package
+-- price; the seed below sets them equal. They are separate rows so an admin can
+-- later diverge them without a schema change.
+create table if not exists public.pricing_packages (
+  id uuid primary key default gen_random_uuid(),
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
+  -- 1-4: the package for entering exactly that many individual races.
+  -- 0: the per-race price for anything beyond the largest package.
+  race_count integer not null check (race_count between 0 and 4),
+  tier public.pricing_tier not null,
+  price_egp integer not null check (price_egp >= 0),
+  updated_at timestamptz not null default now(),
+  unique (meet_volume_id, race_count, tier)
+);
+
+create index if not exists pricing_packages_meet_volume_id_idx
+  on public.pricing_packages (meet_volume_id);
+
+comment on table public.pricing_packages is
+  'The 4x3 pricing matrix per volume: race_count 1-4 are the packages, '
+  'race_count 0 is the each-additional-race price used past the largest '
+  'package. Totals also add per-event surcharges and relay fees.';
+
+-- Default matrix and tier windows for every volume that has none. Prices
+-- ascend across tiers and give a small break for entering more races; they are
+-- a starting point for the admin, not a recommendation. ON CONFLICT DO NOTHING
+-- throughout: re-running this file must never reset a price an admin has set.
+insert into public.pricing_packages (meet_volume_id, race_count, tier, price_egp)
+select v.id, m.race_count, m.tier::public.pricing_tier, m.price_egp
+from public.meet_volumes v
+cross join (values
+  -- additional / beyond-package race, equal to the 1-race package
+  (0, 'early_bird', 200), (0, 'standard', 300), (0, 'late', 400),
+  (1, 'early_bird', 200), (1, 'standard', 300), (1, 'late', 400),
+  (2, 'early_bird', 380), (2, 'standard', 560), (2, 'late', 740),
+  (3, 'early_bird', 540), (3, 'standard', 700), (3, 'late', 960),
+  (4, 'early_bird', 680), (4, 'standard', 900), (4, 'late', 1200)
+) as m(race_count, tier, price_egp)
+on conflict (meet_volume_id, race_count, tier) do nothing;
+
+-- Default tier windows, anchored on the volume's meet_date so they mean
+-- something: Early Bird until six weeks out, Standard until one week out, Late
+-- through meet day. A volume with no meet_date yet gets windows anchored on
+-- today, which the admin will move when the date is set.
+insert into public.pricing_tiers (meet_volume_id, tier, starts_at, ends_at)
+select
+  v.id,
+  w.tier::public.pricing_tier,
+  (coalesce(v.meet_date, current_date) + w.starts_days)::timestamptz,
+  (coalesce(v.meet_date, current_date) + w.ends_days)::timestamptz
+from public.meet_volumes v
+cross join (values
+  ('early_bird', -180, -42),
+  ('standard',    -42,  -7),
+  ('late',         -7,   1)
+) as w(tier, starts_days, ends_days)
+on conflict (meet_volume_id, tier) do nothing;
+
+-- ---------------------------------------------------------------------------
+-- public.active_pricing_tier — which tier a volume is selling at right now.
+-- ---------------------------------------------------------------------------
+-- Resolution order, and the reason for each step:
+--   1. An admin pin, if set. A deliberate override outranks the calendar.
+--   2. The tier whose date window contains now().
+--   3. Before the first window opens: the earliest tier — a meet that has not
+--      started selling should quote Early Bird, not nothing.
+--   4. After the last window closes: the latest tier. Registration being
+--      closed is a separate question, answered by the registration window;
+--      whatever still gets sold sells at the last price, never at Early Bird.
+-- Never returns null, because every caller of this would otherwise have to
+-- invent a price, and inventing prices is the failure mode this schema is
+-- built to prevent.
+create or replace function public.active_pricing_tier(p_meet_volume_id uuid)
+returns public.pricing_tier
+language sql
+stable
+as $$
+  select coalesce(
+    (select ms.pinned_pricing_tier
+       from public.meet_settings ms
+      where ms.meet_volume_id = p_meet_volume_id),
+    (select pt.tier
+       from public.pricing_tiers pt
+      where pt.meet_volume_id = p_meet_volume_id
+        and now() >= pt.starts_at and now() < pt.ends_at
+      order by pt.starts_at
+      limit 1),
+    (select pt.tier
+       from public.pricing_tiers pt
+      where pt.meet_volume_id = p_meet_volume_id
+        and pt.starts_at > now()
+      order by pt.starts_at
+      limit 1),
+    (select pt.tier
+       from public.pricing_tiers pt
+      where pt.meet_volume_id = p_meet_volume_id
+      order by pt.ends_at desc
+      limit 1),
+    'standard'::public.pricing_tier
+  );
+$$;
+
+comment on function public.active_pricing_tier(uuid) is
+  'The pricing tier in force for a volume now: an admin pin if set, else the '
+  'tier whose date window contains now(), else the nearest window on either '
+  'side. Never null — a caller with no tier would have to invent a price.';
 
 -- The set_updated_at trigger for this table is created alongside the others,
 -- below public.set_updated_at() itself.
@@ -610,7 +941,206 @@ where seeds_as_nt = false
 alter table public.events
   add column if not exists is_relay boolean not null default false;
 
+-- ---------------------------------------------------------------------------
+-- Per-event turnaround, surcharge and capacity.
+-- ---------------------------------------------------------------------------
+-- All three are per EVENT, and every event's values are editable. The
+-- race-shape template below only supplies the STARTING value when an event is
+-- created; it constrains nothing afterwards.
+--
+-- Turnaround used to be one number per session. That is wrong in both
+-- directions at once: a session budgeted at a 400 IM's turnaround wastes most
+-- of its afternoon on 50s, and one budgeted at a 50's overruns the moment a
+-- distance event appears. Session duration is now summed from the events
+-- actually scheduled in it.
+--
+-- Surcharge is what makes a 400 IM cost more than a 50 Free. It is added on top
+-- of the athlete's package price, per race entered.
+alter table public.events
+  add column if not exists turnaround_seconds integer,
+  add column if not exists surcharge_egp integer,
+  add column if not exists capacity_cap integer;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.events'::regclass and conname = 'events_turnaround_positive'
+  ) then
+    alter table public.events add constraint events_turnaround_positive
+      check (turnaround_seconds is null or turnaround_seconds > 0);
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.events'::regclass and conname = 'events_surcharge_non_negative'
+  ) then
+    alter table public.events add constraint events_surcharge_non_negative
+      check (surcharge_egp is null or surcharge_egp >= 0);
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.events'::regclass and conname = 'events_capacity_positive'
+  ) then
+    alter table public.events add constraint events_capacity_positive
+      check (capacity_cap is null or capacity_cap > 0);
+  end if;
+end $$;
+
+comment on column public.events.turnaround_seconds is
+  'Wall-clock budget for one heat of THIS event: the swim plus clearing the '
+  'water and getting the next field behind the blocks. Seeded from the '
+  'race-shape template, editable per event. Null falls back to the template.';
+comment on column public.events.surcharge_egp is
+  'Added to the athlete package price for entering this race. Null falls back '
+  'to the race-shape template.';
+comment on column public.events.capacity_cap is
+  'Maximum entries this race accepts. Null falls back to '
+  'meet_settings.default_event_capacity.';
+
 create index if not exists events_session_id_idx on public.events (session_id);
+
+-- ---------------------------------------------------------------------------
+-- race_shape_templates — default turnaround and surcharge per kind of race.
+-- ---------------------------------------------------------------------------
+-- public.events rows are recreated for every volume. Without a template an
+-- admin retypes ~40 pairs of numbers per volume with nothing to catch a missed
+-- one; with it, a new volume starts sensible and only the differences get
+-- touched.
+--
+-- Matching is most-specific-first: an exact (distance, stroke) beats a
+-- distance-only row, which beats the relay/any fallback. stroke null means
+-- "any stroke at this distance".
+create table if not exists public.race_shape_templates (
+  id uuid primary key default gen_random_uuid(),
+  distance_m integer check (distance_m is null or distance_m > 0),
+  -- Null = any stroke. Matched case-insensitively against events.stroke.
+  stroke text,
+  is_relay boolean not null default false,
+  turnaround_seconds integer not null check (turnaround_seconds > 0),
+  surcharge_egp integer not null default 0 check (surcharge_egp >= 0),
+  updated_at timestamptz not null default now()
+);
+
+-- A partial unique index rather than a table constraint: null distance_m and
+-- null stroke are legitimate wildcard rows, and plain UNIQUE treats every null
+-- as distinct, which would let duplicate wildcards accumulate silently.
+create unique index if not exists race_shape_templates_shape_key
+  on public.race_shape_templates (
+    coalesce(distance_m, -1), lower(coalesce(stroke, '*')), is_relay
+  );
+
+comment on table public.race_shape_templates is
+  'Default turnaround and surcharge by race shape, used to seed new events. '
+  'Matched most-specific-first: (distance, stroke) then (distance, any) then '
+  'the relay/any fallback. Editable per event afterwards — this constrains '
+  'nothing, it only supplies a starting value.';
+
+insert into public.race_shape_templates
+  (distance_m, stroke, is_relay, turnaround_seconds, surcharge_egp)
+values
+  (null,  null,               true,   120, 0),
+  (50,    null,               false,   45, 0),
+  (100,   null,               false,   60, 0),
+  (100,   'Individual Medley', false,  60, 25),
+  (200,   null,               false,   90, 50),
+  (400,   null,               false,  150, 150),
+  (800,   null,               false,  240, 200),
+  (1500,  null,               false,  420, 250),
+  (null,  null,               false,   90, 0)
+on conflict do nothing;
+
+-- ---------------------------------------------------------------------------
+-- public.template_for_race — the template row matching a race shape.
+-- ---------------------------------------------------------------------------
+-- Ordering is the whole function: an exact distance+stroke match must outrank
+-- a distance-only match, which must outrank the catch-all, or a 100 IM would
+-- silently pick up the plain-100 surcharge of zero.
+create or replace function public.template_for_race(
+  p_distance_m integer,
+  p_stroke text,
+  p_is_relay boolean
+)
+returns table (turnaround_seconds integer, surcharge_egp integer)
+language sql
+stable
+as $$
+  select t.turnaround_seconds, t.surcharge_egp
+  from public.race_shape_templates t
+  where t.is_relay = coalesce(p_is_relay, false)
+    and (t.distance_m is null or t.distance_m = p_distance_m)
+    and (t.stroke is null or lower(t.stroke) = lower(coalesce(p_stroke, '')))
+  order by
+    (t.distance_m is not null) desc,
+    (t.stroke is not null) desc
+  limit 1;
+$$;
+
+comment on function public.template_for_race(integer, text, boolean) is
+  'The race_shape_templates row matching a race, most specific first: exact '
+  'distance+stroke, then distance-only, then the catch-all.';
+
+-- ---------------------------------------------------------------------------
+-- Seed an event's turnaround/surcharge/cap from the template on insert.
+-- ---------------------------------------------------------------------------
+-- Only fills what the caller left null, so an INSERT that states its own
+-- values keeps them. The admin's edits are never overwritten: this fires on
+-- insert only, not on update.
+create or replace function public.set_event_defaults_from_template()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_tpl record;
+  v_default_cap integer;
+begin
+  if new.turnaround_seconds is null or new.surcharge_egp is null then
+    select * into v_tpl
+    from public.template_for_race(new.distance_m, new.stroke, new.is_relay);
+
+    if found then
+      new.turnaround_seconds := coalesce(new.turnaround_seconds, v_tpl.turnaround_seconds);
+      new.surcharge_egp := coalesce(new.surcharge_egp, v_tpl.surcharge_egp);
+    end if;
+  end if;
+
+  if new.capacity_cap is null then
+    select ms.default_event_capacity into v_default_cap
+    from public.meet_settings ms
+    join public.sessions s on s.meet_volume_id = ms.meet_volume_id
+    where s.id = new.session_id;
+
+    new.capacity_cap := v_default_cap;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace trigger set_event_defaults_from_template_trigger
+  before insert on public.events
+  for each row execute function public.set_event_defaults_from_template();
+
+-- Backfill events that predate these columns. Guarded on IS NULL so an admin's
+-- edits survive every re-run of this file.
+-- Correlated scalar subqueries rather than UPDATE ... FROM func(e.col): a
+-- set-returning function in the FROM list cannot reference the UPDATE target
+-- without LATERAL, and LATERAL against the target is not allowed either.
+update public.events e
+set turnaround_seconds = coalesce(
+      e.turnaround_seconds,
+      (select t.turnaround_seconds
+         from public.template_for_race(e.distance_m, e.stroke, e.is_relay) t)),
+    surcharge_egp = coalesce(
+      e.surcharge_egp,
+      (select t.surcharge_egp
+         from public.template_for_race(e.distance_m, e.stroke, e.is_relay) t))
+where e.turnaround_seconds is null or e.surcharge_egp is null;
+
+update public.events e
+set capacity_cap = ms.default_event_capacity
+from public.sessions s
+join public.meet_settings ms on ms.meet_volume_id = s.meet_volume_id
+where e.session_id = s.id and e.capacity_cap is null;
 
 -- ---------------------------------------------------------------------------
 -- entries — event registrations
@@ -639,6 +1169,656 @@ create table if not exists public.entries (
 create index if not exists entries_event_id_idx on public.entries (event_id);
 create index if not exists entries_athlete_id_idx on public.entries (athlete_id);
 create index if not exists entries_status_idx on public.entries (status);
+
+-- ---------------------------------------------------------------------------
+-- Capacity holds on an unpaid entry.
+-- ---------------------------------------------------------------------------
+-- Registering reserves a slot immediately, but not forever. hold_expires_at is
+-- stamped on insert from meet_settings.hold_window_hours; once it passes, the
+-- slot stops counting against the race's cap.
+--
+-- This is the middle ground between two failure modes. Count only PAID entries
+-- and an athlete can register, walk to the desk, and be told the race filled up
+-- on the way. Hold unpaid slots forever and one person registering for
+-- everything with no intention of paying locks out a race.
+alter table public.entries
+  add column if not exists hold_expires_at timestamptz;
+
+create index if not exists entries_hold_expires_at_idx
+  on public.entries (hold_expires_at)
+  where hold_expires_at is not null;
+
+comment on column public.entries.hold_expires_at is
+  'When an unpaid entry stops holding its capacity slot. Set on insert from '
+  'meet_settings.hold_window_hours; cleared when the entry is confirmed.';
+
+-- Stamp the hold on insert, and clear it the moment payment lands. A confirmed
+-- entry with a live expiry would eventually be swept and have its slot taken
+-- away after the athlete had already paid for it.
+create or replace function public.set_entry_hold_expiry()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_hours integer;
+begin
+  if new.status = 'pending_payment' and new.hold_expires_at is null then
+    select ms.hold_window_hours into v_hours
+    from public.meet_settings ms
+    join public.sessions s on s.meet_volume_id = ms.meet_volume_id
+    join public.events e on e.session_id = s.id
+    where e.id = new.event_id;
+
+    new.hold_expires_at := now() + make_interval(hours => coalesce(v_hours, 48));
+  elsif new.status = 'confirmed' then
+    new.hold_expires_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace trigger set_entry_hold_expiry_trigger
+  before insert or update of status on public.entries
+  for each row execute function public.set_entry_hold_expiry();
+
+-- ---------------------------------------------------------------------------
+-- public.event_capacity — what a race looks like right now.
+-- ---------------------------------------------------------------------------
+-- Held slots are counted with a LIVE comparison against hold_expires_at rather
+-- than by reading the entry's status. The scheduled sweep is what flips a
+-- lapsed hold to 'hold_expired' and fires the notification, but the sweep runs
+-- every 15 minutes and could fail or be paused. Deriving the number here means
+-- capacity is correct in the gaps: a race can never read as full because a
+-- background job did not run.
+--
+-- The sweep owns the side effects. This function owns the truth.
+create or replace function public.event_capacity(p_event_id uuid)
+returns table (
+  capacity_cap integer,
+  paid_count integer,
+  held_count integer,
+  free_count integer,
+  availability public.event_availability
+)
+language sql
+stable
+as $$
+  with cap as (
+    select coalesce(e.capacity_cap, ms.default_event_capacity, 64) as cap,
+           coalesce(ms.selling_out_threshold_percent, 20) as threshold
+    from public.events e
+    join public.sessions s on s.id = e.session_id
+    left join public.meet_settings ms on ms.meet_volume_id = s.meet_volume_id
+    where e.id = p_event_id
+  ),
+  counts as (
+    select
+      count(*) filter (where en.status = 'confirmed')::integer as paid,
+      count(*) filter (
+        where en.status = 'pending_payment'
+          and (en.hold_expires_at is null or en.hold_expires_at > now())
+      )::integer as held
+    from public.entries en
+    where en.event_id = p_event_id
+  )
+  select
+    cap.cap,
+    counts.paid,
+    counts.held,
+    greatest(cap.cap - counts.paid - counts.held, 0)::integer as free_count,
+    case
+      when cap.cap - counts.paid - counts.held <= 0 then 'full'
+      -- Integer arithmetic rather than a float ratio: at cap 64 and a 20%
+      -- threshold this is "13 or fewer left", which is a number an admin can
+      -- check by hand against what the screen says.
+      when (cap.cap - counts.paid - counts.held) * 100 <= cap.cap * cap.threshold
+        then 'selling_out_soon'
+      else 'available'
+    end::public.event_availability
+  from cap, counts;
+$$;
+
+comment on function public.event_capacity(uuid) is
+  'Live capacity for a race: cap, paid, held (expiry compared against now(), '
+  'not read from status), free, and the availability state. Correct between '
+  'sweeps and correct if a sweep never runs.';
+
+-- ---------------------------------------------------------------------------
+-- event_waitlist — the queue for a full race.
+-- ---------------------------------------------------------------------------
+-- Position is derived from requested_at rather than stored. A stored integer
+-- would have to be renumbered on every withdrawal, and any missed renumber
+-- leaves two athletes believing they are third.
+create table if not exists public.event_waitlist (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references public.events (id) on delete cascade,
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  status public.waitlist_status not null default 'waiting',
+  requested_at timestamptz not null default now(),
+  -- Set when this athlete is offered a freed slot. Past it, the offer lapses
+  -- and passes to the next in line.
+  offered_at timestamptz,
+  offer_expires_at timestamptz,
+  resolved_at timestamptz,
+  unique (event_id, athlete_id)
+);
+
+create index if not exists event_waitlist_event_id_idx
+  on public.event_waitlist (event_id, requested_at);
+create index if not exists event_waitlist_offer_expiry_idx
+  on public.event_waitlist (offer_expires_at)
+  where status = 'offered';
+
+comment on table public.event_waitlist is
+  'Queue for a full race, ordered by requested_at. When a slot frees the head '
+  'of the queue is offered it and has meet_settings.waitlist_claim_hours to '
+  'claim before it passes on. Position is derived, never stored.';
+
+-- ---------------------------------------------------------------------------
+-- public.waitlist_position — where an athlete stands in a race's queue.
+-- ---------------------------------------------------------------------------
+create or replace function public.waitlist_position(p_event_id uuid, p_athlete_id uuid)
+returns integer
+language sql
+stable
+as $$
+  select position from (
+    select w.athlete_id,
+           -- id is the tiebreak, and it is not decoration. Two athletes who
+           -- join in the same statement (or the same millisecond) share a
+           -- requested_at, and without a deterministic second key this
+           -- ordering and the one in offer_waitlist_slots can disagree — the
+           -- queue would tell one swimmer they are next while the slot was
+           -- offered to the other. Both orderings must sort identically.
+           row_number() over (order by w.requested_at, w.id)::integer as position
+    from public.event_waitlist w
+    where w.event_id = p_event_id
+      and w.status in ('waiting', 'offered')
+  ) ranked
+  where ranked.athlete_id = p_athlete_id;
+$$;
+
+comment on function public.waitlist_position(uuid, uuid) is
+  'An athlete''s place in a race queue, ordered by (requested_at, id). The '
+  'tiebreak must match offer_waitlist_slots exactly or the displayed position '
+  'and the offered slot can go to different people.';
+
+-- ---------------------------------------------------------------------------
+-- entry_payments — who paid how much, and for what.
+-- ---------------------------------------------------------------------------
+-- Price is DETERMINED at payment time and deliberately never snapshotted at
+-- registration: an athlete pays whatever tier is in force when they actually
+-- pay. But the moment cash is collected, what was collected has to be written
+-- down. Nothing else in this schema stores a price, so without this table the
+-- meet ends with no financial record at all — only a set of prices that can
+-- still be recomputed differently tomorrow.
+--
+-- Structured for a payment provider that does not exist yet: method and
+-- external_reference are the seam. Adding a gateway later means new rows here,
+-- not a rework of entries, holds or the waitlist.
+create table if not exists public.entry_payments (
+  id uuid primary key default gen_random_uuid(),
+  athlete_id uuid not null references public.athletes (id) on delete cascade,
+  meet_volume_id uuid not null references public.meet_volumes (id) on delete cascade,
+  -- The tier that produced this amount. Recorded rather than looked up later,
+  -- because active_pricing_tier() answers "what is the tier NOW" and will give
+  -- a different answer next week.
+  tier public.pricing_tier not null,
+  amount_egp integer not null check (amount_egp >= 0),
+  method text not null default 'cash',
+  -- Gateway transaction id, when there is a gateway. Null for cash.
+  external_reference text,
+  -- The admin who took the money. Null only if a future gateway collects it
+  -- with no human involved.
+  collected_by uuid references public.users (id) on delete set null,
+  collected_at timestamptz not null default now(),
+  note text
+);
+
+create index if not exists entry_payments_athlete_idx
+  on public.entry_payments (athlete_id, meet_volume_id);
+create index if not exists entry_payments_volume_idx
+  on public.entry_payments (meet_volume_id, collected_at);
+
+comment on table public.entry_payments is
+  'Financial record: what an athlete actually paid, at which tier, taken by '
+  'which admin, when. Written when payment is collected — price is settled at '
+  'payment time, so this is the only place the figure survives.';
+
+-- The line items behind the amount. An athlete asking "why 850?" gets an
+-- answer that came out of the database, not one recomputed by the UI from
+-- today's prices — which by then may differ.
+create table if not exists public.entry_payment_items (
+  id uuid primary key default gen_random_uuid(),
+  payment_id uuid not null references public.entry_payments (id) on delete cascade,
+  -- Null for the package line, which covers several races at once rather than
+  -- belonging to any one of them.
+  entry_id uuid references public.entries (id) on delete set null,
+  kind text not null check (kind in ('package', 'surcharge', 'additional_race', 'relay')),
+  label text not null,
+  amount_egp integer not null
+);
+
+create index if not exists entry_payment_items_payment_idx
+  on public.entry_payment_items (payment_id);
+
+-- ---------------------------------------------------------------------------
+-- notifications — in-app first, email second.
+-- ---------------------------------------------------------------------------
+-- Every notification lands here and shows in the header bell. Email is a
+-- second channel layered on top and can be muted for some categories; the
+-- in-app record never can, so "I was never told" is always answerable.
+create table if not exists public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users (id) on delete cascade,
+  category public.notification_category not null,
+  title text not null,
+  body text not null,
+  -- Where clicking it should go, e.g. /events/<vol>/register.
+  link_url text,
+  -- Ids relevant to the notice (event, team, entry). Kept loose on purpose:
+  -- a typed column per referent would mean a migration for every new kind.
+  metadata jsonb not null default '{}'::jsonb,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists notifications_user_unread_idx
+  on public.notifications (user_id, created_at desc);
+create index if not exists notifications_user_unread_only_idx
+  on public.notifications (user_id)
+  where read_at is null;
+
+comment on table public.notifications is
+  'In-app notification feed. Always written regardless of email preferences — '
+  'preferences govern the email copy only.';
+
+-- ---------------------------------------------------------------------------
+-- notification_preferences — per user, per category, EMAIL only.
+-- ---------------------------------------------------------------------------
+-- entry_payment and waitlist cannot be switched off, and the CHECK below is
+-- what enforces it rather than the UI. Those two carry clocks: a missed hold
+-- expiry or a missed 24-hour claim window costs the athlete their slot, so an
+-- opt-out is a trap rather than a preference. Team and results/schedule are
+-- genuinely optional and can be muted individually.
+create table if not exists public.notification_preferences (
+  user_id uuid not null references public.users (id) on delete cascade,
+  category public.notification_category not null,
+  email_enabled boolean not null default true,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, category),
+  constraint notification_preferences_critical_always_on check (
+    email_enabled or category not in ('entry_payment', 'waitlist')
+  )
+);
+
+comment on table public.notification_preferences is
+  'Per-user email opt-outs. entry_payment and waitlist are mandatory and the '
+  'CHECK constraint refuses to store them as off — those notices carry '
+  'deadlines that cost the athlete their slot if missed.';
+
+-- ---------------------------------------------------------------------------
+-- email_outbox — queued email, drained by the dispatch route handler.
+-- ---------------------------------------------------------------------------
+-- A queue rather than sending inline, for three reasons: the browser cannot
+-- hold the provider key, a provider outage must not roll back the data change
+-- that caused the notice, and digest email needs somewhere to accumulate.
+--
+-- Rows are written even when no provider is configured. They sit 'pending' and
+-- drain the day a key is added, so the pipeline is complete before email works.
+create table if not exists public.email_outbox (
+  id uuid primary key default gen_random_uuid(),
+  notification_id uuid references public.notifications (id) on delete cascade,
+  user_id uuid not null references public.users (id) on delete cascade,
+  to_email text not null,
+  subject text not null,
+  body text not null,
+  status public.email_delivery_status not null default 'pending',
+  -- False = send now (waitlist offers, holds, payment: these carry clocks).
+  -- True = hold for the daily digest (results, schedule).
+  is_digest boolean not null default false,
+  -- Earliest send time. Digest rows are stamped forward to the next digest run.
+  scheduled_for timestamptz not null default now(),
+  attempts integer not null default 0,
+  last_error text,
+  sent_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists email_outbox_pending_idx
+  on public.email_outbox (scheduled_for)
+  where status = 'pending';
+
+comment on table public.email_outbox is
+  'Queued outbound email drained by /api/notifications/dispatch. Rows are '
+  'written even with no provider configured — they queue and drain once a key '
+  'exists, so the pipeline is testable before email is live.';
+
+-- ---------------------------------------------------------------------------
+-- public.raise_notification — the one way a notification is created.
+-- ---------------------------------------------------------------------------
+-- Writes the in-app row always, and queues an email only if the user has not
+-- muted that category. Every trigger below goes through here, so the
+-- preference check exists in exactly one place.
+create or replace function public.raise_notification(
+  p_user_id uuid,
+  p_category public.notification_category,
+  p_title text,
+  p_body text,
+  p_link_url text default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_notification_id uuid;
+  v_email text;
+  v_email_enabled boolean;
+  v_is_digest boolean;
+begin
+  if p_user_id is null then
+    return null;
+  end if;
+
+  insert into public.notifications (user_id, category, title, body, link_url, metadata)
+  values (p_user_id, p_category, p_title, p_body, p_link_url, coalesce(p_metadata, '{}'::jsonb))
+  returning id into v_notification_id;
+
+  -- Absent preference row means opted in. Making the default "on" matters:
+  -- a user who has never visited the settings page still hears about a
+  -- waitlist offer.
+  select np.email_enabled into v_email_enabled
+  from public.notification_preferences np
+  where np.user_id = p_user_id and np.category = p_category;
+
+  -- Belt and braces with the CHECK constraint: even if a preference row for a
+  -- critical category somehow read false, the email still goes.
+  if p_category in ('entry_payment', 'waitlist') then
+    v_email_enabled := true;
+  end if;
+
+  if not coalesce(v_email_enabled, true) then
+    return v_notification_id;
+  end if;
+
+  select u.email into v_email from public.users u where u.id = p_user_id;
+  if v_email is null then
+    return v_notification_id;
+  end if;
+
+  -- Anything with a deadline goes immediately; the rest batches.
+  v_is_digest := p_category = 'results_schedule';
+
+  insert into public.email_outbox (
+    notification_id, user_id, to_email, subject, body, is_digest, scheduled_for
+  ) values (
+    v_notification_id, p_user_id, v_email, p_title, p_body, v_is_digest,
+    case when v_is_digest then date_trunc('day', now()) + interval '1 day' + interval '18 hours'
+         else now() end
+  );
+
+  return v_notification_id;
+end;
+$$;
+
+comment on function public.raise_notification(uuid, public.notification_category, text, text, text, jsonb) is
+  'Creates an in-app notification and queues its email unless the user muted '
+  'that category. The single entry point — the preference check lives here and '
+  'nowhere else. entry_payment and waitlist always send.';
+
+-- ---------------------------------------------------------------------------
+-- public.offer_waitlist_slots — hand freed slots to the head of the queue.
+-- ---------------------------------------------------------------------------
+-- Called after anything that could free capacity. Offers as many slots as are
+-- actually free, in requested_at order, and gives each offeree a deadline.
+create or replace function public.offer_waitlist_slots(p_event_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_free integer;
+  v_claim_hours integer;
+  v_event record;
+  v_candidate record;
+  v_offered integer := 0;
+  v_user_id uuid;
+begin
+  select ec.free_count into v_free from public.event_capacity(p_event_id) ec;
+  if coalesce(v_free, 0) <= 0 then
+    return 0;
+  end if;
+
+  -- Slots already promised to someone must not be promised twice.
+  v_free := v_free - (
+    select count(*) from public.event_waitlist w
+    where w.event_id = p_event_id and w.status = 'offered'
+      and w.offer_expires_at > now()
+  );
+  if v_free <= 0 then
+    return 0;
+  end if;
+
+  select e.name, s.meet_volume_id, ms.waitlist_claim_hours
+    into v_event
+  from public.events e
+  join public.sessions s on s.id = e.session_id
+  left join public.meet_settings ms on ms.meet_volume_id = s.meet_volume_id
+  where e.id = p_event_id;
+
+  v_claim_hours := coalesce(v_event.waitlist_claim_hours, 24);
+
+  for v_candidate in
+    select w.id, w.athlete_id
+    from public.event_waitlist w
+    where w.event_id = p_event_id and w.status = 'waiting'
+    -- (requested_at, id) must match public.waitlist_position exactly.
+    order by w.requested_at, w.id
+    limit v_free
+  loop
+    update public.event_waitlist
+    set status = 'offered',
+        offered_at = now(),
+        offer_expires_at = now() + make_interval(hours => v_claim_hours)
+    where id = v_candidate.id;
+
+    select a.user_id into v_user_id
+    from public.athletes a where a.id = v_candidate.athlete_id;
+
+    perform public.raise_notification(
+      v_user_id,
+      'waitlist',
+      'A place opened in ' || v_event.name,
+      'You are next on the waitlist for ' || v_event.name || '. Claim it within '
+        || v_claim_hours || ' hours or it passes to the next swimmer.',
+      '/events/' || v_event.meet_volume_id || '/register',
+      jsonb_build_object('event_id', p_event_id, 'athlete_id', v_candidate.athlete_id)
+    );
+
+    v_offered := v_offered + 1;
+  end loop;
+
+  return v_offered;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- public.sweep_expired_holds — the scheduled job.
+-- ---------------------------------------------------------------------------
+-- Materialises what event_capacity() already computes, so the side effects can
+-- happen: the athlete is told their slot went, and the freed place is offered
+-- to the waitlist. Capacity itself does not depend on this running — see the
+-- note on event_capacity() — which is why a missed run degrades notification
+-- timeliness and nothing else.
+--
+-- Driven by pg_cron every 15 minutes (scheduled at the end of this file), and
+-- reachable at /api/cron/process-expired-holds for a host-level scheduler.
+create or replace function public.sweep_expired_holds()
+returns table (holds_expired integer, offers_made integer, offers_lapsed integer)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_expired integer := 0;
+  v_lapsed integer := 0;
+  v_offers integer := 0;
+  rec record;
+begin
+  -- 1. Lapsed holds. The entry survives in 'hold_expired' — deleting it would
+  -- make an athlete's registration vanish with nothing to reclaim.
+  for rec in
+    select en.id, en.event_id, en.athlete_id, a.user_id, e.name as event_name,
+           s.meet_volume_id
+    from public.entries en
+    join public.events e on e.id = en.event_id
+    join public.sessions s on s.id = e.session_id
+    join public.athletes a on a.id = en.athlete_id
+    where en.status = 'pending_payment'
+      and en.hold_expires_at is not null
+      and en.hold_expires_at <= now()
+  loop
+    update public.entries set status = 'hold_expired' where id = rec.id;
+    v_expired := v_expired + 1;
+
+    perform public.raise_notification(
+      rec.user_id,
+      'entry_payment',
+      'Your place in ' || rec.event_name || ' was released',
+      'Payment was not recorded in time, so your slot in ' || rec.event_name
+        || ' has been released. You can still pay to reclaim it if the race has room.',
+      '/events/' || rec.meet_volume_id || '/register',
+      jsonb_build_object('event_id', rec.event_id, 'entry_id', rec.id)
+    );
+  end loop;
+
+  -- 2. Waitlist offers nobody claimed, so the queue can move on.
+  for rec in
+    select w.id, w.event_id, w.athlete_id, a.user_id, e.name as event_name
+    from public.event_waitlist w
+    join public.events e on e.id = w.event_id
+    join public.athletes a on a.id = w.athlete_id
+    where w.status = 'offered' and w.offer_expires_at <= now()
+  loop
+    update public.event_waitlist
+    set status = 'expired', resolved_at = now()
+    where id = rec.id;
+    v_lapsed := v_lapsed + 1;
+
+    perform public.raise_notification(
+      rec.user_id,
+      'waitlist',
+      'Your waitlist offer for ' || rec.event_name || ' expired',
+      'The claim window closed, so the place has passed to the next swimmer.',
+      null,
+      jsonb_build_object('event_id', rec.event_id)
+    );
+  end loop;
+
+  -- 3. Offer everything now free. Runs last so it sees the slots freed above.
+  for rec in
+    select distinct w.event_id from public.event_waitlist w where w.status = 'waiting'
+  loop
+    v_offers := v_offers + public.offer_waitlist_slots(rec.event_id);
+  end loop;
+
+  return query select v_expired, v_offers, v_lapsed;
+end;
+$$;
+
+comment on function public.sweep_expired_holds() is
+  'Scheduled sweep: expires lapsed holds, lapses unclaimed waitlist offers, '
+  'and offers freed slots to the queue — with the notifications each of those '
+  'implies. Capacity does not depend on it running; only timeliness does.';
+
+-- ---------------------------------------------------------------------------
+-- Team membership notifications.
+-- ---------------------------------------------------------------------------
+-- The captain hears about a request; the requester hears the outcome. Written
+-- as a trigger rather than in the UI so a request created any other way — an
+-- admin acting on someone's behalf, a script — still notifies.
+-- Note the DELETE branch. public.membership_status has only 'pending' and
+-- 'accepted' — a rejection DELETES the row (see lib/teams.ts), so a trigger
+-- watching for a 'rejected' status would compile fine and silently never fire.
+-- The requester would hear about acceptance and never about refusal.
+create or replace function public.notify_team_membership_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row record := case when tg_op = 'DELETE' then old else new end;
+  v_team record;
+  v_requester_name text;
+begin
+  select t.name, t.captain_id into v_team
+  from public.teams t where t.id = v_row.team_id;
+
+  -- The team is gone (cascade delete); there is nothing to say about it.
+  if v_team.name is null then
+    return v_row;
+  end if;
+
+  select u.full_name into v_requester_name
+  from public.users u where u.id = v_row.user_id;
+
+  if tg_op = 'INSERT' and v_row.status = 'pending' then
+    -- A captain who somehow requests to join their own team does not need
+    -- telling about it.
+    if v_team.captain_id is not null and v_team.captain_id <> v_row.user_id then
+      perform public.raise_notification(
+        v_team.captain_id,
+        'team',
+        'New request to join ' || v_team.name,
+        coalesce(v_requester_name, 'A swimmer') || ' has asked to join ' || v_team.name || '.',
+        '/teams',
+        jsonb_build_object('team_id', v_row.team_id, 'user_id', v_row.user_id)
+      );
+    end if;
+
+  elsif tg_op = 'UPDATE' and new.status = 'accepted' and old.status is distinct from 'accepted' then
+    perform public.raise_notification(
+      v_row.user_id, 'team',
+      'You joined ' || v_team.name,
+      'Your request to join ' || v_team.name || ' was accepted.',
+      '/teams',
+      jsonb_build_object('team_id', v_row.team_id)
+    );
+
+  elsif tg_op = 'DELETE' then
+    if old.status = 'pending' then
+      perform public.raise_notification(
+        v_row.user_id, 'team',
+        'Your request to join ' || v_team.name || ' was declined',
+        'You can request to join another team.',
+        '/teams',
+        jsonb_build_object('team_id', v_row.team_id)
+      );
+    else
+      perform public.raise_notification(
+        v_row.user_id, 'team',
+        'You are no longer on ' || v_team.name,
+        'Your membership of ' || v_team.name || ' has ended.',
+        '/teams',
+        jsonb_build_object('team_id', v_row.team_id)
+      );
+    end if;
+  end if;
+
+  return v_row;
+end;
+$$;
+
+create or replace trigger notify_team_membership_change_trigger
+  after insert or update or delete on public.team_memberships
+  for each row execute function public.notify_team_membership_change();
+
 
 -- ---------------------------------------------------------------------------
 -- heats & heat_lanes — 6 lanes per heat.
@@ -1692,6 +2872,18 @@ create or replace trigger meet_settings_set_updated_at
   before update on public.meet_settings
   for each row execute function public.set_updated_at();
 
+create or replace trigger pricing_packages_set_updated_at
+  before update on public.pricing_packages
+  for each row execute function public.set_updated_at();
+
+create or replace trigger race_shape_templates_set_updated_at
+  before update on public.race_shape_templates
+  for each row execute function public.set_updated_at();
+
+create or replace trigger notification_preferences_set_updated_at
+  before update on public.notification_preferences
+  for each row execute function public.set_updated_at();
+
 -- Only an admin may toggle team approval.
 create or replace function public.enforce_team_approval_change()
 returns trigger
@@ -2143,6 +3335,15 @@ alter table public.athletes enable row level security;
 alter table public.volume_team_affiliations enable row level security;
 alter table public.meet_volumes enable row level security;
 alter table public.meet_settings enable row level security;
+alter table public.pricing_tiers enable row level security;
+alter table public.pricing_packages enable row level security;
+alter table public.race_shape_templates enable row level security;
+alter table public.event_waitlist enable row level security;
+alter table public.entry_payments enable row level security;
+alter table public.entry_payment_items enable row level security;
+alter table public.notifications enable row level security;
+alter table public.notification_preferences enable row level security;
+alter table public.email_outbox enable row level security;
 alter table public.sessions enable row level security;
 alter table public.events enable row level security;
 alter table public.entries enable row level security;
@@ -2314,6 +3515,126 @@ create policy "public_view_meet_settings" on public.meet_settings
 drop policy if exists "admins_manage_meet_settings" on public.meet_settings;
 create policy "admins_manage_meet_settings" on public.meet_settings
   for all using (public.is_admin()) with check (public.is_admin());
+
+-- The pricing matrix, the tier calendar and the race-shape template are all
+-- public read for the same reason meet_settings is: a swimmer has to be
+-- quoted a price, and told which tier that price belongs to and when it ends,
+-- before they have any standing at all. Writes are admin-only throughout — a
+-- swimmer who could write any of these could set their own entry fee.
+drop policy if exists "public_view_pricing_tiers" on public.pricing_tiers;
+create policy "public_view_pricing_tiers" on public.pricing_tiers
+  for select using (true);
+
+drop policy if exists "admins_manage_pricing_tiers" on public.pricing_tiers;
+create policy "admins_manage_pricing_tiers" on public.pricing_tiers
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "public_view_pricing_packages" on public.pricing_packages;
+create policy "public_view_pricing_packages" on public.pricing_packages
+  for select using (true);
+
+drop policy if exists "admins_manage_pricing_packages" on public.pricing_packages;
+create policy "admins_manage_pricing_packages" on public.pricing_packages
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "public_view_race_shape_templates" on public.race_shape_templates;
+create policy "public_view_race_shape_templates" on public.race_shape_templates
+  for select using (true);
+
+drop policy if exists "admins_manage_race_shape_templates" on public.race_shape_templates;
+create policy "admins_manage_race_shape_templates" on public.race_shape_templates
+  for all using (public.is_admin()) with check (public.is_admin());
+
+-- Waitlist rows are public read: position in a queue is not a secret, and the
+-- registration page needs the count to say "you would be #4". Joining and
+-- leaving are restricted to the swimmer themselves (or their parent, or an
+-- admin) — otherwise anyone could queue-jump by inserting rows for others, or
+-- withdraw a rival.
+drop policy if exists "public_view_event_waitlist" on public.event_waitlist;
+create policy "public_view_event_waitlist" on public.event_waitlist
+  for select using (true);
+
+drop policy if exists "athlete_manage_own_waitlist" on public.event_waitlist;
+create policy "athlete_manage_own_waitlist" on public.event_waitlist
+  for all
+  using (
+    public.is_admin()
+    or exists (
+      select 1 from public.athletes a
+      where a.id = event_waitlist.athlete_id
+        and (a.user_id = auth.uid() or a.parent_id = auth.uid())
+    )
+  )
+  with check (
+    public.is_admin()
+    or exists (
+      select 1 from public.athletes a
+      where a.id = event_waitlist.athlete_id
+        and (a.user_id = auth.uid() or a.parent_id = auth.uid())
+    )
+  );
+
+-- Payments are NOT public. A swimmer (or their parent) may read their own
+-- receipts; only an admin may write one. Letting an athlete insert here would
+-- let them mark themselves paid.
+drop policy if exists "own_or_admin_view_entry_payments" on public.entry_payments;
+create policy "own_or_admin_view_entry_payments" on public.entry_payments
+  for select using (
+    public.is_admin()
+    or exists (
+      select 1 from public.athletes a
+      where a.id = entry_payments.athlete_id
+        and (a.user_id = auth.uid() or a.parent_id = auth.uid())
+    )
+  );
+
+drop policy if exists "admins_manage_entry_payments" on public.entry_payments;
+create policy "admins_manage_entry_payments" on public.entry_payments
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "own_or_admin_view_entry_payment_items" on public.entry_payment_items;
+create policy "own_or_admin_view_entry_payment_items" on public.entry_payment_items
+  for select using (
+    public.is_admin()
+    or exists (
+      select 1
+      from public.entry_payments p
+      join public.athletes a on a.id = p.athlete_id
+      where p.id = entry_payment_items.payment_id
+        and (a.user_id = auth.uid() or a.parent_id = auth.uid())
+    )
+  );
+
+drop policy if exists "admins_manage_entry_payment_items" on public.entry_payment_items;
+create policy "admins_manage_entry_payment_items" on public.entry_payment_items
+  for all using (public.is_admin()) with check (public.is_admin());
+
+-- A notification is addressed to one person and nobody else, including
+-- admins: there is no operational reason to read someone's feed, and plenty
+-- of reason not to. The only thing a recipient may write is read_at, so the
+-- update policy is scoped to their own rows and insert is left to
+-- raise_notification(), which is SECURITY DEFINER.
+drop policy if exists "own_view_notifications" on public.notifications;
+create policy "own_view_notifications" on public.notifications
+  for select using (user_id = auth.uid());
+
+drop policy if exists "own_update_notifications" on public.notifications;
+create policy "own_update_notifications" on public.notifications
+  for update using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+drop policy if exists "own_delete_notifications" on public.notifications;
+create policy "own_delete_notifications" on public.notifications
+  for delete using (user_id = auth.uid());
+
+drop policy if exists "own_manage_notification_preferences" on public.notification_preferences;
+create policy "own_manage_notification_preferences" on public.notification_preferences
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- email_outbox has NO policy granting anyone access. It holds queued message
+-- bodies and recipient addresses, and is read solely by the dispatch route
+-- handler using the service key, which bypasses RLS. An empty policy set with
+-- RLS enabled means anon and authenticated see nothing — which is the intent,
+-- not an oversight.
 
 drop policy if exists "admins_full_access_sessions" on public.sessions;
 create policy "admins_full_access_sessions" on public.sessions
@@ -2841,6 +4162,139 @@ create table if not exists public.relay_legs (
 
 create index if not exists relay_squads_event_idx on public.relay_squads (event_id);
 create index if not exists relay_legs_athlete_idx on public.relay_legs (athlete_id);
+
+-- ---------------------------------------------------------------------------
+-- public.quote_athlete_entries — the price, and why it is the price.
+-- ---------------------------------------------------------------------------
+-- Returns LINE ITEMS, not a total. Every screen that asks an athlete for money
+-- has to show which race cost what, so a function that returned a single
+-- number would just be recomputed differently by each caller — which is how
+-- the desk and the registration page end up disagreeing.
+--
+--   total = package(n races, tier)
+--         + one additional-race price for each race beyond the 4th
+--         + each entered race's own surcharge
+--         + one relay fee per relay leg
+--
+-- Race count is taken across the WHOLE volume, not per session: three races
+-- spread over two sessions is one three-race package.
+--
+-- p_include_statuses controls what counts. Registration quotes everything the
+-- athlete has selected; the cash desk quotes only what is still owed.
+create or replace function public.quote_athlete_entries(
+  p_athlete_id uuid,
+  p_meet_volume_id uuid,
+  p_include_statuses public.entry_status[] default array['pending_payment']::public.entry_status[]
+)
+returns table (
+  kind text,
+  label text,
+  entry_id uuid,
+  amount_egp integer,
+  tier public.pricing_tier
+)
+language sql
+stable
+as $$
+  with tier as (
+    select public.active_pricing_tier(p_meet_volume_id) as t
+  ),
+  individual as (
+    select en.id as entry_id, e.name as event_name,
+           coalesce(e.surcharge_egp, 0) as surcharge,
+           row_number() over (order by s.session_number, e.event_order, e.name) as nth
+    from public.entries en
+    join public.events e on e.id = en.event_id
+    join public.sessions s on s.id = e.session_id
+    where s.meet_volume_id = p_meet_volume_id
+      and en.athlete_id = p_athlete_id
+      and en.status = any (p_include_statuses)
+      and e.is_relay = false
+  ),
+  race_count as (select count(*)::integer as n from individual),
+  -- Package covers the first 4; anything past that is priced one at a time.
+  package as (
+    select pp.price_egp, rc.n
+    from race_count rc
+    join tier on true
+    left join public.pricing_packages pp
+      on pp.meet_volume_id = p_meet_volume_id
+     and pp.tier = tier.t
+     and pp.race_count = least(rc.n, 4)
+    where rc.n > 0
+  ),
+  extra_price as (
+    select pp.price_egp
+    from tier
+    join public.pricing_packages pp
+      on pp.meet_volume_id = p_meet_volume_id
+     and pp.tier = tier.t
+     and pp.race_count = 0
+  ),
+  relay_legs as (
+    select rl.id as leg_id, e.name as event_name
+    from public.relay_legs rl
+    join public.relay_squads rs on rs.id = rl.squad_id
+    join public.events e on e.id = rs.event_id
+    join public.sessions s on s.id = e.session_id
+    where s.meet_volume_id = p_meet_volume_id
+      and rl.athlete_id = p_athlete_id
+  )
+  -- The package line.
+  select
+    'package'::text,
+    case when package.n > 4
+      then package.n || '-race entry (4-race package + ' || (package.n - 4) || ' extra)'
+      else package.n || '-race package' end,
+    null::uuid,
+    package.price_egp,
+    tier.t
+  from package, tier
+
+  union all
+
+  -- Races past the fourth, one line each so the athlete can see them.
+  select
+    'additional_race'::text,
+    'Additional race — ' || i.event_name,
+    i.entry_id,
+    coalesce((select price_egp from extra_price), 0),
+    (select t from tier)
+  from individual i
+  where i.nth > 4
+
+  union all
+
+  -- Per-race surcharges. Zero-surcharge races are omitted rather than listed
+  -- as "+0": a breakdown of forty lines that are mostly zero explains nothing.
+  select
+    'surcharge'::text,
+    i.event_name || ' surcharge',
+    i.entry_id,
+    i.surcharge,
+    (select t from tier)
+  from individual i
+  where i.surcharge > 0
+
+  union all
+
+  -- Relay legs: charged per swimmer, on top, and never counted toward the
+  -- individual package.
+  select
+    'relay'::text,
+    'Relay leg — ' || rl.event_name,
+    null::uuid,
+    coalesce((select ms.relay_swimmer_price_egp from public.meet_settings ms
+               where ms.meet_volume_id = p_meet_volume_id), 300),
+    (select t from tier)
+  from relay_legs rl;
+$$;
+
+comment on function public.quote_athlete_entries(uuid, uuid, public.entry_status[]) is
+  'Line items behind what an athlete owes for a volume: the package, any '
+  'races past the fourth, per-race surcharges and relay legs, all at the tier '
+  'in force now. Returns the derivation, not just a total, because every '
+  'screen that asks for money must show why.';
 
 alter table public.relay_squads enable row level security;
 alter table public.relay_legs enable row level security;
@@ -3922,16 +5376,40 @@ cross join (
 where v.volume_number = 1
 on conflict (meet_volume_id, session_number) do nothing;
 
--- Every volume gets all three Control Unit rows, on the column defaults.
--- do-nothing, not do-update: re-running this file must never reset prices an
--- admin has already changed on a live meet. This repeats the backfill next to
--- the table definition deliberately — a volume created by the block above did
--- not exist when that one ran.
-insert into public.meet_settings (meet_volume_id, session_number)
-select v.id, n
+-- Every volume gets its Control Unit row, its pricing matrix and its tier
+-- windows, on the defaults. do-nothing, not do-update: re-running this file
+-- must never reset a price an admin has already changed on a live meet. These
+-- repeat the backfills next to the table definitions deliberately — a volume
+-- created by the block above did not exist when those ran.
+insert into public.meet_settings (meet_volume_id)
+select v.id from public.meet_volumes v
+on conflict (meet_volume_id) do nothing;
+
+insert into public.pricing_packages (meet_volume_id, race_count, tier, price_egp)
+select v.id, m.race_count, m.tier::public.pricing_tier, m.price_egp
 from public.meet_volumes v
-cross join (values (1), (2), (3)) as t(n)
-on conflict (meet_volume_id, session_number) do nothing;
+cross join (values
+  (0, 'early_bird', 200), (0, 'standard', 300), (0, 'late', 400),
+  (1, 'early_bird', 200), (1, 'standard', 300), (1, 'late', 400),
+  (2, 'early_bird', 380), (2, 'standard', 560), (2, 'late', 740),
+  (3, 'early_bird', 540), (3, 'standard', 700), (3, 'late', 960),
+  (4, 'early_bird', 680), (4, 'standard', 900), (4, 'late', 1200)
+) as m(race_count, tier, price_egp)
+on conflict (meet_volume_id, race_count, tier) do nothing;
+
+insert into public.pricing_tiers (meet_volume_id, tier, starts_at, ends_at)
+select
+  v.id,
+  w.tier::public.pricing_tier,
+  (coalesce(v.meet_date, current_date) + w.starts_days)::timestamptz,
+  (coalesce(v.meet_date, current_date) + w.ends_days)::timestamptz
+from public.meet_volumes v
+cross join (values
+  ('early_bird', -180, -42),
+  ('standard',    -42,  -7),
+  ('late',         -7,   1)
+) as w(tier, starts_days, ends_days)
+on conflict (meet_volume_id, tier) do nothing;
 
 -- System creator / first-boot admin. Subsequent admins must be promoted via
 -- the user-role-management panel by an existing admin. Uses do-update (not
@@ -3942,3 +5420,247 @@ values (true, 'elewakareem2002@gmail.com')
 on conflict (id) do update set
   superadmin_email = excluded.superadmin_email,
   updated_at = now();
+
+-- ---------------------------------------------------------------------------
+-- public.pending_cash_total — what the desk is owed for a volume.
+-- ---------------------------------------------------------------------------
+-- Sums each athlete's own quote rather than multiplying an entry count by a
+-- unit price. Under package pricing there IS no unit price: four swimmers with
+-- one race each and one swimmer with four races enter the same number of races
+-- and owe very different totals. The old count-times-price arithmetic would
+-- have been quietly wrong on every meet.
+create or replace function public.pending_cash_total(p_meet_volume_id uuid)
+returns table (athlete_count integer, total_egp integer)
+language sql
+stable
+as $$
+  with owing as (
+    select distinct en.athlete_id
+    from public.entries en
+    join public.events e on e.id = en.event_id
+    join public.sessions s on s.id = e.session_id
+    where s.meet_volume_id = p_meet_volume_id
+      and en.status = 'pending_payment'
+  )
+  select
+    (select count(*) from owing)::integer,
+    coalesce((
+      select sum(q.amount_egp)
+      from owing
+      cross join lateral public.quote_athlete_entries(owing.athlete_id, p_meet_volume_id) q
+    ), 0)::integer;
+$$;
+
+comment on function public.pending_cash_total(uuid) is
+  'Athletes owing money and the total owed, summed from each athlete''s own '
+  'quote. There is no unit price to multiply by under package pricing.';
+
+-- =============================================================================
+-- CAPACITY HELPERS FOR THE CLIENT
+-- =============================================================================
+
+-- ---------------------------------------------------------------------------
+-- public.events_capacity_bulk — capacity for many races in one round trip.
+-- ---------------------------------------------------------------------------
+-- A registration form lists twenty races. Calling event_capacity() per race
+-- would be twenty HTTP requests; this takes the list. It delegates to the
+-- per-race function rather than reimplementing the arithmetic, so there is
+-- still exactly one definition of what "full" means.
+create or replace function public.events_capacity_bulk(p_event_ids uuid[])
+returns table (
+  event_id uuid,
+  capacity_cap integer,
+  paid_count integer,
+  held_count integer,
+  free_count integer,
+  availability public.event_availability
+)
+language sql
+stable
+as $$
+  select e.id, c.capacity_cap, c.paid_count, c.held_count, c.free_count, c.availability
+  from unnest(p_event_ids) as e(id)
+  cross join lateral public.event_capacity(e.id) c;
+$$;
+
+comment on function public.events_capacity_bulk(uuid[]) is
+  'Capacity for many races at once. Delegates to event_capacity() so "full" '
+  'has one definition.';
+
+-- ---------------------------------------------------------------------------
+-- public.reclaim_entry_slot — [Pay now] on an expired hold.
+-- ---------------------------------------------------------------------------
+-- Returns true when the slot was re-acquired, false when the race filled up in
+-- the meantime (the caller then offers the waitlist).
+--
+-- The capacity check happens HERE rather than in the browser, and that is the
+-- point of the function existing: checking in the client and then writing is a
+-- race, and two athletes reclaiming the last place would both see room and
+-- both succeed. Inside one statement, the count and the update cannot be
+-- separated by another transaction's insert.
+create or replace function public.reclaim_entry_slot(p_entry_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_entry record;
+  v_free integer;
+  v_hours integer;
+begin
+  select en.id, en.event_id, en.athlete_id, en.status
+    into v_entry
+  from public.entries en
+  where en.id = p_entry_id;
+
+  if not found then
+    raise exception 'Entry not found';
+  end if;
+
+  -- SECURITY DEFINER bypasses RLS, so the ownership check that RLS would have
+  -- done has to be made explicitly. Without this any signed-in user could
+  -- reclaim anyone's slot by id.
+  if not (
+    public.is_admin()
+    or exists (
+      select 1 from public.athletes a
+      where a.id = v_entry.athlete_id
+        and (a.user_id = auth.uid() or a.parent_id = auth.uid())
+    )
+  ) then
+    raise exception 'Not permitted to reclaim this entry';
+  end if;
+
+  -- Already holding a live slot: nothing to reclaim, and saying "true" is
+  -- honest — the athlete does have their place.
+  if v_entry.status = 'confirmed' then
+    return true;
+  end if;
+
+  select ec.free_count into v_free from public.event_capacity(v_entry.event_id) ec;
+  if coalesce(v_free, 0) <= 0 then
+    return false;
+  end if;
+
+  select ms.hold_window_hours into v_hours
+  from public.meet_settings ms
+  join public.sessions s on s.meet_volume_id = ms.meet_volume_id
+  join public.events e on e.session_id = s.id
+  where e.id = v_entry.event_id;
+
+  update public.entries
+  set status = 'pending_payment',
+      hold_expires_at = now() + make_interval(hours => coalesce(v_hours, 48))
+  where id = p_entry_id;
+
+  return true;
+end;
+$$;
+
+comment on function public.reclaim_entry_slot(uuid) is
+  'Re-acquires a hold on an expired entry if the race still has room. Returns '
+  'false when it is full. Re-checks capacity server-side so two athletes '
+  'cannot both reclaim the last place.';
+
+-- ---------------------------------------------------------------------------
+-- public.claim_waitlist_offer — take the slot that was offered.
+-- ---------------------------------------------------------------------------
+create or replace function public.claim_waitlist_offer(p_waitlist_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row record;
+  v_free integer;
+begin
+  select w.id, w.event_id, w.athlete_id, w.status, w.offer_expires_at
+    into v_row
+  from public.event_waitlist w
+  where w.id = p_waitlist_id;
+
+  if not found then
+    raise exception 'Waitlist entry not found';
+  end if;
+
+  if not (
+    public.is_admin()
+    or exists (
+      select 1 from public.athletes a
+      where a.id = v_row.athlete_id
+        and (a.user_id = auth.uid() or a.parent_id = auth.uid())
+    )
+  ) then
+    raise exception 'Not permitted to claim this offer';
+  end if;
+
+  -- An offer that has lapsed is not claimable even if the sweep has not yet
+  -- marked it expired: the deadline is the deadline, and the next swimmer is
+  -- entitled to the place.
+  if v_row.status <> 'offered' or v_row.offer_expires_at <= now() then
+    return false;
+  end if;
+
+  select ec.free_count into v_free from public.event_capacity(v_row.event_id) ec;
+  if coalesce(v_free, 0) <= 0 then
+    return false;
+  end if;
+
+  insert into public.entries (event_id, athlete_id, is_nt, status)
+  values (v_row.event_id, v_row.athlete_id, true, 'pending_payment')
+  on conflict (event_id, athlete_id) do update
+    set status = 'pending_payment';
+
+  update public.event_waitlist
+  set status = 'claimed', resolved_at = now()
+  where id = p_waitlist_id;
+
+  return true;
+end;
+$$;
+
+comment on function public.claim_waitlist_offer(uuid) is
+  'Converts a live waitlist offer into an entry with a fresh hold. False when '
+  'the offer lapsed or the race filled first.';
+
+-- =============================================================================
+-- SCHEDULED JOBS
+-- =============================================================================
+-- The hold sweep runs every 15 minutes: it expires lapsed holds, lapses
+-- unclaimed waitlist offers, and hands freed slots to the queue — with the
+-- notification each of those implies.
+--
+-- pg_cron rather than a host-level scheduler, because it works on any Supabase
+-- plan and does not depend on where the frontend is deployed. (Vercel's Hobby
+-- plan allows one cron run per DAY, which would leave a lapsed hold sitting on
+-- a slot for up to 24 hours.) /api/cron/process-expired-holds calls the same
+-- function, so a host scheduler can drive it instead where one is available.
+--
+-- Wrapped in an exception handler: pg_cron is an extension a project may not
+-- have enabled, and a missing scheduler must not stop the schema from applying.
+-- Capacity is computed live by event_capacity() regardless of whether this
+-- sweep ever runs, so the failure mode here is delayed notifications, not
+-- wrong numbers.
+do $$
+begin
+  create extension if not exists pg_cron;
+
+  perform cron.unschedule('ssc-sweep-expired-holds')
+  where exists (
+    select 1 from cron.job where jobname = 'ssc-sweep-expired-holds'
+  );
+
+  perform cron.schedule(
+    'ssc-sweep-expired-holds',
+    '*/15 * * * *',
+    'select public.sweep_expired_holds()'
+  );
+exception
+  when others then
+    raise notice
+      'pg_cron not available (%). Hold expiry will not be swept automatically; '
+      'drive /api/cron/process-expired-holds from a host scheduler instead. '
+      'Capacity figures remain correct either way.', sqlerrm;
+end $$;

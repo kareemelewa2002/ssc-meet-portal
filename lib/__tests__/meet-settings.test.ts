@@ -2,19 +2,19 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MEET_SETTINGS,
   computeScheduleCapacity,
-  effectiveEventLimit,
+  defaultMeetSettings,
+  estimatedSessionSeconds,
   eventLimitExceedsSchedule,
   formatDurationSeconds,
-  individualPriceBySession,
   maxHeatsPerSession,
   maxSwimsPerSession,
   parseTimeOfDaySeconds,
+  registrationState,
   requiredSwims,
   sessionDurationSeconds,
-  settingsForSession,
-  uniformIndividualPriceEgp,
+  turnaroundProfile,
   type MeetSettings,
-  type SessionNumber,
+  type ScheduledEvent,
   type SessionSchedule,
 } from "@/lib/meet-settings";
 
@@ -28,223 +28,272 @@ const session = (
   ...overrides,
 });
 
-/** Control Unit dials for one session. */
-const dials = (
-  sessionNumber: SessionNumber,
-  overrides: Partial<MeetSettings> = {},
-): MeetSettings => ({
-  meetVolumeId: "vol-1",
-  sessionNumber,
-  ...DEFAULT_MEET_SETTINGS,
+const settings = (overrides: Partial<MeetSettings> = {}): MeetSettings => ({
+  ...defaultMeetSettings("vol-1"),
   ...overrides,
 });
 
-/** The same dials for every session — the common case. */
-const uniformDials = (overrides: Partial<MeetSettings> = {}): MeetSettings[] =>
-  ([1, 2, 3] as SessionNumber[]).map((n) => dials(n, overrides));
+const race = (
+  id: string,
+  sessionId: string,
+  turnaroundSeconds: number,
+  overrides: Partial<ScheduledEvent> = {},
+): ScheduledEvent => ({
+  id,
+  sessionId,
+  name: id,
+  distanceM: 50,
+  stroke: "Freestyle",
+  isRelay: false,
+  eventOrder: 1,
+  turnaroundSeconds,
+  surchargeEgp: 0,
+  capacityCap: 64,
+  ...overrides,
+});
 
 describe("parseTimeOfDaySeconds", () => {
-  it("accepts both the input element's HH:MM and Postgres' HH:MM:SS", () => {
-    expect(parseTimeOfDaySeconds("09:00")).toBe(9 * 3600);
-    expect(parseTimeOfDaySeconds("09:00:00")).toBe(9 * 3600);
-    expect(parseTimeOfDaySeconds("14:30:15")).toBe(14 * 3600 + 30 * 60 + 15);
+  it("accepts both HH:MM and HH:MM:SS", () => {
+    expect(parseTimeOfDaySeconds("09:30")).toBe(9 * 3600 + 30 * 60);
+    expect(parseTimeOfDaySeconds("09:30:15")).toBe(9 * 3600 + 30 * 60 + 15);
   });
 
-  it("returns null rather than a plausible number for junk", () => {
+  it("rejects nonsense rather than coercing it", () => {
+    expect(parseTimeOfDaySeconds("25:00")).toBeNull();
+    expect(parseTimeOfDaySeconds("09:60")).toBeNull();
+    expect(parseTimeOfDaySeconds("half nine")).toBeNull();
     expect(parseTimeOfDaySeconds("")).toBeNull();
     expect(parseTimeOfDaySeconds(null)).toBeNull();
-    expect(parseTimeOfDaySeconds("9am")).toBeNull();
-    expect(parseTimeOfDaySeconds("25:00")).toBeNull();
-    expect(parseTimeOfDaySeconds("09:75")).toBeNull();
   });
 });
 
 describe("sessionDurationSeconds", () => {
-  it("is end minus start", () => {
-    expect(sessionDurationSeconds("09:00", "12:00")).toBe(3 * 3600);
-    expect(sessionDurationSeconds("17:00", "19:30")).toBe(2.5 * 3600);
+  it("measures an ordinary session", () => {
+    expect(sessionDurationSeconds("09:00", "13:00")).toBe(4 * 3600);
   });
 
-  it("reads an end before the start as crossing midnight, not as negative", () => {
-    // A finals session running 22:00 to 00:30 is a real schedule; reporting
-    // -77400 seconds would put a nonsense heat count in front of an admin.
+  it("reads an end time before the start as crossing midnight", () => {
+    // A Skins final running 22:00-00:30 is a real schedule. Reporting it as a
+    // negative duration would put a nonsense heat count in front of an admin.
     expect(sessionDurationSeconds("22:00", "00:30")).toBe(2.5 * 3600);
   });
 
   it("is null when either end is unparseable", () => {
-    expect(sessionDurationSeconds("09:00", "")).toBeNull();
-    expect(sessionDurationSeconds("nope", "12:00")).toBeNull();
+    expect(sessionDurationSeconds("09:00", "nope")).toBeNull();
   });
 });
 
-describe("maxHeatsPerSession = floor(session length / heat turnaround)", () => {
-  it("floors — a heat that does not fit does not half-run", () => {
-    // 3h = 10800s, 90s turnaround -> 120 heats exactly.
-    expect(maxHeatsPerSession(10_800, 90)).toBe(120);
-    // 10800 / 100 = 108, 10800 / 700 = 15.43 -> 15
-    expect(maxHeatsPerSession(10_800, 100)).toBe(108);
-    expect(maxHeatsPerSession(10_800, 700)).toBe(15);
+describe("turnaroundProfile", () => {
+  it("summarises the spread of the races in a session", () => {
+    const profile = turnaroundProfile([
+      race("a", "s1", 45),
+      race("b", "s1", 45),
+      race("c", "s1", 150),
+    ]);
+    expect(profile.eventCount).toBe(3);
+    expect(profile.meanTurnaroundSeconds).toBe(80);
+    expect(profile.minTurnaroundSeconds).toBe(45);
+    expect(profile.maxTurnaroundSeconds).toBe(150);
+    expect(profile.singlePassSeconds).toBe(240);
   });
 
-  it("is zero rather than Infinity or NaN on degenerate input", () => {
-    expect(maxHeatsPerSession(10_800, 0)).toBe(0);
+  it("is all zeroes for a session with no races, not NaN", () => {
+    // A mean of NaN would propagate into every downstream figure and render
+    // as "NaN heats" rather than as an empty session.
+    const profile = turnaroundProfile([]);
+    expect(profile.meanTurnaroundSeconds).toBe(0);
+    expect(Number.isNaN(profile.meanTurnaroundSeconds)).toBe(false);
+  });
+});
+
+describe("maxHeatsPerSession", () => {
+  it("floors — a heat that does not fit does not half-run", () => {
+    expect(maxHeatsPerSession(3600, 90)).toBe(40);
+    expect(maxHeatsPerSession(3650, 90)).toBe(40);
+  });
+
+  it("is zero rather than infinite when turnaround is zero or missing", () => {
+    expect(maxHeatsPerSession(3600, 0)).toBe(0);
     expect(maxHeatsPerSession(null, 90)).toBe(0);
-    expect(maxHeatsPerSession(0, 90)).toBe(0);
     expect(maxHeatsPerSession(-100, 90)).toBe(0);
   });
 });
 
-describe("maxSwimsPerSession = max heats x 6 lanes", () => {
-  it("counts swims, not swimmers", () => {
-    expect(maxSwimsPerSession(10_800, 90)).toBe(120 * 6);
-    expect(maxSwimsPerSession(3_600, 120)).toBe(30 * 6);
+describe("maxSwimsPerSession", () => {
+  it("multiplies heats by the configured lane count", () => {
+    expect(maxSwimsPerSession(3600, 90, 8)).toBe(40 * 8);
+    expect(maxSwimsPerSession(3600, 90, 6)).toBe(40 * 6);
+  });
+});
+
+describe("estimatedSessionSeconds", () => {
+  it("weights each race by its OWN turnaround, not by an average", () => {
+    // This is the whole point of per-event turnaround: 2 heats of a 45s race
+    // and 3 heats of a 150s race is 540s, not 5 heats x some mean.
+    const events = [race("sprint", "s1", 45), race("distance", "s1", 150)];
+    const heats = new Map([
+      ["sprint", 2],
+      ["distance", 3],
+    ]);
+    expect(estimatedSessionSeconds(events, heats)).toBe(2 * 45 + 3 * 150);
+  });
+
+  it("counts a race with no heats as nothing", () => {
+    expect(estimatedSessionSeconds([race("a", "s1", 90)], new Map())).toBe(0);
   });
 });
 
 describe("computeScheduleCapacity", () => {
   const sessions = [
-    session({ id: "s1", sessionNumber: 1, startTime: "09:00", endTime: "12:00" }),
-    session({ id: "s2", sessionNumber: 2, startTime: "14:00", endTime: "17:00" }),
-    session({ id: "s3", sessionNumber: 3, startTime: "17:00", endTime: "19:00" }),
+    session({ id: "s1", sessionNumber: 1, startTime: "09:00", endTime: "13:00" }),
+    session({ id: "s2", sessionNumber: 2, startTime: "13:30", endTime: "17:00" }),
   ];
 
-  it("sums swim slots across every session", () => {
-    // 120 + 120 + 80 heats at 6 lanes.
-    const capacity = computeScheduleCapacity(sessions, uniformDials({ athleteCapacity: 200 }));
-    expect(capacity.perSession.map((s) => s.maxHeats)).toEqual([120, 120, 80]);
-    expect(capacity.totalSwims).toBe((120 + 120 + 80) * 6);
-  });
-
-  it("derives the event-limit ceiling as floor(total swims / athlete capacity)", () => {
-    // 1920 swims / 200 swimmers = 9.6 -> 9 races each.
-    expect(computeScheduleCapacity(sessions, uniformDials({ athleteCapacity: 200 })).computedEventLimitCeiling).toBe(9);
-    // A bigger field absorbs fewer races each.
-    expect(computeScheduleCapacity(sessions, uniformDials({ athleteCapacity: 500 })).computedEventLimitCeiling).toBe(3);
-    // 2000 swimmers cannot even get one race each.
-    expect(computeScheduleCapacity(sessions, uniformDials({ athleteCapacity: 2000 })).computedEventLimitCeiling).toBe(0);
-  });
-
-  it("honours per-session turnaround rather than one meet-wide figure", () => {
-    // A slower-turning session of 100s produces fewer heats than a 50s one,
-    // which is exactly why turnaround is per session.
-    const mixed = [
-      session({ id: "fast", sessionNumber: 1 }),
-      session({ id: "slow", sessionNumber: 2 }),
+  it("derives each session's figures from the races actually in it", () => {
+    const events = [
+      race("a", "s1", 45),
+      race("b", "s1", 45),
+      // s2 holds distance events, so it turns over far more slowly and must
+      // NOT inherit s1's rate.
+      race("c", "s2", 150),
     ];
-    const capacity = computeScheduleCapacity(mixed, [
-      dials(1, { heatTurnaroundSeconds: 60 }),
-      dials(2, { heatTurnaroundSeconds: 180 }),
-    ]);
-    expect(capacity.perSession.map((s) => s.maxHeats)).toEqual([180, 60]);
+
+    const readout = computeScheduleCapacity(sessions, settings({ laneCount: 8 }), events);
+
+    expect(readout.perSession[0].profile.meanTurnaroundSeconds).toBe(45);
+    expect(readout.perSession[0].maxHeats).toBe(Math.floor((4 * 3600) / 45));
+    expect(readout.perSession[1].profile.meanTurnaroundSeconds).toBe(150);
+    expect(readout.perSession[1].maxHeats).toBe(Math.floor((3.5 * 3600) / 150));
   });
 
-  it("sizes the ceiling against the BUSIEST session, not an average", () => {
-    // Sessions that admit different fields: the meet must hold the biggest of
-    // them. Averaging would promise room session 2 does not have.
-    const capacity = computeScheduleCapacity(sessions, [
-      dials(1, { athleteCapacity: 100 }),
-      dials(2, { athleteCapacity: 400 }),
-      dials(3, { athleteCapacity: 100 }),
-    ]);
-    // 1920 swims / 400 (the largest) = 4.8 -> 4, not 1920/200 = 9.
-    expect(capacity.computedEventLimitCeiling).toBe(4);
+  it("flags a session whose seeded heats overrun its own clock", () => {
+    const events = [race("a", "s1", 3600)];
+    const heats = new Map([["a", 5]]); // 5 hours of racing in a 4-hour session
+    const readout = computeScheduleCapacity(sessions, settings(), events, heats);
+
+    expect(readout.perSession[0].estimatedSeconds).toBe(5 * 3600);
+    expect(readout.perSession[0].overrunsClock).toBe(true);
   });
 
-  it("is zero, not Infinity, when the capacity is zero", () => {
-    expect(computeScheduleCapacity(sessions, uniformDials({ athleteCapacity: 0 })).computedEventLimitCeiling).toBe(0);
+  it("reports no estimate at all before anything is seeded", () => {
+    // null, not 0. Zero would read as "this session takes no time".
+    const readout = computeScheduleCapacity(sessions, settings(), [race("a", "s1", 90)]);
+    expect(readout.perSession[0].estimatedSeconds).toBeNull();
+    expect(readout.perSession[0].overrunsClock).toBe(false);
   });
 
-  it("reports no capacity for a session whose times do not parse", () => {
-    const broken = [session({ id: "s1", startTime: "", endTime: "" })];
-    const capacity = computeScheduleCapacity(broken, uniformDials({ athleteCapacity: 100 }));
-    expect(capacity.perSession[0].durationSeconds).toBeNull();
-    expect(capacity.totalSwims).toBe(0);
+  it("divides total swims by athlete capacity for the event-limit ceiling", () => {
+    const events = [race("a", "s1", 90), race("b", "s2", 90)];
+    const readout = computeScheduleCapacity(
+      sessions,
+      settings({ athleteCapacity: 100, laneCount: 8 }),
+      events,
+    );
+    expect(readout.computedEventLimitCeiling).toBe(
+      Math.floor(readout.totalSwims / 100),
+    );
+  });
+
+  it("gives a ceiling of zero rather than dividing by zero", () => {
+    const readout = computeScheduleCapacity(
+      sessions,
+      settings({ athleteCapacity: 0 }),
+      [race("a", "s1", 90)],
+    );
+    expect(readout.computedEventLimitCeiling).toBe(0);
   });
 });
 
-describe("the event-limit warning is a warning, not a clamp", () => {
-  const sessions = [session({ id: "s1", startTime: "09:00", endTime: "12:00" })];
+describe("eventLimitExceedsSchedule", () => {
+  const sessions = [session({ id: "s1", startTime: "09:00", endTime: "13:00" })];
+  const events = [race("a", "s1", 90)];
 
-  it("requiredSwims is capacity x limit", () => {
-    expect(requiredSwims(200, 4)).toBe(800);
-    expect(requiredSwims(0, 4)).toBe(0);
+  it("warns when a full field at the chosen limit does not fit", () => {
+    const cfg = settings({ athleteCapacity: 500, athleteEventLimit: 4, laneCount: 8 });
+    const capacity = computeScheduleCapacity(sessions, cfg, events);
+    expect(requiredSwims(500, 4)).toBe(2000);
+    expect(eventLimitExceedsSchedule(capacity, 500, 4)).toBe(true);
   });
 
-  it("flags a limit the schedule cannot absorb", () => {
-    // One 3h session = 720 swims. 200 swimmers x 4 races = 800 > 720.
-    const capacity = computeScheduleCapacity(sessions, uniformDials({ athleteCapacity: 200 }));
-    expect(capacity.totalSwims).toBe(720);
-    expect(eventLimitExceedsSchedule(capacity, 200, 4)).toBe(true);
-    // 3 races each fits.
-    expect(eventLimitExceedsSchedule(capacity, 200, 3)).toBe(false);
+  it("does not warn when it fits", () => {
+    const cfg = settings({ athleteCapacity: 50, athleteEventLimit: 2, laneCount: 8 });
+    const capacity = computeScheduleCapacity(sessions, cfg, events);
+    expect(eventLimitExceedsSchedule(capacity, 50, 2)).toBe(false);
+  });
+});
+
+describe("registrationState", () => {
+  const now = new Date("2026-08-10T12:00:00Z");
+
+  it("is open inside the window", () => {
+    const state = registrationState(
+      settings({
+        registrationOpensAt: "2026-08-01T00:00:00Z",
+        registrationClosesAt: "2026-08-20T00:00:00Z",
+      }),
+      now,
+    );
+    expect(state.open).toBe(true);
+    expect(state.reason).toBeNull();
   });
 
-  it("exactly filling the schedule is not over-committed", () => {
-    const capacity = computeScheduleCapacity(sessions, uniformDials({ athleteCapacity: 180 }));
-    expect(capacity.totalSwims).toBe(720);
-    expect(eventLimitExceedsSchedule(capacity, 180, 4)).toBe(false);
-    expect(eventLimitExceedsSchedule(capacity, 180, 5)).toBe(true);
+  it("explains why it is shut rather than just hiding the form", () => {
+    const before = registrationState(
+      settings({ registrationOpensAt: "2026-09-01T00:00:00Z" }),
+      now,
+    );
+    expect(before.open).toBe(false);
+    expect(before.reason).toContain("opens");
+
+    const after = registrationState(
+      settings({ registrationClosesAt: "2026-08-01T00:00:00Z" }),
+      now,
+    );
+    expect(after.open).toBe(false);
+    expect(after.reason).toContain("closed");
+  });
+
+  it("reopens a closed window when late registration is enabled", () => {
+    // The published deadline stays where it is — athletes may have
+    // screenshotted it — and the toggle is what changes.
+    const state = registrationState(
+      settings({
+        registrationClosesAt: "2026-08-01T00:00:00Z",
+        lateRegistrationEnabled: true,
+      }),
+      now,
+    );
+    expect(state.open).toBe(true);
+    expect(state.reason).toContain("Late");
+  });
+
+  it("is open when no window is configured at all", () => {
+    expect(registrationState(settings(), now).open).toBe(true);
   });
 });
 
 describe("formatDurationSeconds", () => {
-  it("renders hours and minutes, and an em dash for nothing", () => {
-    expect(formatDurationSeconds(3 * 3600)).toBe("3h");
-    expect(formatDurationSeconds(2.5 * 3600)).toBe("2h 30m");
+  it("renders hours and minutes", () => {
+    expect(formatDurationSeconds(4 * 3600)).toBe("4h");
+    expect(formatDurationSeconds(3.5 * 3600)).toBe("3h 30m");
     expect(formatDurationSeconds(45 * 60)).toBe("45m");
+  });
+
+  it("shows an em dash for nothing, never '0m'", () => {
     expect(formatDurationSeconds(null)).toBe("—");
     expect(formatDurationSeconds(0)).toBe("—");
   });
 });
 
-describe("per-session dials", () => {
-  it("falls back to the documented defaults for a session with no row", () => {
-    // A MISSING row is an unconfigured session, not a failed query — the
-    // difference the module's header comment turns on. Defaults here are
-    // legitimate; a default after a fetch ERROR would not be.
-    const only2 = [dials(2, { individualEventPriceEgp: 450 })];
-    expect(settingsForSession(only2, "vol-1", 2).individualEventPriceEgp).toBe(450);
-    expect(settingsForSession(only2, "vol-1", 1)).toEqual({
-      meetVolumeId: "vol-1",
-      sessionNumber: 1,
-      ...DEFAULT_MEET_SETTINGS,
-    });
-  });
-
-  it("prices a mixed basket by each race's own session", () => {
-    const prices = individualPriceBySession([
-      dials(1, { individualEventPriceEgp: 300 }),
-      dials(2, { individualEventPriceEgp: 350 }),
-      dials(3, { individualEventPriceEgp: 500 }),
-    ]);
-    // One race in the morning and one in the evening is 800, not 2 x 300.
-    expect((prices.get(1) ?? 0) + (prices.get(3) ?? 0)).toBe(800);
-  });
-
-  it("reports a single meet price only when the sessions actually agree", () => {
-    expect(uniformIndividualPriceEgp(uniformDials({ individualEventPriceEgp: 300 }))).toBe(300);
-    // One session out of step means there is no honest headline figure, and
-    // callers must say "varies" rather than print session 1's price.
-    expect(
-      uniformIndividualPriceEgp([
-        dials(1, { individualEventPriceEgp: 300 }),
-        dials(2, { individualEventPriceEgp: 300 }),
-        dials(3, { individualEventPriceEgp: 500 }),
-      ]),
-    ).toBeNull();
-    expect(uniformIndividualPriceEgp([])).toBeNull();
-  });
-
-  it("holds a swimmer to the STRICTEST event limit across the sessions", () => {
-    // Taking the loosest would let someone exceed session 2's own limit by
-    // spreading entries across the other two.
-    expect(
-      effectiveEventLimit([
-        dials(1, { athleteEventLimit: 4 }),
-        dials(2, { athleteEventLimit: 2 }),
-        dials(3, { athleteEventLimit: 6 }),
-      ]),
-    ).toBe(2);
-    expect(effectiveEventLimit([])).toBe(DEFAULT_MEET_SETTINGS.athleteEventLimit);
+describe("DEFAULT_MEET_SETTINGS", () => {
+  it("mirrors the schema column defaults", () => {
+    // These exist so an unconfigured VOLUME renders a usable form. They are
+    // not a fallback for a failed query — see lib/fetch-policy.ts.
+    expect(DEFAULT_MEET_SETTINGS.athleteCapacity).toBe(200);
+    expect(DEFAULT_MEET_SETTINGS.holdWindowHours).toBe(48);
+    expect(DEFAULT_MEET_SETTINGS.waitlistClaimHours).toBe(24);
+    expect(DEFAULT_MEET_SETTINGS.sellingOutThresholdPercent).toBe(20);
+    expect(DEFAULT_MEET_SETTINGS.athleteEventLimit).toBe(4);
+    expect(DEFAULT_MEET_SETTINGS.pinnedPricingTier).toBeNull();
   });
 });

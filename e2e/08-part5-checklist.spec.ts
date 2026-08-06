@@ -13,11 +13,12 @@ import {
  */
 
 test.describe("Part 5 checklist — Athlete Flow", () => {
-  test("athlete01 views PBs, registers for 2 races, itemized total is 600 EGP cash on deck", async ({ page }) => {
+  test("athlete01 views PBs, registers for 2 races, itemized total is the 560 EGP 2-race package", async ({ page }) => {
     // Registers every run and never removed the entries, so the swimmer
     // drifted into the 4-event cap and this skipped from then on.
-    // The RULE is under test (a U14 enters two races and owes 600 EGP), not
-    // one account. Naming a swimmer meant that once their four slots held
+    // The RULE is under test (a U14 enters two races and owes the 2-race
+    // package price, not two separate race fees), not one account. Naming a
+    // swimmer meant that once their four slots held
     // real published swims there was no non-destructive way to free them, and
     // the spec could only skip.
     const swimmer = await findAthleteWithCapacity("U14", 2);
@@ -45,7 +46,7 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
     await page.waitForURL("**/athletes/**");
     await expect(page.getByText("PB")).toBeVisible();
 
-    // Register for 2 races, assert the itemized 300 EGP/race cash total.
+    // Register for 2 races, assert the itemized package total.
     await page.goto("/events/1/register", { waitUntil: "domcontentloaded" });
     // freeRegistrationSlots can finish before the event catalogue hydrates —
     // "0 of 4 events used" with Select still Loading is not a capacity miss.
@@ -85,16 +86,24 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
     }
     requireFixture(picked === 2, "two free slots in events that ask for a seed time");
 
-    await expect(page.getByText("2 races × 300 EGP")).toBeVisible();
-    await expect(page.getByText("600 EGP", { exact: false }).first()).toBeVisible();
+    // Two races is a PACKAGE now, not two race fees. The seeded matrix prices
+    // the 2-race package at 560 EGP standard (the tier seed-demo.sql makes
+    // active), so the old "2 races × 300 EGP = 600" arithmetic no longer
+    // describes what anyone is charged.
+    await expect(page.getByText("2-race package")).toBeVisible();
+    await expect(page.getByText("560 EGP", { exact: false }).first()).toBeVisible();
+
+    // The price settles when payment is COLLECTED, not now — and the form has
+    // to say so before the swimmer commits, or they find out at the desk.
+    await expect(page.getByText(/price is set when you pay/i)).toBeVisible();
 
     const submit = page.getByRole("button", { name: /^Submit 2/ });
-    await expect(submit).toContainText("600 EGP Cash on Deck");
+    await expect(submit).toContainText("560 EGP Cash on Deck");
     await submit.click();
 
     await expect(page.getByText("Entries submitted!")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("Cash Payment Pending on Deck")).toBeVisible();
-    await expect(page.getByText(/600 EGP in cash/)).toBeVisible();
+    await expect(page.getByText(/560 EGP in cash/)).toBeVisible();
     } finally {
       await slots.cleanup();
       await safety.cleanup();

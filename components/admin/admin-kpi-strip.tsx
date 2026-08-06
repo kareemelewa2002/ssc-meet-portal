@@ -5,7 +5,7 @@ import { Banknote, Building2, ClipboardCheck, UserRoundCheck } from "lucide-reac
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { describeError, failure, ok, type FetchResult } from "@/lib/fetch-policy";
-import { fetchMeetSettings, uniformIndividualPriceEgp } from "@/lib/meet-settings";
+
 import { fetchActiveVolume } from "@/lib/volumes";
 import { SkeletonStat } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
@@ -18,15 +18,17 @@ export interface AdminKpis {
   draftHeatCards: number;
 }
 
-/** Four head:true counts + one small select — cheap enough to poll on focus,
+/** Four head:true counts plus the cash total — cheap enough to poll on focus,
  * and each is independently null-safe so one failing table never blanks the
  * whole strip.
  *
- * `individualPriceEgp` is required rather than defaulted: the cash-queue tile
- * is a money figure an admin acts on, and a hard-coded 300 here would keep
- * printing a confident total after an admin changed the price in the Control
- * Unit. */
-export async function fetchAdminKpis(individualPriceEgp: number): Promise<FetchResult<AdminKpis>> {
+ * The cash figure comes from public.pending_cash_total(), which sums each
+ * athlete's own quote. It used to be an entry count multiplied by one race
+ * price; under package pricing there is no such price. Four swimmers with one
+ * race each and one swimmer with four races enter the same number of races and
+ * owe completely different amounts, so the old arithmetic was wrong for every
+ * meet that was not priced per race. */
+export async function fetchAdminKpis(meetVolumeId: string): Promise<FetchResult<AdminKpis>> {
   const EMPTY: AdminKpis = {
     registeredAthletes: 0,
     unapprovedTeams: 0,
@@ -36,23 +38,27 @@ export async function fetchAdminKpis(individualPriceEgp: number): Promise<FetchR
   };
   try {
     const supabase = createClient();
-    const [swimmers, teams, cash, drafts] = await Promise.all([
+    const [swimmers, teams, drafts, owed] = await Promise.all([
       supabase.from("athletes").select("*", { count: "exact", head: true }),
       supabase.from("teams").select("*", { count: "exact", head: true }).eq("approved_by_admin", false),
-      supabase.from("entries").select("*", { count: "exact", head: true }).eq("status", "pending_payment"),
       supabase.from("results").select("*", { count: "exact", head: true }).eq("status", "draft"),
+      supabase.rpc("pending_cash_total", { p_meet_volume_id: meetVolumeId }),
     ]);
 
-    const firstErr = swimmers.error ?? teams.error ?? cash.error ?? drafts.error;
+    const firstErr = swimmers.error ?? teams.error ?? drafts.error ?? owed.error;
     if (firstErr) return failure(describeError("Loading admin counters", firstErr), EMPTY);
 
-    const cashCount = cash.count ?? 0;
+    // The RPC returns a single row; no row means no volume, which is zero
+    // owed rather than an error.
+    const totals = Array.isArray(owed.data) ? owed.data[0] : null;
+
     return ok({
       registeredAthletes: swimmers.count ?? 0,
       unapprovedTeams: teams.count ?? 0,
-      cashQueueCount: cashCount,
-      // Every unpaid entry is one race at the volume's deck price.
-      cashQueueEgp: cashCount * individualPriceEgp,
+      // Swimmers owing money, not unpaid entries: one swimmer with four races
+      // is one person to serve at the desk, not four.
+      cashQueueCount: totals?.athlete_count ?? 0,
+      cashQueueEgp: totals?.total_egp ?? 0,
       draftHeatCards: drafts.count ?? 0,
     });
   } catch (err) {
@@ -89,23 +95,7 @@ export function AdminKpiStrip({ className }: { className?: string }) {
       setError(vol.error ?? "No active meet volume, so there is no deck price to total against.");
       return;
     }
-    const settings = await fetchMeetSettings(vol.data.id);
-    if (settings.error) {
-      setError(settings.error);
-      return;
-    }
-    // A headline figure has no session context, so it is only honest when the
-    // three sessions charge the same. When they differ there is no single
-    // "cash queue value" to print, and inventing one from session 1 would
-    // understate or overstate the desk by however much session 3 differs.
-    const price = uniformIndividualPriceEgp(settings.data);
-    if (price === null) {
-      setError(
-        `${vol.data.name} prices its sessions differently, so the cash queue has no single total — see /admin/cash-payments for the per-swimmer breakdown.`,
-      );
-      return;
-    }
-    const res = await fetchAdminKpis(price);
+    const res = await fetchAdminKpis(vol.data.id);
     setKpis(res.data);
     setError(res.error);
   }, []);

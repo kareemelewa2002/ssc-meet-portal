@@ -23,17 +23,35 @@ import {
   type EventSelection,
   type RegisterableEvent,
 } from "@/lib/event-registration";
+import { fetchMeetSettings, type MeetSettings } from "@/lib/meet-settings";
 import {
-  effectiveEventLimit,
-  fetchMeetSettings,
-  settingsForSession,
-  type MeetSettings,
-  type SessionNumber,
-} from "@/lib/meet-settings";
+  AVAILABILITY_LABELS,
+  availabilityVariant,
+  describeAvailability,
+  fetchEventCapacities,
+  joinWaitlist,
+  leaveWaitlist,
+  fetchAthleteWaitlist,
+  type EventCapacity,
+  type WaitlistEntry,
+} from "@/lib/capacity";
+import {
+  fetchPricingMatrix,
+  fetchTierWindows,
+  activeTier,
+  tierEndsAt,
+  tierLabel,
+  quoteSelection,
+  formatEgp,
+  priceLineKindLabel,
+  type PricingMatrixCell,
+  type TierWindow,
+} from "@/lib/pricing";
 import { CLOCK_TIME_ERROR, formatTimeMs, parseTimeToMs } from "@/lib/format";
 import { ClockTimeInput } from "@/components/ui/clock-time-input";
 import type { AgeGroup, MeetVolumeRow, ParentLinkStatus, TeamRow } from "@/lib/supabase/types";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { getErrorMessage } from "@/lib/utils";
 
 interface EventDraft {
   selected: boolean;
@@ -53,7 +71,12 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   // Price and event cap both come from the Control Unit. Null means they
   // could not be read, and the form refuses to quote a price rather than
   // showing a plausible one — see lib/fetch-policy.ts.
-  const [settings, setSettings] = useState<MeetSettings[]>([]);
+  const [settings, setSettings] = useState<MeetSettings | null>(null);
+  const [matrix, setMatrix] = useState<PricingMatrixCell[]>([]);
+  const [tierWindows, setTierWindows] = useState<TierWindow[]>([]);
+  const [capacities, setCapacities] = useState<Map<string, EventCapacity>>(new Map());
+  const [waitlist, setWaitlist] = useState<WaitlistEntry[]>([]);
+  const [waitlistBusy, setWaitlistBusy] = useState<string | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [events, setEvents] = useState<RegisterableEvent[]>([]);
   const [teams, setTeams] = useState<TeamRow[]>([]);
@@ -81,19 +104,32 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
 
       let loadedEvents: RegisterableEvent[] = [];
       if (volResult.data) {
-        const [ev, tm, cfg] = await Promise.all([
+        const [ev, tm, cfg, mx, tw] = await Promise.all([
           fetchRegisterableEvents(volResult.data.id),
           fetchTeams(),
           fetchMeetSettings(volResult.data.id),
+          fetchPricingMatrix(volResult.data.id),
+          fetchTierWindows(volResult.data.id),
         ]);
         loadedEvents = ev;
+        // Capacity for every listed race in ONE round trip. Per-race calls
+        // would be one request per row on a twenty-race form.
+        const caps = await fetchEventCapacities(ev.map((e) => e.id));
         if (!cancelled) {
           setEvents(ev);
+          setCapacities(caps.data);
           setTeams(tm.data.filter((t) => t.approved_by_admin));
           setSettings(cfg.data);
-          if (cfg.error || cfg.data.length === 0) {
+          setMatrix(mx.data);
+          setTierWindows(tw.data);
+          // A missing matrix is as disqualifying as a missing settings row:
+          // without prices there is nothing honest to quote, and showing a
+          // total assembled from zeros would read as a free meet.
+          if (cfg.error || mx.error || tw.error || !cfg.data || mx.data.length === 0) {
             setSettingsError(
               cfg.error ??
+                mx.error ??
+                tw.error ??
                 `${volResult.data.name} has no entry pricing configured yet, so races can't be priced. An admin sets this in the Control Unit.`,
             );
           }
@@ -148,6 +184,11 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           loadedEvents.map((e) => e.id),
         );
         if (!cancelled) setEnteredEventIds(entered);
+
+        // Queue standing, so a race this swimmer is already waiting on reads
+        // "Waiting — #3" rather than offering to join a second time.
+        const queued = await fetchAthleteWaitlist(athleteRow.id);
+        if (!cancelled) setWaitlist(queued.data);
 
         // From volume 2 the seed time comes from the swimmer's own history,
         // so the form shows what will be used instead of asking for it.
@@ -206,34 +247,49 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   /** What this event's seed time will be, and why — mirrors the database. */
   const seedFor = (ev: RegisterableEvent) =>
     resolveSeedSource(ev, volume?.volume_number ?? 1, previousBest.get(ev.id));
-  // The cap is per MEET, so where the three sessions disagree a swimmer is
-  // held to the strictest of them — the alternative lets someone exceed a
-  // session's own limit by spreading entries across the others.
-  const eventLimit = settings.length > 0 ? effectiveEventLimit(settings) : null;
+  // One cap for the whole meet — the admin's chosen limit, from the Control
+  // Unit. It may exceed four, which is why the pricing matrix carries an
+  // each-additional-race row.
+  const eventLimit = settings?.athleteEventLimit ?? null;
   const remainingSlots = eventLimit == null ? 0 : Math.max(0, eventLimit - enteredCount);
 
+  /** The tier in force right now, and when it stops applying. */
+  const currentTier = useMemo(
+    () => (settings ? activeTier(settings, tierWindows) : null),
+    [settings, tierWindows],
+  );
+  const currentTierEndsAt = useMemo(
+    () => (currentTier ? tierEndsAt(currentTier, tierWindows) : null),
+    [currentTier, tierWindows],
+  );
+
   /**
-   * What the selected races actually cost.
+   * What the selected races cost, as LINE ITEMS.
    *
-   * Summed per race at its OWN session's price rather than count × one price:
-   * the sessions may be priced differently, and a swimmer picking one race in
-   * the morning and one in the evening would otherwise be quoted twice the
-   * wrong figure. `perRaceEgp` is non-null only when every selected race
-   * happens to cost the same, so the "N races × X EGP" line is never a lie.
+   * Not a bare total: the package covers the first four races as one figure,
+   * and each race can carry its own surcharge, so a single number tells the
+   * swimmer nothing about why it is that number. Every line is rendered.
+   *
+   * quoteSelection() mirrors public.quote_athlete_entries() — the selection is
+   * not saved yet, so there are no entry rows to quote from, and round-tripping
+   * on every checkbox would price races the swimmer has not committed to.
    */
   const priced = useMemo(() => {
-    if (!volume || settings.length === 0) return null;
+    if (!settings || !currentTier || matrix.length === 0) return null;
     const selectedEvents = events.filter((ev) => drafts[ev.id]?.selected);
-    const prices = selectedEvents.map(
-      (ev) =>
-        settingsForSession(settings, volume.id, ev.sessionNumber as SessionNumber)
-          .individualEventPriceEgp,
-    );
-    const totalEgp = prices.reduce((sum, p) => sum + p, 0);
-    const perRaceEgp =
-      prices.length > 0 && prices.every((p) => p === prices[0]) ? prices[0] : null;
-    return { totalEgp, perRaceEgp };
-  }, [events, drafts, settings, volume]);
+    if (selectedEvents.length === 0) return null;
+    return quoteSelection({
+      events: selectedEvents.map((ev) => ({
+        id: ev.id,
+        name: ev.name,
+        surchargeEgp: ev.surchargeEgp ?? 0,
+        isRelay: false,
+      })),
+      matrix,
+      tier: currentTier,
+      relaySwimmerPriceEgp: settings.relaySwimmerPriceEgp,
+    });
+  }, [events, drafts, settings, matrix, currentTier]);
 
   const eventsBySession = useMemo(() => {
     const groups = new Map<number, RegisterableEvent[]>();
@@ -288,6 +344,36 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   };
 
   const selectedCount = Object.values(drafts).filter((d) => d.selected).length;
+
+  /**
+   * Join or leave a full race's queue.
+   *
+   * Position comes back from the database rather than being counted here: the
+   * queue moves while the page is open, and a number computed client-side goes
+   * stale the moment someone ahead withdraws.
+   */
+  const toggleWaitlist = async (eventId: string) => {
+    if (!athlete) return;
+    setWaitlistBusy(eventId);
+    setError(null);
+    try {
+      const existing = waitlist.find((w) => w.eventId === eventId);
+      if (existing) {
+        const res = await leaveWaitlist(eventId, athlete.id);
+        if (!res.success) throw new Error(res.error ?? "Could not leave the waitlist.");
+        setWaitlist((prev) => prev.filter((w) => w.eventId !== eventId));
+      } else {
+        const res = await joinWaitlist(eventId, athlete.id);
+        if (!res.success) throw new Error(res.error ?? "Could not join the waitlist.");
+        const refreshed = await fetchAthleteWaitlist(athlete.id);
+        setWaitlist(refreshed.data);
+      }
+    } catch (err) {
+      setError(getErrorMessage(err, "Waitlist update failed."));
+    } finally {
+      setWaitlistBusy(null);
+    }
+  };
 
   const handleSubmit = async () => {
     if (!athlete || !volume) return;
@@ -366,8 +452,8 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
           {priced ? (
             <>
               {" "}
-              Bring <strong>{priced.totalEgp} EGP in cash</strong> to the meet desk on deck — an
-              admin will confirm payment there.
+              Bring <strong>{formatEgp(priced.totalEgp)} in cash</strong> to the meet desk on
+              deck — an admin will confirm payment there.
             </>
           ) : (
             " Pay cash at the meet desk on deck — the amount could not be loaded, so ask an admin to confirm it there."
@@ -485,22 +571,72 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
                   {sessionEvents.map((ev) => {
                     const draft = drafts[ev.id];
                     const alreadyEntered = enteredEventIds.has(ev.id);
+                    const capacity = capacities.get(ev.id);
+                    const isFull = capacity?.availability === "full";
+                    const queued = waitlist.find((w) => w.eventId === ev.id);
                     return (
                       <div key={ev.id} className="space-y-2 rounded-lg border p-3">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium">
-                            {ev.distanceM}m {ev.stroke}
+                          <span className="min-w-0">
+                            <span className="font-medium">
+                              {ev.distanceM}m {ev.stroke}
+                            </span>
+                            {/* Availability is stated on every race, not only
+                                on full ones. A swimmer choosing between twenty
+                                races needs to know which are about to go, and
+                                a badge that only ever appears when it is too
+                                late tells them nothing in time. */}
+                            {capacity && (
+                              <span className="mt-1 flex flex-wrap items-center gap-1.5">
+                                <Badge
+                                  variant={availabilityVariant(capacity.availability)}
+                                  className="text-[10px]"
+                                  data-testid={`availability-${ev.id}`}
+                                >
+                                  {AVAILABILITY_LABELS[capacity.availability]}
+                                </Badge>
+                                <span className="text-[11px] text-muted-foreground">
+                                  {describeAvailability(capacity)}
+                                </span>
+                              </span>
+                            )}
+                            {ev.surchargeEgp > 0 && (
+                              <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                                +{ev.surchargeEgp} EGP surcharge on this race
+                              </span>
+                            )}
                           </span>
+
                           {alreadyEntered ? (
-                            <Badge variant="outline" className="h-9 px-4">
+                            <Badge variant="outline" className="h-9 shrink-0 px-4">
                               Already Entered
                             </Badge>
+                          ) : isFull && !draft?.selected ? (
+                            // Full races cannot be selected. Offering a
+                            // Select button that fails on submit would waste
+                            // the swimmer's time and lose their other picks.
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={queued ? "secondary" : "outline"}
+                              className="min-h-[48px] shrink-0 px-4"
+                              disabled={waitlistBusy === ev.id || !athlete}
+                              onClick={() => void toggleWaitlist(ev.id)}
+                            >
+                              {waitlistBusy === ev.id ? (
+                                <Loader2 className="size-4 animate-spin" />
+                              ) : queued ? (
+                                `Waiting — #${queued.position ?? "?"}`
+                              ) : (
+                                "Join waitlist"
+                              )}
+                            </Button>
                           ) : (
                             <Button
                               type="button"
                               size="sm"
                               variant={draft?.selected ? "default" : "outline"}
-                              className="min-h-[48px] px-4"
+                              className="min-h-[48px] shrink-0 px-4"
                               disabled={!draft?.selected && selectedCount >= remainingSlots}
                               onClick={() => toggleEvent(ev.id)}
                             >
@@ -558,18 +694,45 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
             ))
           )}
 
-          {selectedCount > 0 && priced && (
+          {selectedCount > 0 && priced && currentTier && (
             <Card className="border-dashed">
-              <CardContent className="space-y-2 py-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">
-                    {selectedCount} {selectedCount === 1 ? "race" : "races"}
-                    {priced.perRaceEgp != null
-                      ? ` × ${priced.perRaceEgp} EGP`
-                      : " (priced per session)"}
+              <CardContent className="space-y-3 py-4">
+                {/* Every line, always. The requirement is that a swimmer can
+                    see WHY the total is the total — which race costs what and
+                    what the package covers — not just what it comes to. */}
+                <dl className="space-y-1 text-sm">
+                  {priced.lines.map((line, i) => (
+                    <div key={`${line.kind}-${i}`} className="flex justify-between gap-3">
+                      <dt className="text-muted-foreground">
+                        <span className="opacity-60">{priceLineKindLabel(line.kind)}:</span>{" "}
+                        {line.label}
+                      </dt>
+                      <dd className="shrink-0 tabular-nums">{formatEgp(line.amountEgp)}</dd>
+                    </div>
+                  ))}
+                </dl>
+
+                <div className="flex items-center justify-between border-t pt-2 text-sm">
+                  <span className="font-medium">
+                    Total at the {tierLabel(currentTier)} rate
                   </span>
-                  <span className="text-lg font-bold tabular-nums">{priced.totalEgp} EGP</span>
+                  <span className="text-lg font-bold tabular-nums">
+                    {formatEgp(priced.totalEgp)}
+                  </span>
                 </div>
+
+                {/* Said out loud, before they commit. The price is settled when
+                    payment is collected, not when the entry is made, so a
+                    swimmer who registers now and pays after the boundary pays
+                    the later rate. Discovering that at the desk would be
+                    indefensible. */}
+                <p className="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
+                  <strong>This price is set when you pay, not now.</strong>{" "}
+                  {currentTierEndsAt
+                    ? `The ${tierLabel(currentTier)} rate applies until ${currentTierEndsAt.toLocaleString()}. If you pay after that, you pay the next rate.`
+                    : `You will be charged whichever rate is in force when an admin collects your payment.`}
+                </p>
+
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Banknote className="size-3.5 shrink-0" />
                   Pay cash on deck at the meet desk — no online payment required.
