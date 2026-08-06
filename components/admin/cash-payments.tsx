@@ -109,8 +109,9 @@ export function CashPayments({ className }: { className?: string }) {
           <CardDescription>
             Verify each swimmer&rsquo;s cash payment at the meet desk, then confirm here.
             Each total is their package at the tier in force right now, plus any race
-            surcharges and relay legs — expand a row to see the breakdown. Confirming
-            records what was collected and seeds their races into the heat sheet.
+            surcharges — expand a row to see the breakdown. Confirming records what was
+            collected and seeds their races into the heat sheet. Relay squads are paid
+            separately by the team captain, below.
           </CardDescription>
         </div>
         <Button

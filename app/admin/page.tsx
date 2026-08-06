@@ -9,6 +9,7 @@ import { UserRoleManagement } from "@/components/admin/user-role-management";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { RefereeHeatCards } from "@/components/admin/referee-heat-cards";
 import { CashPayments } from "@/components/admin/cash-payments";
+import { RelaySquadPayments } from "@/components/admin/relay-squad-payments";
 import { AppHeader } from "@/components/layout/app-header";
 import { AdminKpiStrip } from "@/components/admin/admin-kpi-strip";
 
@@ -90,7 +91,12 @@ export default function AdminPage() {
 
       {tab === "teams" && <PendingTeamApprovals />}
       {tab === "heatcards" && <RefereeHeatCards />}
-      {tab === "cash" && <CashPayments />}
+      {tab === "cash" && (
+        <div className="space-y-4">
+          <CashPayments />
+          <RelaySquadPayments />
+        </div>
+      )}
       {tab === "users" && <UserRoleManagement />}
       </main>
     </div>

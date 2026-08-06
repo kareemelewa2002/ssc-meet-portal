@@ -170,7 +170,36 @@ export type RelaySquadRow = {
   age_group: AgeGroup;
   squad_letter: string;
   status: EntryStatus;
+  /** When an unpaid squad stops holding its relay-event capacity slot. Same
+   * mechanism as entries.hold_expires_at. Null once paid. */
+  hold_expires_at: string | null;
   created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** One row per PAID relay squad — the captain is billed for the whole squad,
+ * never split across the four swimmers on it. */
+export type RelaySquadPaymentRow = {
+  id: string;
+  squad_id: string;
+  amount_egp: number;
+  method: string;
+  collected_by: string | null;
+  collected_at: string;
+  note: string | null;
+};
+
+/** Captain-authored, team-wide message. Distinct from public.notifications —
+ * this is the message itself; each member's own notification is a
+ * per-recipient pointer back to it. */
+export type TeamAnnouncementRow = {
+  id: string;
+  team_id: string;
+  author_id: string | null;
+  title: string;
+  body: string;
+  pinned: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -255,7 +284,8 @@ export type NotificationCategoryValue =
   | "team"
   | "entry_payment"
   | "waitlist"
-  | "results_schedule";
+  | "results_schedule"
+  | "announcement";
 
 export type WaitlistStatusValue =
   | "waiting"
@@ -602,6 +632,8 @@ export type Database = {
       event_results: Table<EventResultRow>;
       relay_squads: Table<RelaySquadRow>;
       relay_legs: Table<RelayLegRow>;
+      relay_squad_payments: Table<RelaySquadPaymentRow>;
+      team_announcements: Table<TeamAnnouncementRow>;
       performance_highlights: Table<PerformanceHighlightRow>;
       athletes: Table<AthleteRow>;
       volume_team_affiliations: Table<VolumeTeamAffiliationRow>;
@@ -760,7 +792,30 @@ export type Database = {
           holds_expired: number;
           offers_made: number;
           offers_lapsed: number;
+          relay_holds_expired: number;
         }[];
+      };
+      relay_event_capacity: {
+        Args: { p_event_id: string };
+        Returns: {
+          capacity_cap: number;
+          paid_count: number;
+          held_count: number;
+          free_count: number;
+          availability: EventAvailabilityValue;
+        }[];
+      };
+      quote_relay_squad_egp: {
+        Args: { p_squad_id: string };
+        Returns: { legs_filled: number; amount_egp: number; payable: boolean }[];
+      };
+      confirm_relay_squad_payment: {
+        Args: { p_squad_id: string; p_collected_by: string; p_note?: string };
+        Returns: string;
+      };
+      reclaim_relay_squad_hold: {
+        Args: { p_squad_id: string };
+        Returns: boolean;
       };
       offer_waitlist_slots: {
         Args: { p_event_id: string };

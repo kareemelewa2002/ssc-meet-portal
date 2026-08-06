@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, Radio } from "lucide-react";
+import { ArrowLeft, Printer, Radio } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { heatTitle } from "@/lib/format";
@@ -440,9 +441,24 @@ export function LiveEventsClient({
   );
 
   return (
-    <div className={cn("min-h-screen", outdoorMode ? "bg-black text-yellow-300" : "bg-background")}>
+    <div
+      className={cn(
+        "min-h-screen",
+        outdoorMode ? "bg-black text-yellow-300" : "bg-background",
+        // Outdoor mode's black background and yellow text are for glare on
+        // the pool deck, not for paper — the existing global print rule only
+        // forces `body` to white-on-black, which does not reach this div's
+        // own explicit bg-black/text-yellow-300 classes underneath it.
+        "print:bg-white print:text-black",
+      )}
+    >
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-        <div className="flex items-center justify-between gap-3">
+        {/* print:hidden throughout this nav/filter chrome — none of it means
+            anything on paper, and a printed heat sheet is exactly the thing
+            poolside officials reach for when the venue's wifi is not
+            trustworthy. The tables further down print as-is, with no
+            print-specific markup of their own needed. */}
+        <div className="flex items-center justify-between gap-3" data-print-hide>
           <Link
             href="/"
             className={cn(
@@ -467,6 +483,16 @@ export function LiveEventsClient({
                 Live
               </Badge>
             )}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="min-h-[40px] gap-1.5"
+              onClick={() => window.print()}
+            >
+              <Printer className="size-4" />
+              Print
+            </Button>
             <OutdoorModeToggle />
           </div>
         </div>
@@ -491,6 +517,7 @@ export function LiveEventsClient({
 
         {eventFilterId ? (
           <div
+            data-print-hide
             className={cn(
               "flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3 text-sm",
               outdoorMode ? "border-yellow-300/40 bg-black" : "bg-muted/40",
@@ -511,6 +538,7 @@ export function LiveEventsClient({
           </div>
         ) : (
           <Tabs
+            data-print-hide
             value={String(sessionNumber)}
             onValueChange={(v) => setSessionNumber(v === "all" ? "all" : (Number(v) as 1 | 2 | 3))}
           >
@@ -544,7 +572,7 @@ export function LiveEventsClient({
           </Tabs>
         )}
 
-        <div className="flex flex-wrap gap-4">
+        <div className="flex flex-wrap gap-4" data-print-hide>
           <FilterSelect
             label="Gender"
             value={genderFilter}

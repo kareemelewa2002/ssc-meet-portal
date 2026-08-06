@@ -21,6 +21,7 @@ export const NOTIFICATION_CATEGORIES: readonly NotificationCategory[] = [
   "entry_payment",
   "waitlist",
   "results_schedule",
+  "announcement",
 ];
 
 /**
@@ -46,6 +47,7 @@ export const NOTIFICATION_CATEGORY_LABELS: Record<NotificationCategory, string> 
   entry_payment: "Payments & entries",
   waitlist: "Waitlist offers",
   results_schedule: "Results & schedule",
+  announcement: "Team announcements",
 };
 
 export const NOTIFICATION_CATEGORY_DESCRIPTIONS: Record<NotificationCategory, string> = {
@@ -54,6 +56,7 @@ export const NOTIFICATION_CATEGORY_DESCRIPTIONS: Record<NotificationCategory, st
     "Payment recorded, entries confirmed, and warnings before a place is released.",
   waitlist: "A place opening up for you, and the deadline to claim it.",
   results_schedule: "Published results, heat and lane assignments, session time changes.",
+  announcement: "Messages your team captain posts for the whole squad.",
 };
 
 export interface AppNotification {
@@ -74,6 +77,7 @@ export const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
   entry_payment: true,
   waitlist: true,
   results_schedule: true,
+  announcement: true,
 };
 
 function toNotification(row: NotificationRow): AppNotification {

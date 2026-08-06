@@ -155,6 +155,10 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "public", table: "pricing_packages", trigger: "pricing_packages_set_updated_at" },
   { schema: "public", table: "race_shape_templates", trigger: "race_shape_templates_set_updated_at" },
   { schema: "public", table: "team_memberships", trigger: "notify_team_membership_change_trigger" },
+  // Relay squad payments and team announcements.
+  { schema: "public", table: "relay_squads", trigger: "set_relay_squad_hold_expiry_trigger" },
+  { schema: "public", table: "team_announcements", trigger: "team_announcements_set_updated_at" },
+  { schema: "public", table: "team_announcements", trigger: "notify_team_announcement_trigger" },
 ];
 
 /** Retired triggers, with what each one actually breaks if it survives. Any

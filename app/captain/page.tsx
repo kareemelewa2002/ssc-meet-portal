@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppHeader } from "@/components/layout/app-header";
 import { TeamRoster } from "@/components/dashboard/team-roster";
 import { RelayBuilder } from "@/components/captain/relay-builder";
+import { RelayPayments } from "@/components/captain/relay-payments";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { fetchCaptainedTeams } from "@/lib/relays";
@@ -60,6 +61,7 @@ export default function CaptainPage() {
         ) : (
           <>
             <RelayBuilder teams={teams} />
+            <RelayPayments teams={teams} />
             <TeamRoster />
           </>
         )}

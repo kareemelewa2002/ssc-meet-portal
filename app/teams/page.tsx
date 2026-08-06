@@ -21,6 +21,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AppHeader } from "@/components/layout/app-header";
 import { PendingTeamApprovals } from "@/components/admin/pending-team-approvals";
 import { TeamJoinRequests } from "@/components/teams/team-join-requests";
+import { TeamAnnouncements } from "@/components/teams/team-announcements";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AthleteDirectory } from "@/components/athletes/athlete-directory";
@@ -410,6 +411,13 @@ export default function TeamsPage() {
                   <p className="text-sm text-muted-foreground">No members yet.</p>
                 )}
               </div>
+              {rosterTeam && (
+                <TeamAnnouncements
+                  teamId={rosterTeam.id}
+                  isCaptain={Boolean(user && user.id === rosterTeam.captain_id)}
+                  authorId={user?.id ?? null}
+                />
+              )}
             </div>
           )}
         </DialogContent>

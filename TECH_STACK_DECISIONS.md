@@ -408,20 +408,231 @@ collapses a recipient's queued digest rows into a single message via
 
 ---
 
-## 6. Test Suite & Findings
+## 6. Relay Squad Payments
+
+### One relay squad is one payable unit, billed to the captain
+
+`public.quote_athlete_entries()` no longer includes any relay charge in a
+swimmer's own quote — the `relay_legs` line item was removed outright, not
+zeroed out or hidden. A relay is priced and paid **once per squad**
+(`quote_relay_squad_egp(squad_id)`), owed by and paid by the team captain, not
+split four ways or folded into any individual swimmer's total. This replaced
+the previous model (each of the four swimmers carried a `1/4`-style relay
+charge in their own quote) rather than running the two side by side, because a
+squad member choosing not to swim the relay while their three teammates still
+do was previously unrepresentable — a per-swimmer charge implies a per-swimmer
+opt-out, which the relay-legs-in-`quote_athlete_entries()` design never
+actually supported.
+
+A squad must be **complete (4/4 legs filled)** before it is payable at all —
+this is not a policy choice made in application code, it is the pre-existing
+`validate_relay_squad()` deferred constraint trigger, which refuses to let any
+relay squad persist with fewer than four legs regardless of payment state.
+`quote_relay_squad_egp()`'s `payable` output column is therefore defensive,
+not reachable in current schema: a squad that fails to reach 4/4 cannot exist
+in the table to be quoted incomplete in the first place. It is kept, and
+commented as such in `schema.sql`, in case that constraint is ever relaxed to
+allow persisting a draft/incomplete squad — see the note on that trade-off
+below.
+
+### Payment confirmation is admin-only, matching every other cash flow
+
+`confirm_relay_squad_payment()` checks `is_admin()` and refuses a captain
+attempting to confirm their own squad's payment. This was not the first
+design tried — a captain-self-service confirm was the initial approach, and it
+directly conflicted with the pre-existing `enforce_relay_status_change_trigger`
+on `relay_squads`, which already assumes only an admin transitions squad
+status. The app has exactly one payment-confirmation pattern everywhere else
+(cash is physically collected, an admin confirms it in the UI) — relay squad
+payments follow the same pattern rather than becoming the one exception.
+`components/admin/relay-squad-payments.tsx` is a separate table from
+`<CashPayments>` on `/admin`'s cash tab (not merged into it), because the
+payer differs — a relay row's payer is a captain, not the swimmer whose name
+is on the entry.
+
+### Holds, and a relay-specific capacity cap
+
+A relay squad hold expires on the same mechanism as an individual entry hold
+(`hold_expires_at`, computed at insert by
+`set_relay_squad_hold_expiry_trigger`, keyed through
+event → session → volume → `meet_settings.hold_window_hours` exactly like
+`set_entry_hold_expiry()`), and `sweep_expired_holds()` now sweeps
+`relay_squads` in the same run as individual entries — a fourth return column,
+`relay_holds_expired`, was added to that function's signature for this.
+A relay event additionally has its own capacity ceiling:
+`relay_event_capacity(event_id)` counts `relay_squads` rows against
+`events.capacity_cap`, the same column `event_capacity()` already reads for
+individual events — `events.capacity_cap` existed before this work but was
+never actually counted for relay events until now.
+
+### What was explicitly not built: a persisted "incomplete squad" view
+
+The original ask included a read-only widget showing partially-filled squads
+("Relay A: 3/4 swimmers assigned"). Mid-implementation, this was found to
+directly contradict `validate_relay_squad()`'s hard requirement that a squad
+have exactly 4 legs to exist in the table at all — there is no persisted row
+for a 3/4 squad to read and display. Raised back to the requester rather than
+silently working around it (e.g. relaxing the constraint, or inventing a
+parallel "draft squad" concept); the explicit decision was **leave the
+constraint as-is**. `components/captain/relay-payments.tsx` therefore shows
+readiness/payment status only for squads that have actually reached 4/4 and
+been persisted — there is no in-progress/partial state in this UI, by design,
+not by oversight.
+
+**Shift trigger.** If a future requirement genuinely needs to show or manage
+partially-built squads before they reach 4/4, that requires a schema change
+(a `status = 'draft'` value that `validate_relay_squad()` is taught to skip,
+or a separate staging table) — not a UI-only fix, since the data to display
+does not currently exist.
+
+---
+
+## 7. Team Announcements
+
+### `team_announcements`, one new notification category, broadcast not transactional
+
+A `team_announcements` table (`team_id, author_id, title, body, pinned,
+created_at, updated_at`) backs a captain-only composer on `/teams`' existing
+roster dialog and a feed visible to every team member. This is the first
+**broadcast** notification path in the app — `raise_notification()` and every
+existing category (`entry_payment`, `waitlist`, `team`, `results_schedule`)
+fire for one specific recipient reacting to one specific event; posting an
+announcement fans a single INSERT out to every member of the team via
+`notify_team_announcement_trigger` (`AFTER INSERT`, not `AFTER INSERT OR
+UPDATE` — editing or pinning an existing announcement does not re-notify the
+team, only the original post does).
+
+`announcement` was added as its own `notification_category` enum value
+(`alter type ... add value if not exists`, as a bare statement rather than
+inside a `DO` block, matching the existing `hold_expired`-style idiom for this
+schema — `ALTER TYPE ... ADD VALUE` cannot run inside the same transaction
+that then uses the new label) rather than reusing the existing `team`
+category, so a member can mute captain broadcasts independently of the other
+things `team` already covers. Unlike `entry_payment` and `waitlist`,
+`announcement` is not in `MANDATORY_EMAIL_CATEGORIES` — there is no deadline
+attached to a broadcast message, so muting its email is a legitimate user
+choice, not a risk of losing a slot.
+
+### Read access keys off `athletes.team_id`, not `team_memberships`
+
+Both the RLS read policy on `team_announcements` and
+`notify_team_announcement()`'s recipient fan-out determine "who is on this
+team" via `athletes.team_id = team_announcements.team_id`, **not**
+`team_memberships`. `team_memberships` is only the one-time join-request
+record (created when an athlete asks to join a team); live roster membership
+lives on `athletes.team_id`, synced once on approval by
+`sync_athlete_team_on_membership_accept_trigger`. Using `team_memberships` to
+mean "current members" undercounts the roster — most athletes seeded with a
+team have no `team_memberships` row at all if they were assigned directly.
+This exact confusion has now caused a real bug twice in this codebase (the
+first time predates this batch of work); anything answering "who is currently
+on team X" should read `athletes.team_id`, and anything answering "did this
+person ever request to join team X" reads `team_memberships`.
+
+---
+
+## 8. Progression Charts — no charting dependency added
+
+`components/athletes/progression-chart.tsx` renders one hand-built inline SVG
+line chart per event shape (stroke + distance) on an athlete's profile, using
+`currentColor` and this app's existing brutalist border/shadow tokens rather
+than a charting library's own default look. **Custom SVG was chosen over
+Recharts** (the option originally suggested in the audit) because the actual
+shape needed — a handful of points on one line, repeated per event, on a
+profile page that already has no chart anywhere else in the app — does not
+need a general-purpose charting library's API surface, and this app has zero
+existing charting dependency to build on or stay consistent with. Recharts
+remains the right call if this app ever needs interactive/zoomable charts,
+stacked series, or charts in more than a couple of places; a second, unrelated
+chart requirement appearing elsewhere is the trigger to revisit this and add
+the dependency once, rather than hand-rolling a second bespoke SVG component.
+
+The Y-axis is deliberately inverted: a swimmer's improvement is a *smaller*
+time in milliseconds, and plotting that value directly would draw every good
+season as a downward line. Faster times are placed higher on the chart, so
+the line reads the way this app's own results tables already read — better is
+up. An event shape with fewer than two results with a real `officialTimeMs`
+(DQ/NS excluded) renders nothing rather than a single meaningless dot.
+
+---
+
+## 9. Heat Sheet Print Export
+
+No new dependency, no PDF-generation library (`@react-pdf/renderer` was the
+option the audit suggested). The seeding/heat data driving `/events/[volId]/heats`
+and `/events/[volId]/live` is already fully computed client-side by the time
+it renders, so the print output is that same page with a `@media print`
+stylesheet — `window.print()` behind a **Print** button, not a second
+server-rendered artifact that could drift from what the screen shows.
+
+This app already had an established print-CSS convention before this work:
+`[data-print-hide]` (an attribute, not Tailwind's `print:` utility class) on
+any element that should vanish when printing, defined once in
+`app/globals.css`'s `@media print` block and already used by
+`app/admin/seeding/page.tsx`. This work applied the existing convention to
+`components/events/live-client.tsx` (top nav, session tabs, and filter
+controls) and `components/layout/bottom-tab-nav.tsx`, rather than introducing
+Tailwind's `print:` utility as a second, parallel hide/show mechanism — the
+one exception is `print:bg-white print:text-black` on `live-client.tsx`'s root
+`div`, a Tailwind utility used for a *color* override (outdoor mode's
+black-background/yellow-text theme), because no existing convention already
+covered color overrides for this app to conform to; the global stylesheet's
+own print block only forces `body`'s colors, not a component's own explicit
+theme classes layered on top.
+
+Verified against real seeded heat/lane data (not just structurally, against
+an empty page) by emulating print media in a real browser: chrome (`header`,
+`nav`, session tabs, filters) confirmed hidden, actual lane assignments and
+seed times confirmed still present and readable in the print-rendered output.
+
+---
+
+## 10. Test Suite & Findings
 
 ### Baseline
 
 | Suite | Count | Command |
 | --- | --- | --- |
-| RLS assertions, scratch Postgres cluster | 183 | `npm run test:rls` |
-| Schema drift guard (trigger/policy/column inventory) | 55 checks | `npm run db:verify` |
+| RLS assertions, scratch Postgres cluster | 194 | `npm run test:rls` |
+| Schema drift guard (trigger/policy/column inventory) | 56 checks | `npm run db:verify` |
 | Vitest unit tests | 292 | `npm run test` |
-| Playwright E2E specs | 73 | `npx playwright test` |
+| Playwright E2E specs | 71 | `npx playwright test` |
 
 The RLS and Vitest numbers are exact and re-verified every time this file is
 updated; treat the Playwright figure as approximate if it is read long after
 this was written — specs get added.
+
+### `CREATE OR REPLACE FUNCTION` cannot change a function's return shape
+
+Postgres refuses `create or replace function` when the new definition's
+return type or OUT-parameter shape differs from what is already installed —
+it errors with `cannot change return type of existing function`, not a silent
+replace. `sweep_expired_holds()` gained a fourth return column
+(`relay_holds_expired`, see §6) in this batch of work, and `schema.sql`'s
+existing `create or replace function public.sweep_expired_holds()` block hit
+exactly this error the first time it was reapplied to a database that already
+had the three-column version installed. Fixed with an explicit
+`drop function if exists public.sweep_expired_holds();` immediately before
+the `create or replace`. Any future change to a function's return row shape
+(adding/removing/reordering OUT parameters, not just changing the body) needs
+the same `drop function if exists` guard, or the same class of bug ships
+silently to any database that isn't freshly created.
+
+**Why this only surfaced late.** This codebase's fast feedback loops
+(`npm run test:rls`, `check-schema.sh`) run against throwaway scratch Postgres
+clusters built fresh via `initdb` for every run — `create or replace function`
+never fails there, because there is nothing pre-existing to conflict with. The
+bug was only caught by explicitly reapplying `schema.sql` to the
+**persistent** local Supabase instance (127.0.0.1:54321/54322, the one
+`npm run db:verify` and Playwright's `global-setup.ts` use, which retains
+state across sessions rather than resetting per run) — the same shape of gap
+that let an earlier `is_public` backfill bug through in this project's
+history. Scratch-cluster-only testing is fast and correct for logic bugs, but
+structurally blind to "does this schema change apply cleanly to a database
+that already has the old schema" — that question can only be answered by
+actually reapplying `schema.sql` to a non-fresh database, which is not
+something the fast loop does on its own and has to be done deliberately when
+a change touches an existing function's, table's, or trigger's shape.
 
 ### The signup-form "empty alert" finding — corrected on closer reading
 

@@ -28,6 +28,7 @@ import { DQ_REASON_LABELS } from "@/lib/results";
 import { formatWaPoints } from "@/lib/wa-points";
 import { AppHeader } from "@/components/layout/app-header";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
+import { ProgressionCharts } from "@/components/athletes/progression-chart";
 
 export default function AthleteProfilePage() {
   const params = useParams<{ id: string }>();
@@ -214,6 +215,8 @@ export default function AthleteProfilePage() {
           </Table>
         </CardContent>
       </Card>
+
+      <ProgressionCharts results={profile.careerResults} />
 
       <Card>
         <CardHeader>

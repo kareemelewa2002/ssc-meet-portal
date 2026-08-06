@@ -2390,6 +2390,465 @@ exception when others then
 end $$;
 
 -- =============================================================================
+-- DB-45..DB-52 — relay squad payments: captain-billed, admin-confirmed
+-- =============================================================================
+-- One shared fixture squad across this whole group, built by finding a real
+-- (relay event, team, athletes) combination that already satisfies every
+-- validate_relay_squad() rule (same team, same age group, correct gender
+-- split for the event name, every leg already individually entered in the
+-- meet) — hand-picking athlete ids would be fragile the moment the seed
+-- changes; a single-gender relay event needs no gender-ratio balancing, which
+-- is why one is preferred here. Deleted at the end of the group (cascades to
+-- legs and any payment) so re-running this suite never collides with the
+-- squad_letter unique constraint on a second run.
+do $$
+declare
+  v_event_id uuid;
+  v_team_id uuid;
+  v_age_group public.age_group;
+  v_athletes uuid[];
+  v_squad uuid;
+  v_leg integer := 1;
+  v_athlete uuid;
+begin
+  select req.event_id, e.team_id, e.age_group,
+         (e.male_athletes[1:req.male_count] || e.female_athletes[1:req.female_count])
+    into v_event_id, v_team_id, v_age_group, v_athletes
+  from (
+    select ev.id as event_id, ev.name as event_name, s.meet_volume_id,
+           g.male_count, g.female_count
+    from public.events ev
+    join public.sessions s on s.id = ev.session_id
+    cross join lateral public.relay_gender_requirement(ev.name) g
+    where ev.is_relay
+      and (ev.name ilike '%(male)%' or ev.name ilike '%(female)%')
+  ) req
+  join lateral (
+    select a.team_id, a.age_group,
+           array_agg(distinct a.id) filter (where a.gender = 'male') as male_athletes,
+           array_agg(distinct a.id) filter (where a.gender = 'female') as female_athletes,
+           count(distinct a.id) filter (where a.gender = 'male') as have_male,
+           count(distinct a.id) filter (where a.gender = 'female') as have_female
+    from public.athletes a
+    join public.entries en on en.athlete_id = a.id
+    join public.events ee on ee.id = en.event_id
+    join public.sessions ss on ss.id = ee.session_id
+    where ss.meet_volume_id = req.meet_volume_id
+    group by a.team_id, a.age_group
+    having count(distinct a.id) filter (where a.gender = 'male') >= req.male_count
+       and count(distinct a.id) filter (where a.gender = 'female') >= req.female_count
+    limit 1
+  ) e on true
+  limit 1;
+
+  if v_event_id is null then
+    raise exception 'No valid single-gender relay fixture found in seed-demo.sql data';
+  end if;
+
+  insert into public.relay_squads (event_id, team_id, age_group, squad_letter)
+  values (v_event_id, v_team_id, v_age_group, 'RLS')
+  returning id into v_squad;
+
+  foreach v_athlete in array v_athletes loop
+    insert into public.relay_legs (squad_id, leg_number, athlete_id)
+    values (v_squad, v_leg, v_athlete);
+    v_leg := v_leg + 1;
+  end loop;
+
+  create temporary table rls_relay_fixture as
+  select v_squad as squad_id, v_event_id as event_id, v_team_id as team_id;
+end $$;
+
+-- DB-45: quote_athlete_entries() no longer includes a relay line for a
+-- swimmer on the fixture squad — regression guard for the removal that made
+-- captain-billing possible. Without this, a relay leg could silently be
+-- billed to both the swimmer AND the captain.
+do $$
+declare
+  v_athlete uuid;
+  v_volume uuid;
+  v_relay_lines int;
+begin
+  select rl.athlete_id, s.meet_volume_id into v_athlete, v_volume
+  from public.relay_legs rl
+  join rls_relay_fixture f on f.squad_id = rl.squad_id
+  join public.events e on e.id = f.event_id
+  join public.sessions s on s.id = e.session_id
+  limit 1;
+
+  select count(*) into v_relay_lines
+  from public.quote_athlete_entries(v_athlete, v_volume) q
+  where q.kind = 'relay';
+
+  perform ssc_test.check(
+    'DB-45', 'quote_athlete_entries no longer bills a relay leg to the swimmer',
+    v_relay_lines = 0, format('relay_lines=%s', v_relay_lines));
+exception when others then
+  perform ssc_test.check('DB-45', 'relay leg not double-billed', false, sqlerrm);
+end $$;
+
+-- DB-46: a non-admin (including the squad's own captain) cannot confirm
+-- payment. The captain is who OWES for the squad, not who may mark it paid —
+-- see the comment on confirm_relay_squad_payment() in schema.sql.
+do $$
+declare
+  v_squad uuid;
+  v_team uuid;
+  v_captain uuid;
+  v_blocked boolean := false;
+begin
+  select squad_id, team_id into v_squad, v_team from rls_relay_fixture;
+  select captain_id into v_captain from public.teams where id = v_team;
+
+  if v_captain is null then
+    perform ssc_test.check('DB-46', 'captain cannot self-confirm relay payment',
+      true, 'skipped — fixture team has no captain');
+    return;
+  end if;
+
+  perform ssc_test.act_as(v_captain);
+  begin
+    perform public.confirm_relay_squad_payment(v_squad, v_captain);
+  exception when others then
+    v_blocked := true;
+  end;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-46', 'captain cannot self-confirm relay payment',
+    v_blocked, format('blocked=%s', v_blocked));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-46', 'captain self-confirm refused', false, sqlerrm);
+end $$;
+
+-- DB-47: an admin CAN confirm it — the positive half of DB-46, without which
+-- a policy refusing everyone would also pass DB-46.
+do $$
+declare
+  v_squad uuid;
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_amount int;
+  v_status text;
+begin
+  select squad_id into v_squad from rls_relay_fixture;
+
+  perform ssc_test.act_as(v_admin);
+  perform public.confirm_relay_squad_payment(v_squad, v_admin, 'DB-47 probe');
+  perform set_config('role', 'postgres', true);
+
+  select amount_egp into v_amount from public.relay_squad_payments where squad_id = v_squad;
+  select status::text into v_status from public.relay_squads where id = v_squad;
+
+  perform ssc_test.check(
+    'DB-47', 'an admin can confirm a complete relay squad''s payment',
+    v_status = 'confirmed' and v_amount = 4 * 300,
+    format('status=%s amount=%s', v_status, v_amount));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-47', 'admin confirms relay payment', false, sqlerrm);
+end $$;
+
+-- DB-48: paying the same squad twice is refused (unique(squad_id) on
+-- relay_squad_payments, surfaced as a clean application error).
+do $$
+declare
+  v_squad uuid;
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_refused boolean := false;
+begin
+  select squad_id into v_squad from rls_relay_fixture;
+
+  perform ssc_test.act_as(v_admin);
+  begin
+    perform public.confirm_relay_squad_payment(v_squad, v_admin);
+  exception when others then
+    v_refused := true;
+  end;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-48', 'a relay squad cannot be paid for twice',
+    v_refused, format('refused=%s', v_refused));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-48', 'double relay payment refused', false, sqlerrm);
+end $$;
+
+-- DB-49: relay_event_capacity() counts relay_squads, not entries — the
+-- counting function events.capacity_cap never had before this feature (a
+-- relay squad is never inserted into public.entries at all).
+do $$
+declare
+  v_event uuid;
+  v_paid int;
+begin
+  select event_id into v_event from rls_relay_fixture;
+  select paid_count into v_paid from public.relay_event_capacity(v_event);
+
+  perform ssc_test.check(
+    'DB-49', 'relay_event_capacity counts the paid fixture squad',
+    v_paid >= 1, format('paid_count=%s', v_paid));
+exception when others then
+  perform ssc_test.check('DB-49', 'relay_event_capacity counts squads', false, sqlerrm);
+end $$;
+
+-- DB-50: the hold sweep expires a lapsed UNPAID relay squad, releases its
+-- capacity, and notifies the CAPTAIN (not each of the four swimmers on it —
+-- the captain is who was billed and who has an action to take).
+do $$
+declare
+  v_squad uuid;
+  v_event uuid;
+  v_team uuid;
+  v_leg integer := 1;
+  v_athlete uuid;
+  v_captain uuid;
+  v_held_before int;
+  v_held_after int;
+  v_status text;
+  v_notified boolean;
+begin
+  select event_id, team_id into v_event, v_team from rls_relay_fixture;
+
+  -- A second squad in the SAME fixture event needs different athletes —
+  -- validate_relay_squad() refuses the same swimmer twice in one relay
+  -- event — so this reuses the shared discovery query for a distinct team.
+  declare
+    v_team2 uuid;
+    v_age_group public.age_group;
+    v_athletes uuid[];
+  begin
+    select e.team_id, e.age_group,
+           (e.male_athletes[1:g.male_count] || e.female_athletes[1:g.female_count])
+      into v_team2, v_age_group, v_athletes
+    from public.events ev
+    join public.sessions s on s.id = ev.session_id
+    cross join lateral public.relay_gender_requirement(ev.name) g
+    join lateral (
+      select a.team_id, a.age_group,
+             array_agg(distinct a.id) filter (where a.gender = 'male') as male_athletes,
+             array_agg(distinct a.id) filter (where a.gender = 'female') as female_athletes,
+             count(distinct a.id) filter (where a.gender = 'male') as have_male,
+             count(distinct a.id) filter (where a.gender = 'female') as have_female
+      from public.athletes a
+      join public.entries en on en.athlete_id = a.id
+      join public.events ee on ee.id = en.event_id
+      join public.sessions ss on ss.id = ee.session_id
+      where ss.meet_volume_id = s.meet_volume_id
+        and a.team_id <> v_team
+      group by a.team_id, a.age_group
+      having count(distinct a.id) filter (where a.gender = 'male') >= g.male_count
+         and count(distinct a.id) filter (where a.gender = 'female') >= g.female_count
+      limit 1
+    ) e on true
+    where ev.id = v_event
+    limit 1;
+
+    if v_team2 is null then
+      perform ssc_test.check('DB-50', 'relay hold sweep releases capacity and notifies captain',
+        true, 'skipped — no second team fixture available for this relay event');
+      return;
+    end if;
+
+    insert into public.relay_squads (event_id, team_id, age_group, squad_letter)
+    values (v_event, v_team2, v_age_group, 'RLS2')
+    returning id into v_squad;
+
+    foreach v_athlete in array v_athletes loop
+      insert into public.relay_legs (squad_id, leg_number, athlete_id)
+      values (v_squad, v_leg, v_athlete);
+      v_leg := v_leg + 1;
+    end loop;
+
+    select captain_id into v_captain from public.teams where id = v_team2;
+  end;
+
+  select held_count into v_held_before from public.relay_event_capacity(v_event);
+
+  update public.relay_squads set hold_expires_at = now() - interval '1 hour'
+  where id = v_squad;
+
+  perform public.sweep_expired_holds();
+
+  select status::text into v_status from public.relay_squads where id = v_squad;
+  select held_count into v_held_after from public.relay_event_capacity(v_event);
+
+  v_notified := v_captain is not null and exists (
+    select 1 from public.notifications
+    where user_id = v_captain and category = 'entry_payment'
+      and (metadata->>'squad_id')::uuid = v_squad
+  );
+
+  -- Clean up this second squad now — it is not part of the shared fixture
+  -- deleted at the end of the group.
+  delete from public.relay_squads where id = v_squad;
+
+  perform ssc_test.check(
+    'DB-50', 'relay hold sweep expires, releases capacity, notifies the captain',
+    v_status = 'hold_expired' and v_held_after < v_held_before
+      and (v_captain is null or v_notified),
+    format('status=%s held_before=%s held_after=%s notified=%s',
+      v_status, v_held_before, v_held_after, v_notified));
+exception when others then
+  perform ssc_test.check('DB-50', 'relay hold sweep', false, sqlerrm);
+end $$;
+
+-- Cleanup: cascades to relay_legs and relay_squad_payments.
+delete from public.relay_squads where id = (select squad_id from rls_relay_fixture);
+
+-- =============================================================================
+-- DB-51..DB-53 — team_announcements
+-- =============================================================================
+-- Read is athletes.team_id, NOT team_memberships — team_memberships is the
+-- one-time join-REQUEST record, not the live roster (see the comment on this
+-- table's RLS policy in schema.sql). Riptide's captain and a real teammate
+-- assigned directly via athletes.team_id (never having gone through a join
+-- request) are the fixture, specifically because that is the common case
+-- team_memberships-based RLS would have missed.
+
+-- DB-51: a team member (not the author, not the captain) is notified when the
+-- captain posts, and CAN read the announcement; the captain (author) is not
+-- notified of their own post.
+do $$
+declare
+  v_captain uuid := ssc_test.user_id('captain.riptide@ssc-demo.test');
+  v_team uuid := ssc_test.team_id('Riptide Swim Club');
+  v_member uuid;
+  v_announcement uuid;
+  v_member_notified boolean;
+  v_author_notified boolean;
+  v_member_can_read boolean;
+begin
+  select a.user_id into v_member
+  from public.athletes a
+  where a.team_id = v_team and a.user_id <> v_captain
+  limit 1;
+
+  if v_member is null then
+    perform ssc_test.check('DB-51', 'member notified and can read a posted announcement',
+      true, 'skipped — Riptide has no second athlete to use as a member fixture');
+    return;
+  end if;
+
+  perform ssc_test.act_as(v_captain);
+  insert into public.team_announcements (team_id, author_id, title, body)
+  values (v_team, v_captain, 'DB-51 probe', 'probe body')
+  returning id into v_announcement;
+  perform set_config('role', 'postgres', true);
+
+  v_member_notified := exists (
+    select 1 from public.notifications
+    where user_id = v_member and category = 'announcement'
+      and (metadata->>'announcement_id')::uuid = v_announcement);
+  v_author_notified := exists (
+    select 1 from public.notifications
+    where user_id = v_captain and category = 'announcement'
+      and (metadata->>'announcement_id')::uuid = v_announcement);
+
+  perform ssc_test.act_as(v_member);
+  select exists (select 1 from public.team_announcements where id = v_announcement)
+    into v_member_can_read;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-51', 'member notified and can read; author is not notified of their own post',
+    v_member_notified and not v_author_notified and v_member_can_read,
+    format('member_notified=%s author_notified=%s member_can_read=%s',
+      v_member_notified, v_author_notified, v_member_can_read));
+
+  delete from public.team_announcements where id = v_announcement;
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-51', 'announcement fan-out and read access', false, sqlerrm);
+end $$;
+
+-- DB-52: someone NOT on the team cannot read Riptide's announcements, and
+-- cannot post one either — read and write are both team-scoped, not public.
+do $$
+declare
+  v_captain uuid := ssc_test.user_id('captain.riptide@ssc-demo.test');
+  v_team uuid := ssc_test.team_id('Riptide Swim Club');
+  v_outsider uuid;
+  v_announcement uuid;
+  v_outsider_reads int;
+  v_outsider_writes boolean;
+begin
+  select u.id into v_outsider
+  from public.users u
+  where u.role = 'athlete'
+    and not exists (
+      select 1 from public.athletes a where a.user_id = u.id and a.team_id = v_team
+    )
+    and u.id <> v_captain
+  limit 1;
+
+  perform ssc_test.act_as(v_captain);
+  insert into public.team_announcements (team_id, author_id, title, body)
+  values (v_team, v_captain, 'DB-52 probe', 'probe body')
+  returning id into v_announcement;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.act_as(v_outsider);
+  select count(*) into v_outsider_reads
+  from public.team_announcements where id = v_announcement;
+
+  begin
+    insert into public.team_announcements (team_id, author_id, title, body)
+    values (v_team, v_outsider, 'forged', 'forged');
+    v_outsider_writes := true;
+  exception when others then
+    v_outsider_writes := false;
+  end;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-52', 'a non-member cannot read or post a team''s announcements',
+    v_outsider_reads = 0 and not v_outsider_writes
+      and not exists (select 1 from public.team_announcements where title = 'forged'),
+    format('reads=%s writes=%s', v_outsider_reads, v_outsider_writes));
+
+  delete from public.team_announcements where id = v_announcement;
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-52', 'non-member announcement access refused', false, sqlerrm);
+end $$;
+
+-- DB-53: editing an announcement (fixing a typo, toggling pinned) does not
+-- re-notify the team — only the original post does. A captain fixing a typo
+-- must not spam the whole roster a second time.
+do $$
+declare
+  v_captain uuid := ssc_test.user_id('captain.riptide@ssc-demo.test');
+  v_team uuid := ssc_test.team_id('Riptide Swim Club');
+  v_announcement uuid;
+  v_before int;
+  v_after int;
+begin
+  perform ssc_test.act_as(v_captain);
+  insert into public.team_announcements (team_id, author_id, title, body)
+  values (v_team, v_captain, 'DB-53 probe', 'probe body')
+  returning id into v_announcement;
+
+  select count(*) into v_before from public.notifications where category = 'announcement';
+
+  update public.team_announcements set pinned = true, title = 'DB-53 probe (edited)'
+  where id = v_announcement;
+
+  select count(*) into v_after from public.notifications where category = 'announcement';
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check(
+    'DB-53', 'editing an announcement does not re-notify the team',
+    v_before = v_after, format('before=%s after=%s', v_before, v_after));
+
+  delete from public.team_announcements where id = v_announcement;
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-53', 'edit does not re-notify', false, sqlerrm);
+end $$;
+
+-- =============================================================================
 -- Report
 -- =============================================================================
 \echo ''

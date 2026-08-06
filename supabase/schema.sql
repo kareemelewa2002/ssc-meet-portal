@@ -295,6 +295,21 @@ begin
   end if;
 end $$;
 
+-- Deliberately a DISTINCT category from 'team', not folded into it. 'team'
+-- already covers join-request notices (captain-facing, actionable); an
+-- announcement is captain-authored and athlete-facing, informational. A
+-- swimmer who wants fewer motivational-message emails should not lose
+-- visibility into their own join-request outcomes as a side effect, and vice
+-- versa for a captain who wants fewer team-management emails but still wants
+-- to read their own team's announcements.
+--
+-- Bare statement, not inside a DO block: ALTER TYPE ... ADD VALUE cannot run
+-- in the same transaction that later uses the new value, and a DO block is a
+-- transaction. IF NOT EXISTS makes the bare form idempotent on its own,
+-- which is what re-running this file needs — same pattern as entry_status's
+-- 'hold_expired' above.
+alter type public.notification_category add value if not exists 'announcement';
+
 do $$
 begin
   if not exists (select 1 from pg_type where typname = 'email_delivery_status') then
@@ -1697,8 +1712,24 @@ $$;
 --
 -- Driven by pg_cron every 15 minutes (scheduled at the end of this file), and
 -- reachable at /api/cron/process-expired-holds for a host-level scheduler.
+--
+-- Explicit DROP before CREATE OR REPLACE: this function's OUT parameters
+-- changed shape (relay_holds_expired was added), and Postgres refuses to
+-- CREATE OR REPLACE a function whose return row type differs from what is
+-- already there — "cannot change return type of existing function". A truly
+-- fresh database never hits this (nothing to conflict with), which is
+-- exactly why it went unnoticed against the throwaway scratch clusters this
+-- schema is normally verified against; it surfaces the moment schema.sql is
+-- re-applied to a database that already had the three-column version.
+drop function if exists public.sweep_expired_holds();
+
 create or replace function public.sweep_expired_holds()
-returns table (holds_expired integer, offers_made integer, offers_lapsed integer)
+returns table (
+  holds_expired integer,
+  offers_made integer,
+  offers_lapsed integer,
+  relay_holds_expired integer
+)
 language plpgsql
 security definer
 set search_path = public
@@ -1707,6 +1738,7 @@ declare
   v_expired integer := 0;
   v_lapsed integer := 0;
   v_offers integer := 0;
+  v_relay_expired integer := 0;
   rec record;
 begin
   -- 1. Lapsed holds. The entry survives in 'hold_expired' — deleting it would
@@ -1734,6 +1766,42 @@ begin
       '/events/' || rec.meet_volume_id || '/register',
       jsonb_build_object('event_id', rec.event_id, 'entry_id', rec.id)
     );
+  end loop;
+
+  -- 1b. Lapsed relay squad holds. Notifies the CAPTAIN, not each of the four
+  -- swimmers on the squad — the captain is who was billed and who is
+  -- expected to act, and four separate notices for one squad would just be
+  -- noise to the swimmers who have no payment action to take at all.
+  for rec in
+    select rs.id, rs.event_id, t.captain_id, e.name as event_name,
+           s.meet_volume_id, t.name as team_name
+    from public.relay_squads rs
+    join public.teams t on t.id = rs.team_id
+    join public.events e on e.id = rs.event_id
+    join public.sessions s on s.id = e.session_id
+    where rs.status = 'pending_payment'
+      and rs.hold_expires_at is not null
+      and rs.hold_expires_at <= now()
+  loop
+    update public.relay_squads set status = 'hold_expired' where id = rec.id;
+    v_relay_expired := v_relay_expired + 1;
+
+    -- A team with no captain (never happens in practice — a squad cannot be
+    -- created without one, per captain_manages_relay_squads — but defensive
+    -- rather than assumed) has nobody to notify; the hold still releases.
+    if rec.captain_id is not null then
+      perform public.raise_notification(
+        rec.captain_id,
+        'entry_payment',
+        rec.team_name || '''s relay squad in ' || rec.event_name || ' was released',
+        'Payment was not recorded in time, so this relay squad''s slot in '
+          || rec.event_name || ' has been released. The legs are still assigned — '
+          || 'reclaim the slot from the Captain Dashboard if there is still room, '
+          || 'then pay at the desk.',
+        '/captain',
+        jsonb_build_object('event_id', rec.event_id, 'squad_id', rec.id)
+      );
+    end if;
   end loop;
 
   -- 2. Waitlist offers nobody claimed, so the queue can move on.
@@ -1766,14 +1834,15 @@ begin
     v_offers := v_offers + public.offer_waitlist_slots(rec.event_id);
   end loop;
 
-  return query select v_expired, v_offers, v_lapsed;
+  return query select v_expired, v_offers, v_lapsed, v_relay_expired;
 end;
 $$;
 
 comment on function public.sweep_expired_holds() is
-  'Scheduled sweep: expires lapsed holds, lapses unclaimed waitlist offers, '
-  'and offers freed slots to the queue — with the notifications each of those '
-  'implies. Capacity does not depend on it running; only timeliness does.';
+  'Scheduled sweep: expires lapsed individual AND relay-squad holds, lapses '
+  'unclaimed waitlist offers, and offers freed slots to the queue — with the '
+  'notifications each of those implies. Capacity does not depend on it '
+  'running; only timeliness does.';
 
 -- ---------------------------------------------------------------------------
 -- Team membership notifications.
@@ -1858,6 +1927,90 @@ create or replace trigger notify_team_membership_change_trigger
   after insert or update or delete on public.team_memberships
   for each row execute function public.notify_team_membership_change();
 
+-- ---------------------------------------------------------------------------
+-- team_announcements — captain-authored, team-wide messages.
+-- ---------------------------------------------------------------------------
+-- Distinct from public.notifications: a notification is addressed to one
+-- person (see its own comment — "there is no operational reason to read
+-- someone else's feed"). An announcement has no single addressee; it belongs
+-- to the team. This table is the message itself, of which every member's own
+-- public.notifications row (fired by the trigger below) is a per-recipient
+-- pointer back to it.
+create table if not exists public.team_announcements (
+  id uuid primary key default gen_random_uuid(),
+  team_id uuid not null references public.teams (id) on delete cascade,
+  author_id uuid references public.users (id) on delete set null,
+  title text not null,
+  body text not null,
+  -- Pinned announcements sort first. A team's motivational message about
+  -- Tuesday's practice and a genuinely important one ("meet moved to
+  -- Saturday") are not equally worth surfacing forever — pinning is the
+  -- captain's own editorial call, not automatic.
+  pinned boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists team_announcements_team_idx
+  on public.team_announcements (team_id, pinned desc, created_at desc);
+
+-- The updated_at trigger for this table is registered later, alongside the
+-- others, below public.set_updated_at() itself — same reason as
+-- meet_settings and every other table that does this. RLS is enabled and
+-- policies are added in section 6 below, alongside teams/team_memberships —
+-- this table's RLS depends on public.is_admin() and
+-- public.is_team_captain_of(), neither of which exists yet at this point in
+-- the file.
+
+-- ---------------------------------------------------------------------------
+-- public.notify_team_announcement — fans a posted announcement out to
+-- every accepted member's own notification feed.
+-- ---------------------------------------------------------------------------
+-- Fires on INSERT only. An edit (fixing a typo) or a pin toggle re-notifying
+-- the whole team would be exactly the noise a "read the room" captain tool
+-- should avoid — the announcement itself is still there to read; nobody
+-- needs telling twice. The author is excluded from their own fan-out: a
+-- captain posting to their own team does not need to be told they did.
+--
+-- Fans out to athletes.team_id, not team_memberships — see the comment on
+-- this table's read policy for why: team_memberships is a one-time
+-- join-request record, not the live roster, and most seeded/assigned
+-- athletes have no row in it at all.
+create or replace function public.notify_team_announcement()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_team_name text;
+  v_member record;
+begin
+  select name into v_team_name from public.teams where id = new.team_id;
+
+  for v_member in
+    select a.user_id
+    from public.athletes a
+    where a.team_id = new.team_id
+      and a.user_id is distinct from new.author_id
+  loop
+    perform public.raise_notification(
+      v_member.user_id,
+      'announcement',
+      coalesce(v_team_name, 'Your team') || ': ' || new.title,
+      new.body,
+      '/teams',
+      jsonb_build_object('team_id', new.team_id, 'announcement_id', new.id)
+    );
+  end loop;
+
+  return new;
+end;
+$$;
+
+create or replace trigger notify_team_announcement_trigger
+  after insert on public.team_announcements
+  for each row execute function public.notify_team_announcement();
 
 -- ---------------------------------------------------------------------------
 -- heats & heat_lanes — 6 lanes per heat.
@@ -2923,6 +3076,10 @@ create or replace trigger notification_preferences_set_updated_at
   before update on public.notification_preferences
   for each row execute function public.set_updated_at();
 
+create or replace trigger team_announcements_set_updated_at
+  before update on public.team_announcements
+  for each row execute function public.set_updated_at();
+
 -- Only an admin may toggle team approval.
 create or replace function public.enforce_team_approval_change()
 returns trigger
@@ -3482,6 +3639,43 @@ create policy "captain_manage_membership_status" on public.team_memberships
 drop policy if exists "captain_or_requester_delete_membership" on public.team_memberships;
 create policy "captain_or_requester_delete_membership" on public.team_memberships
   for delete using (user_id = auth.uid() or public.is_team_captain_of(team_id));
+
+-- ---------------------------------------------------------------------------
+-- team_announcements
+-- ---------------------------------------------------------------------------
+alter table public.team_announcements enable row level security;
+
+-- Read: any current member of the team, the team's captain, or an admin —
+-- an announcement is for the team, not the public (unlike, say, a heat
+-- sheet). Write: captain-of-team or admin only, matching every other
+-- captain-only write in this schema (relay squads, relay legs).
+--
+-- "Current member" is athletes.team_id, NOT team_memberships.status =
+-- 'accepted'. team_memberships is the join-REQUEST workflow only — accepting
+-- one is a one-time event that syncs athletes.team_id
+-- (sync_athlete_team_on_membership_accept()) and the membership row then
+-- becomes history, not a live record. An athlete seeded or assigned to a team
+-- directly (never having gone through a join request at all — true for most
+-- of the seeded roster) has NO team_memberships row to match at all. Checking
+-- that table here would have silently hidden every announcement from anyone
+-- who did not personally request to join.
+drop policy if exists "team_view_announcements" on public.team_announcements;
+create policy "team_view_announcements" on public.team_announcements
+  for select using (
+    public.is_admin()
+    or public.is_team_captain_of(team_id)
+    or exists (
+      select 1 from public.athletes a
+      where a.team_id = team_announcements.team_id
+        and a.user_id = auth.uid()
+    )
+  );
+
+drop policy if exists "captain_manages_announcements" on public.team_announcements;
+create policy "captain_manages_announcements" on public.team_announcements
+  for all
+  using (public.is_admin() or public.is_team_captain_of(team_id))
+  with check (public.is_admin() or public.is_team_captain_of(team_id));
 
 -- ---------------------------------------------------------------------------
 -- athletes
@@ -4267,6 +4461,307 @@ create index if not exists relay_squads_event_idx on public.relay_squads (event_
 create index if not exists relay_legs_athlete_idx on public.relay_legs (athlete_id);
 
 -- ---------------------------------------------------------------------------
+-- Relay squad holds, capacity and payment — captain-billed, per squad.
+-- ---------------------------------------------------------------------------
+-- A relay squad is ONE payable unit, owed by the team captain, never split
+-- across the four swimmers on it. This was not always true — an earlier
+-- version of quote_athlete_entries() charged each swimmer their own leg fee
+-- individually — but "some relays get paid, some don't, per squad, and the
+-- captain is the one who decides" only makes sense if payment is a property
+-- of the squad, not of each swimmer's own entry. See quote_relay_squad_egp()
+-- and confirm_relay_squad_payment() below.
+--
+-- Same hold mechanism as an individual entry, deliberately: a squad occupies
+-- a relay-event capacity slot the moment it is created (even before it has 4
+-- legs — see relay_event_capacity() below), and if the captain does not both
+-- complete AND pay for it within the hold window, the slot releases. Without
+-- this, a team could create relay squads indefinitely and never pay, locking
+-- other teams out of a capacity-limited relay event with no consequence.
+alter table public.relay_squads
+  add column if not exists hold_expires_at timestamptz;
+
+comment on column public.relay_squads.hold_expires_at is
+  'When an unpaid squad stops holding its relay-event capacity slot. Stamped '
+  'on insert from meet_settings.hold_window_hours, same as entries. Cleared '
+  'once the squad is paid (confirm_relay_squad_payment()).';
+
+create index if not exists relay_squads_hold_expires_at_idx
+  on public.relay_squads (hold_expires_at)
+  where hold_expires_at is not null;
+
+-- Mirrors public.set_entry_hold_expiry() exactly, keyed through
+-- event -> session -> volume -> meet_settings the same way.
+create or replace function public.set_relay_squad_hold_expiry()
+returns trigger
+language plpgsql
+as $$
+declare
+  v_hours integer;
+begin
+  if new.status = 'pending_payment' and new.hold_expires_at is null then
+    select ms.hold_window_hours into v_hours
+    from public.meet_settings ms
+    join public.sessions s on s.meet_volume_id = ms.meet_volume_id
+    join public.events e on e.session_id = s.id
+    where e.id = new.event_id;
+
+    new.hold_expires_at := now() + make_interval(hours => coalesce(v_hours, 48));
+  elsif new.status = 'confirmed' then
+    new.hold_expires_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace trigger set_relay_squad_hold_expiry_trigger
+  before insert or update of status on public.relay_squads
+  for each row execute function public.set_relay_squad_hold_expiry();
+
+-- ---------------------------------------------------------------------------
+-- public.relay_event_capacity — event_capacity(), but for relay squads.
+-- ---------------------------------------------------------------------------
+-- public.event_capacity() counts public.entries rows. A relay squad is never
+-- inserted into entries at all — it lives in relay_squads/relay_legs — so
+-- events.capacity_cap has silently never applied to a relay event, despite
+-- being a column on every event row including relay ones. This is the
+-- counting function that was missing, not a new column: it reuses
+-- events.capacity_cap unchanged, just counts the right table.
+--
+-- A squad counts against capacity from the moment it is CREATED, complete or
+-- not — an event capped at 8 relay squads has to mean 8 squads claimed, not
+-- 8 squads paid, or a team could sit on an unlimited number of empty squad
+-- slots with no consequence until the hold sweep eventually catches up.
+create or replace function public.relay_event_capacity(p_event_id uuid)
+returns table (
+  capacity_cap integer,
+  paid_count integer,
+  held_count integer,
+  free_count integer,
+  availability public.event_availability
+)
+language sql
+stable
+as $$
+  with cap as (
+    select coalesce(e.capacity_cap, ms.default_event_capacity, 64) as cap,
+           coalesce(ms.selling_out_threshold_percent, 20) as threshold
+    from public.events e
+    join public.sessions s on s.id = e.session_id
+    left join public.meet_settings ms on ms.meet_volume_id = s.meet_volume_id
+    where e.id = p_event_id
+  ),
+  counts as (
+    select
+      count(*) filter (where rs.status = 'confirmed')::integer as paid,
+      count(*) filter (
+        where rs.status = 'pending_payment'
+          and (rs.hold_expires_at is null or rs.hold_expires_at > now())
+      )::integer as held
+    from public.relay_squads rs
+    where rs.event_id = p_event_id
+  )
+  select
+    cap.cap,
+    counts.paid,
+    counts.held,
+    greatest(cap.cap - counts.paid - counts.held, 0)::integer as free_count,
+    case
+      when cap.cap - counts.paid - counts.held <= 0 then 'full'
+      when (cap.cap - counts.paid - counts.held) * 100 <= cap.cap * cap.threshold
+        then 'selling_out_soon'
+      else 'available'
+    end::public.event_availability
+  from cap, counts;
+$$;
+
+comment on function public.relay_event_capacity(uuid) is
+  'event_capacity() for relay squads: identical shape, counts relay_squads '
+  'against events.capacity_cap instead of entries. The column was already '
+  'there and unused for relay events; this is the missing counting function.';
+
+-- ---------------------------------------------------------------------------
+-- relay_squad_payments — who paid for a squad, and how much.
+-- ---------------------------------------------------------------------------
+-- Not public.entry_payments: that table is keyed to athlete_id, one payer per
+-- individual entry. A relay squad has no single "owner" athlete — it is owed
+-- by whoever captains the team — so this is its own table with its own key.
+create table if not exists public.relay_squad_payments (
+  id uuid primary key default gen_random_uuid(),
+  squad_id uuid not null references public.relay_squads (id) on delete cascade,
+  -- Snapshotted at payment time: legs x meet_settings.relay_swimmer_price_egp
+  -- as it stood the moment payment was collected. relay_swimmer_price_egp is
+  -- flat, not tiered (see TECH_STACK_DECISIONS.md §3), so unlike an
+  -- individual entry this amount has no "which tier" ambiguity to record.
+  amount_egp integer not null check (amount_egp >= 0),
+  method text not null default 'cash',
+  collected_by uuid references public.users (id) on delete set null,
+  collected_at timestamptz not null default now(),
+  note text,
+  -- One payment per squad. A squad that needs re-billing (a leg swapped after
+  -- payment, say) is an admin correction, not a second payment row.
+  unique (squad_id)
+);
+
+create index if not exists relay_squad_payments_squad_idx
+  on public.relay_squad_payments (squad_id);
+
+comment on table public.relay_squad_payments is
+  'One row per PAID relay squad. The captain is billed for the whole squad, '
+  'not each swimmer individually — see the comment on relay_squads above.';
+
+-- ---------------------------------------------------------------------------
+-- public.quote_relay_squad_egp — what a squad costs, and whether it can be
+-- paid for yet.
+-- ---------------------------------------------------------------------------
+-- `payable` is genuinely defensive rather than a check this function expects
+-- to ever see fail: validate_relay_squad() (a deferred constraint trigger on
+-- relay_legs, predating this feature) already refuses to let ANY transaction
+-- commit while a squad has fewer than 4 legs — a 3/4 squad cannot exist as a
+-- persisted row at all, only as unsubmitted state in a captain's browser. So
+-- `legs_filled` is always 4 for any row this function is ever actually asked
+-- about. The field is kept anyway: if that constraint is ever relaxed later
+-- to allow real draft squads, this function and confirm_relay_squad_payment()
+-- already do the right thing with no further change, rather than silently
+-- quoting or accepting payment for an incomplete squad.
+create or replace function public.quote_relay_squad_egp(p_squad_id uuid)
+returns table (legs_filled integer, amount_egp integer, payable boolean)
+language sql
+stable
+as $$
+  select
+    count(rl.id)::integer as legs_filled,
+    (count(rl.id) * coalesce(ms.relay_swimmer_price_egp, 300))::integer as amount_egp,
+    count(rl.id) = 4 as payable
+  from public.relay_squads rs
+  left join public.relay_legs rl on rl.squad_id = rs.id
+  join public.events e on e.id = rs.event_id
+  join public.sessions s on s.id = e.session_id
+  left join public.meet_settings ms on ms.meet_volume_id = s.meet_volume_id
+  where rs.id = p_squad_id
+  group by ms.relay_swimmer_price_egp;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- public.confirm_relay_squad_payment — the cash desk's write path.
+-- ---------------------------------------------------------------------------
+-- ADMIN-ONLY, deliberately — the captain is who OWES for the squad, not who
+-- may mark it paid. Every other payment in this app works the same way: cash
+-- changes hands physically, an admin confirms it in the UI (see
+-- confirmCashPayment() for individual entries). A captain self-confirming
+-- their own team's payment would mean the person with the money and the
+-- person verifying the money arrived are the same person — letting a
+-- swimmer confirm their own entry fee has never been allowed either.
+--
+-- This also matches enforce_relay_status_change_trigger, which already
+-- refuses to move relay_squads.status to 'confirmed' for anyone but an
+-- admin — that trigger predates this function and was not written for it,
+-- but it enforces the same rule this function would otherwise have needed to
+-- add: this is not a coincidence, cash-collected-in-person payment
+-- confirmation has exactly one actor throughout this schema.
+--
+-- Refuses anything short of 4/4 legs, refuses a double-payment, and writes
+-- the payment record BEFORE flipping the squad to 'confirmed' — same
+-- ordering as the individual cash desk, so a failure between the two steps
+-- leaves the squad unpaid and re-collectable rather than confirmed with no
+-- receipt.
+create or replace function public.confirm_relay_squad_payment(
+  p_squad_id uuid,
+  p_collected_by uuid,
+  p_note text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_quote record;
+begin
+  if not public.is_admin() then
+    raise exception 'Only an admin may confirm a relay squad payment';
+  end if;
+
+  select * into v_quote from public.quote_relay_squad_egp(p_squad_id);
+  if v_quote is null or not v_quote.payable then
+    raise exception 'Relay squad is not complete (needs 4/4 legs assigned before it can be paid)';
+  end if;
+
+  if exists (select 1 from public.relay_squad_payments where squad_id = p_squad_id) then
+    raise exception 'This relay squad has already been paid';
+  end if;
+
+  insert into public.relay_squad_payments (squad_id, amount_egp, collected_by, note)
+  values (p_squad_id, v_quote.amount_egp, p_collected_by, p_note);
+
+  update public.relay_squads set status = 'confirmed' where id = p_squad_id;
+
+  return p_squad_id;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- public.reclaim_relay_squad_hold — [Reclaim] on an expired relay hold.
+-- ---------------------------------------------------------------------------
+-- Mirrors public.reclaim_entry_slot(), captain-initiated rather than
+-- swimmer-initiated: the captain is who is billed, so the captain is who
+-- reclaims. Re-checks relay_event_capacity() INSIDE this statement — checking
+-- in the browser and then writing would let two teams both see the last slot
+-- free and both reclaim it.
+create or replace function public.reclaim_relay_squad_hold(p_squad_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_squad record;
+  v_free integer;
+  v_hours integer;
+begin
+  select rs.id, rs.event_id, rs.team_id, rs.status
+    into v_squad
+  from public.relay_squads rs
+  where rs.id = p_squad_id;
+
+  if not found then
+    raise exception 'Relay squad not found';
+  end if;
+
+  if not (public.is_admin() or public.is_team_captain_of(v_squad.team_id)) then
+    raise exception 'Not permitted to reclaim this relay squad';
+  end if;
+
+  if v_squad.status = 'confirmed' then
+    return true;
+  end if;
+
+  select ec.free_count into v_free from public.relay_event_capacity(v_squad.event_id) ec;
+  if coalesce(v_free, 0) <= 0 then
+    return false;
+  end if;
+
+  select ms.hold_window_hours into v_hours
+  from public.meet_settings ms
+  join public.sessions s on s.meet_volume_id = ms.meet_volume_id
+  join public.events e on e.session_id = s.id
+  where e.id = v_squad.event_id;
+
+  update public.relay_squads
+  set status = 'pending_payment',
+      hold_expires_at = now() + make_interval(hours => coalesce(v_hours, 48))
+  where id = p_squad_id;
+
+  return true;
+end;
+$$;
+
+comment on function public.reclaim_relay_squad_hold(uuid) is
+  'Re-acquires a hold on an expired relay squad if the event still has room. '
+  'Captain-initiated (reclaim_entry_slot() is the individual-entry, '
+  'swimmer-initiated equivalent). False when the relay event is full.';
+
+-- ---------------------------------------------------------------------------
 -- public.quote_athlete_entries — the price, and why it is the price.
 -- ---------------------------------------------------------------------------
 -- Returns LINE ITEMS, not a total. Every screen that asks an athlete for money
@@ -4277,7 +4772,8 @@ create index if not exists relay_legs_athlete_idx on public.relay_legs (athlete_
 --   total = package(n races, tier)
 --         + one additional-race price for each race beyond the 4th
 --         + each entered race's own surcharge
---         + one relay fee per relay leg
+--
+-- Relay squads are priced and paid separately — see quote_relay_squad_egp().
 --
 -- Race count is taken across the WHOLE volume, not per session: three races
 -- spread over two sessions is one three-race package.
@@ -4333,15 +4829,6 @@ as $$
       on pp.meet_volume_id = p_meet_volume_id
      and pp.tier = tier.t
      and pp.race_count = 0
-  ),
-  relay_legs as (
-    select rl.id as leg_id, e.name as event_name
-    from public.relay_legs rl
-    join public.relay_squads rs on rs.id = rl.squad_id
-    join public.events e on e.id = rs.event_id
-    join public.sessions s on s.id = e.session_id
-    where s.meet_volume_id = p_meet_volume_id
-      and rl.athlete_id = p_athlete_id
   )
   -- The package line.
   select
@@ -4377,27 +4864,21 @@ as $$
     i.surcharge,
     (select t from tier)
   from individual i
-  where i.surcharge > 0
-
-  union all
-
-  -- Relay legs: charged per swimmer, on top, and never counted toward the
-  -- individual package.
-  select
-    'relay'::text,
-    'Relay leg — ' || rl.event_name,
-    null::uuid,
-    coalesce((select ms.relay_swimmer_price_egp from public.meet_settings ms
-               where ms.meet_volume_id = p_meet_volume_id), 300),
-    (select t from tier)
-  from relay_legs rl;
+  where i.surcharge > 0;
 $$;
 
 comment on function public.quote_athlete_entries(uuid, uuid, public.entry_status[]) is
   'Line items behind what an athlete owes for a volume: the package, any '
-  'races past the fourth, per-race surcharges and relay legs, all at the tier '
-  'in force now. Returns the derivation, not just a total, because every '
-  'screen that asks for money must show why.';
+  'races past the fourth, and per-race surcharges, all at the tier in force '
+  'now. Returns the derivation, not just a total, because every screen that '
+  'asks for money must show why.'
+  ' '
+  'Relay legs are DELIBERATELY not here. A relay squad is one payable unit,'
+  ' owed by the team captain, not split across the swimmers on it — see'
+  ' quote_relay_squad_egp() and public.relay_squad_payments. This function'
+  ' used to include a per-leg charge on each swimmer''s own quote; that was'
+  ' removed, not layered under, when squad-level captain billing replaced'
+  ' it, so a relay never gets charged to both the swimmer and the captain.';
 
 alter table public.relay_squads enable row level security;
 alter table public.relay_legs enable row level security;
@@ -4589,6 +5070,34 @@ create policy "captain_manages_relay_legs" on public.relay_legs
       where rs.id = squad_id and public.is_team_captain_of(rs.team_id)
     )
   );
+
+alter table public.relay_squad_payments enable row level security;
+
+-- Read: any member of the squad's team, or the team's captain, or an admin —
+-- "has our relay been paid for" is legitimate transparency for the whole
+-- squad, not just the captain who paid. Write: admin only, matching
+-- entry_payments — see confirm_relay_squad_payment() above for why a captain
+-- cannot self-confirm.
+drop policy if exists "team_or_admin_view_relay_squad_payments" on public.relay_squad_payments;
+create policy "team_or_admin_view_relay_squad_payments" on public.relay_squad_payments
+  for select using (
+    public.is_admin()
+    or exists (
+      select 1 from public.relay_squads rs
+      join public.team_memberships tm on tm.team_id = rs.team_id
+      where rs.id = relay_squad_payments.squad_id
+        and (tm.user_id = auth.uid() and tm.status = 'accepted')
+    )
+    or exists (
+      select 1 from public.relay_squads rs
+      where rs.id = relay_squad_payments.squad_id
+        and public.is_team_captain_of(rs.team_id)
+    )
+  );
+
+drop policy if exists "admins_manage_relay_squad_payments" on public.relay_squad_payments;
+create policy "admins_manage_relay_squad_payments" on public.relay_squad_payments
+  for all using (public.is_admin()) with check (public.is_admin());
 
 -- Only an admin may confirm a relay squad's payment, mirroring
 -- enforce_entry_status_change for individual entries.
