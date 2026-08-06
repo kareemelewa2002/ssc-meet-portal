@@ -1,5 +1,29 @@
 import path from "node:path";
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+
+/**
+ * Ticks the two required acknowledgement boxes.
+ *
+ * force + an explicit toBeChecked() assertion, rather than a plain check().
+ * The signup form re-renders as the date of birth and gender are entered, and
+ * an empty `alert` element mounts beside it — so Playwright's stability
+ * heuristic could sit for the full 10s and time out on a checkbox it had
+ * ALREADY ticked. The failure snapshot showed the box [checked] while check()
+ * reported a timeout.
+ *
+ * Skipping the heuristic is safe here precisely because the outcome is
+ * asserted straight after: if the click did not land, toBeChecked() fails.
+ * Nothing is being hidden, only measured differently.
+ */
+async function acceptTerms(page: Page) {
+  const privacy = page.locator("#acceptPrivacy");
+  const safety = page.locator("#acceptSafety");
+  await privacy.check({ force: true });
+  await safety.check({ force: true });
+  await expect(privacy).toBeChecked();
+  await expect(safety).toBeChecked();
+}
+
 
 const AVATAR_FIXTURE = path.join(__dirname, "fixtures", "test-avatar.png");
 
@@ -26,8 +50,7 @@ test.describe("Registration & validation", () => {
     await expect(page.locator("#parentEmail")).toBeVisible();
 
     // Privacy + safety acknowledgement are required to enable the button.
-    await page.locator("#acceptPrivacy").check();
-    await page.locator("#acceptSafety").check();
+    await acceptTerms(page);
     await page.getByRole("button", { name: "Create account" }).click();
     await expect(
       page.getByText("Swimmers under 15 must provide a parent or guardian email before signing up."),
@@ -91,8 +114,7 @@ test.describe("Registration & validation", () => {
     await page.getByRole("button", { name: "male", exact: true }).click();
 
     // Privacy + safety acknowledgement are required to enable the button.
-    await page.locator("#acceptPrivacy").check();
-    await page.locator("#acceptSafety").check();
+    await acceptTerms(page);
     await page.getByRole("button", { name: "Create account" }).click();
 
     // GoTrue throttles signups two different ways and only one of them says
@@ -130,8 +152,7 @@ test.describe("Registration & validation", () => {
     await page.locator("#parentEmail").fill(`e2e.parent.${Date.now()}@gmail.com`);
 
     // Privacy + safety acknowledgement are required to enable the button.
-    await page.locator("#acceptPrivacy").check();
-    await page.locator("#acceptSafety").check();
+    await acceptTerms(page);
     await page.getByRole("button", { name: "Create account" }).click();
 
     // GoTrue throttles signups two different ways and only one of them says
