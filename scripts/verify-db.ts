@@ -148,6 +148,13 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "public", table: "teams", trigger: "teams_set_updated_at" },
   { schema: "public", table: "users", trigger: "enforce_role_change_trigger" },
   { schema: "public", table: "users", trigger: "users_set_updated_at" },
+  // Control Unit: pricing, per-race settings, capacity holds and notifications.
+  { schema: "public", table: "entries", trigger: "set_entry_hold_expiry_trigger" },
+  { schema: "public", table: "events", trigger: "set_event_defaults_from_template_trigger" },
+  { schema: "public", table: "notification_preferences", trigger: "notification_preferences_set_updated_at" },
+  { schema: "public", table: "pricing_packages", trigger: "pricing_packages_set_updated_at" },
+  { schema: "public", table: "race_shape_templates", trigger: "race_shape_templates_set_updated_at" },
+  { schema: "public", table: "team_memberships", trigger: "notify_team_membership_change_trigger" },
 ];
 
 /** Retired triggers, with what each one actually breaks if it survives. Any

@@ -107,7 +107,9 @@ test.describe("Admin dashboard", () => {
 
       const row = page.locator("tbody tr").first();
       await expect(row).toBeVisible({ timeout: 10_000 });
-      await expect(row.getByText(/Cash Payment Pending on Deck/)).toBeVisible();
+      // The badge names the tier the figure was quoted at, because the amount
+      // depends on it and the desk is where the money changes hands.
+      await expect(row.getByText(/EGP — (Early Bird|Standard|Late) rate, pending on deck/)).toBeVisible();
       await row.getByRole("button", { name: "Confirm Payment" }).click();
       await page.waitForTimeout(1500);
       await expect(page.locator('[data-slot="alert"]')).toHaveCount(0);

@@ -95,9 +95,18 @@ test.describe("Registration & validation", () => {
     await page.locator("#acceptSafety").check();
     await page.getByRole("button", { name: "Create account" }).click();
 
-    const rateLimited = page.getByText(/rate limit/i);
+    // GoTrue throttles signups two different ways and only one of them says
+    // "rate limit" — the other is "For security purposes, you can only request
+    // this after N seconds". Matching just the first made a throttled run fail
+    // as though registration were broken, rather than skipping.
+    //
+    // The timeout is 30s rather than 15s because the failure seen at 15s was an
+    // EMPTY alert: the request had not come back yet. A local GoTrue several
+    // signups into a suite run is simply slow, and the old budget was reporting
+    // that slowness as a product defect.
+    const rateLimited = page.getByText(/rate limit|for security purposes/i);
     const success = page.getByText("Account created!");
-    await expect(rateLimited.or(success)).toBeVisible({ timeout: 15_000 });
+    await expect(rateLimited.or(success)).toBeVisible({ timeout: 30_000 });
     test.skip(
       await rateLimited.isVisible(),
       "Supabase auth email send rate limit hit — cannot exercise the success path this run.",
@@ -125,9 +134,18 @@ test.describe("Registration & validation", () => {
     await page.locator("#acceptSafety").check();
     await page.getByRole("button", { name: "Create account" }).click();
 
-    const rateLimited = page.getByText(/rate limit/i);
+    // GoTrue throttles signups two different ways and only one of them says
+    // "rate limit" — the other is "For security purposes, you can only request
+    // this after N seconds". Matching just the first made a throttled run fail
+    // as though registration were broken, rather than skipping.
+    //
+    // The timeout is 30s rather than 15s because the failure seen at 15s was an
+    // EMPTY alert: the request had not come back yet. A local GoTrue several
+    // signups into a suite run is simply slow, and the old budget was reporting
+    // that slowness as a product defect.
+    const rateLimited = page.getByText(/rate limit|for security purposes/i);
     const success = page.getByText("Account created!");
-    await expect(rateLimited.or(success)).toBeVisible({ timeout: 15_000 });
+    await expect(rateLimited.or(success)).toBeVisible({ timeout: 30_000 });
     test.skip(
       await rateLimited.isVisible(),
       "Supabase auth email send rate limit hit — cannot exercise the success path this run.",

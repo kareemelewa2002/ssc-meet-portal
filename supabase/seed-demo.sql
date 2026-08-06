@@ -248,9 +248,20 @@ where mv.volume_number = 1
 on conflict (meet_volume_id, race_count, tier) do nothing;
 
 -- Vol. 1 is the fixture every spec registers against, so its tier windows are
--- pinned around today rather than around meet_date: a demo database seeded
--- months after the meet date would otherwise sit permanently in 'late', and
--- every price assertion in the suite would depend on when it was run.
+-- pinned around TODAY and force-updated.
+--
+-- DO UPDATE here, unlike the matrix above, and both halves of that matter:
+--
+--   * schema.sql already inserted windows anchored on meet_date, so DO NOTHING
+--     left those in place and this block did nothing at all. The E2E suite was
+--     quoting whichever tier the calendar happened to land on.
+--   * those windows move the active tier as real time passes. A price
+--     assertion would have gone green today and red on 21 August with no code
+--     change — a test that fails on a date is worse than no test, because the
+--     failure looks like a regression.
+--
+-- Standard is deliberately the active one: it is the middle of the three, so a
+-- fixture sitting in it can be pushed either way by a spec that needs to.
 insert into public.pricing_tiers (meet_volume_id, tier, starts_at, ends_at)
 select mv.id, w.tier::public.pricing_tier,
        (current_date + w.starts_days)::timestamptz,
@@ -262,7 +273,16 @@ cross join (values
   ('late',        30,  60)
 ) as w(tier, starts_days, ends_days)
 where mv.volume_number = 1
-on conflict (meet_volume_id, tier) do nothing;
+on conflict (meet_volume_id, tier) do update
+  set starts_at = excluded.starts_at,
+      ends_at = excluded.ends_at;
+
+-- Likewise the pin: an admin override left over from a previous run would
+-- silently outrank every window above.
+update public.meet_settings ms
+set pinned_pricing_tier = null
+from public.meet_volumes mv
+where mv.id = ms.meet_volume_id and mv.volume_number = 1;
 
 -- Exact official Vol. 1 program. is_relay marks the 4x50/4x100 relay events
 -- (schedule-only — see the file header note); is_skins marks the single
