@@ -18,6 +18,7 @@ import type { UserRole } from "@/lib/supabase/types";
 const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
   admin: "/admin",
   referee: "/referee",
+  parent: "/parent",
 };
 
 /**

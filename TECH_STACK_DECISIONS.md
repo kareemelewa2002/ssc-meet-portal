@@ -1137,10 +1137,10 @@ toggle again.
 
 | Suite | Count | Command |
 | --- | --- | --- |
-| RLS assertions, scratch Postgres cluster | 202 | `npm run test:rls` |
-| Schema drift guard (trigger/policy/column inventory) | 59 checks | `npm run db:verify` |
+| RLS assertions, scratch Postgres cluster | 211 | `npm run test:rls` |
+| Schema drift guard (trigger/policy/column inventory) | 62 checks | `npm run db:verify` |
 | Vitest unit tests | 309 | `npm run test` |
-| Playwright E2E specs | 71 | `npx playwright test` |
+| Playwright E2E specs | 72 | `npx playwright test` |
 
 The RLS and Vitest numbers are exact and re-verified every time this file is
 updated; treat the Playwright figure as approximate if it is read long after
@@ -1205,6 +1205,239 @@ Separately, and independently of the above: `app/register/page.tsx`'s own two
 `<Alert>` elements are both already correctly conditional
 (`{error && <Alert>...}` and `{needsParentEmail && <Alert>...}`). There is
 nothing to fix in the signup form itself.
+
+---
+
+## 13. Team invites, role dashboards, leaderboard placement, and the production reset script
+
+A large feature set, scoped by eight clarifying questions before any code —
+see Rule 2. Answers: reset target = whichever project Vercel production
+reads from (script written for the user to run, not executed here — no
+credentials to that project); reset scope = full wipe to demo baseline for
+the DEFINITION given in the question ("entries go back to pending_payment"),
+which turned out on investigation to require an actual delete pass, not just
+re-applying schema+seed (see the reset-script subsection below); invite link
+= pre-fill registration + auto-join, no approval step; e2e scope = full
+audit of the existing 12 spec files, not just new coverage; invite search =
+unattached athletes only; leaderboard placement = enhance the existing
+`/athletes/[id]` page rather than a new route; multi-team captaincy = not a
+real scenario (an athlete, including a captain, can only ever be on one
+team — `athletes.team_id` is singular by design) so no switcher UI was
+built; e2e execution = written/adjusted only, not run as a suite — the user
+runs `npx playwright test` themselves. Every item below was verified against
+the local test database directly (raw SQL, curled PostgREST calls with a
+real captain's JWT, and a real Chrome browser), not just read for
+plausibility — three of the bugs below were only caught that way.
+
+### Captaincy and the two invite directions
+
+"A captain is the athlete in the Open age group who created the team" was
+already the exact, sole, pre-existing definition (`teams.captain_id`,
+gated by `public.can_captain_team()` at creation) — nothing to add there.
+What genuinely didn't exist: any way to invite someone INTO a team. Two
+directions, deliberately kept separate rather than unified into one
+mechanism, because they have different trust models:
+
+- **Shareable link, for someone with no account** —
+  `public.team_invite_links` (`team_id`, `token`, `created_by`,
+  `revoked_at`, `use_count`). One active link per team (regenerating
+  revokes the old one — a link is meant to be pasted into a group chat, not
+  minted per-invitee). No SELECT policy for anyone but the team's captain
+  and admins; a token's validity is only ever checked through
+  `public.preview_team_invite_token()` (read-only, does not consume) and
+  `public.redeem_team_invite_token()` (consumes, increments `use_count`),
+  both `SECURITY DEFINER` — an anonymous visitor evaluating a link must
+  never be able to browse the table directly. Redemption happens **inside**
+  `public.handle_new_auth_user()`, the existing signup trigger, not as a
+  separate client-side step — there is no active session between
+  `supabase.auth.signUp()` returning and that trigger firing (this project
+  requires email confirmation), so the client could never call a redeem RPC
+  at the right moment itself. The token rides through as
+  `raw_user_meta_data.team_invite_token`, exactly the way `parent_email`
+  already does, and the trigger sets `athletes.team_id` directly at insert
+  time when a valid token is present — no `team_memberships` row is ever
+  created for this path.
+- **In-app invite, for an existing unattached athlete** — a normal
+  `team_memberships` row, `status = 'invited'`. This DOES require the
+  invitee's own acceptance, which is the whole reason it's a separate
+  mechanism from the link: sending it is not itself approval of anything on
+  the invitee's side.
+
+### Schema: `membership_status` grows a third value, in the OPPOSITE direction from `'pending'`
+
+`'pending'` is athlete-initiated (a join request the captain accepts or
+rejects). `'invited'` is captain-initiated (an invite the athlete accepts or
+declines). Same table, same accept trigger
+(`sync_athlete_team_on_membership_accept`, unmodified — it already fires on
+any transition INTO `'accepted'` regardless of which status it came from),
+but each direction gets its **own** insert/update policy rather than
+relaxing an existing one:
+
+- `user_request_membership` (existing) narrowed to `status = 'pending'`
+  only — was previously unscoped by status, which would have silently also
+  permitted a user to self-insert an `'invited'` row for themselves.
+- `captain_invite_to_membership` (new): captain of the team, status must be
+  `'invited'`, cannot name themselves as the invitee.
+- `captain_manage_membership_status` (existing, accept/reject) narrowed to
+  `status = 'pending'` rows only. This one mattered most: without the
+  narrowing, a captain could `UPDATE ... SET status = 'accepted'` on their
+  own OUTGOING `'invited'` row, self-approving an invite the athlete never
+  actually consented to — verified this is blocked (`UPDATE 0`) directly
+  against the local database, not just reasoned about.
+- `invitee_accept_own_invitation` (new): the mirror — only the invitee, only
+  the `'invited'` → `'accepted'` transition. Declining is a plain `DELETE`,
+  no new policy needed — `captain_or_requester_delete_membership` already
+  allows `user_id = auth.uid()` to delete their own row regardless of
+  status, matching the existing "no persisted rejected state" convention.
+- `enforce_team_membership_request_rules()` (existing trigger, extended, not
+  replaced) gained one new check: an `'invited'` row is refused if the
+  invitee already has a team — server-side enforcement of "unattached only,"
+  which the in-app search UI also enforces but a determined client could
+  otherwise bypass.
+
+### A real bug the schema work itself surfaced: `gen_random_bytes` isn't on `search_path`
+
+`create_team_invite_link()`'s first draft generated the token via
+`encode(gen_random_bytes(16), 'hex')` — `pgcrypto`'s function. Running it
+against the local database (not just reading the extension list) failed:
+`function gen_random_bytes(integer) does not exist`. `pgcrypto` on this
+project lives in the `extensions` schema, not `public`, and every
+`SECURITY DEFINER` function here is pinned to `search_path = public` for
+exactly the reason documented elsewhere in this file (an unqualified
+search_path is how a definer function's writes could be redirected).
+Qualifying the call (`extensions.gen_random_bytes(...)`) would work but
+assumes that schema name holds on every environment. Fixed instead with two
+concatenated `gen_random_uuid()`s, dashes stripped — Postgres core (13+),
+no extension dependency at all, same CSPRNG guarantee.
+
+### Athlete profile: `event_place` wired in, a new "Leaderboard" column
+
+`public.event_results` already computed per-event standings across every
+heat (`rank() over (partition by event_id, age_group, gender, is_ranked)`)
+— built for the live meet page, never read by the athlete profile.
+`fetchAthleteProfile()`'s entries query gained `events(id, ...)` (the `id`
+wasn't previously selected) and a second query against `event_results`
+filtered to `is_open_entry = false` (the athlete's OWN age board only, never
+one of the cumulative older boards they're also ranked into), built into a
+`Map<eventId, place>`. The ledger table's existing "Place" column (heat-only
+— `results.finish_place`) is now labeled "Heat"; a new "Leaderboard" column
+sits beside it. Two genuinely different numbers, per the view's own
+long-standing comment: winning heat 1 is not the same as winning the event.
+
+### Parent dashboard and payment status — the two gaps confirmed by investigation, not assumed
+
+Pre-work investigation (an Explore-agent pass across teams/dashboards/
+payments/e2e) confirmed two things this feature set fixes were REAL gaps,
+not assumptions: (1) `athletes.parent_id` already supported a parent linking
+to more than one child, and e2e fixtures already assumed up to 4, but no
+query or page ever listed them — `lib/parents.ts`'s `fetchMyLinkedChildren()`
+is the first. (2) No athlete/parent-facing view ever read `entry_payments`
+at all — the only payment-status surface anywhere was the itemized quote
+shown once, at registration submit time, with no way to check it again
+afterward. `lib/payments.ts`'s `fetchMyEntryPaymentStatus()` groups by meet
+volume (an admin confirms a whole volume's cash at once, never per race) and
+returns either the settled `entry_payments` row (confirmed, with collector
+and amount) or a live quote via the existing `fetchEntryQuote()` for
+whatever is still `pending_payment` — reused rather than re-derived, so the
+figure shown always matches what registration itself would quote. New
+`/parent` route lists every child with a link to their real `/athletes/[id]`
+profile (not a duplicate results view) and a payment-status card per child.
+
+### Two more bugs, both caught by a real browser + real curl, not by `tsc`/`eslint`
+
+1. **`.ilike("users.full_name", …)` on an embedded table silently nulled
+   the WHOLE embed**, not just non-matching rows — confirmed by curling the
+   PostgREST endpoint directly with a real captain JWT: the identical query
+   minus the `.ilike()` returned real names; adding it back made `users`
+   `null` on every row, including rows that should have matched. Every
+   result then read as the literal fallback string `"Athlete"`, which then
+   failed the defensive client-side name filter too — an athlete search
+   that looked empty for every query. This is the exact limitation
+   `lib/athletes.ts`'s own career-results query already documents (no FK
+   relationship metadata in the hand-maintained `Database` type for
+   PostgREST to resolve an embedded filter against) — `searchUnattachedAthletes()`
+   should have followed that established fetch-broadly-filter-in-JS pattern
+   from the start. Fixed to match it.
+2. **`app/referee/page.tsx`-style page-local state, this time in a Vercel
+   deploy — not this feature, but adjacent**: no new instance found this
+   pass; noted only because the browser sweep specifically re-checked for
+   it given the earlier telemetry work's own finding of the same pattern.
+
+### Production reset script: why "just re-run schema.sql + seed-demo.sql" doesn't work on a real database
+
+Both files are written to be idempotently re-runnable — which means they
+UPSERT their own known fixtures and delete nothing they didn't create.
+Confirmed directly: applying them against a database that already had extra
+rows (confirmed entries, generated heats, an extra registered team) left
+every one of those rows untouched. That is exactly right for a disposable
+test database and exactly wrong for "reset production to pre-meet" — a real
+wipe requires an actual `DELETE`/`UPDATE` pass, not a schema/seed re-apply.
+`supabase/reset-to-pre-meet.sql` is that pass, split into two sections:
+
+- **Section 1 (the default, always-safe half)**: every confirmed entry
+  rolls back to `pending_payment` (never deleted — a registrant's choice of
+  events is configuration, not meet progress); every heat/lane/result/
+  relay-squad/relay-leg/relay-payment/skins-round/entry-payment is deleted;
+  team announcements and notifications (meet-cycle chatter) are cleared.
+  Teams, athletes, users, and pricing are untouched. `admin_actions` is
+  never touched by either section — it has no UPDATE/DELETE policy at all
+  by design (append-only), and "resetting" an audit log of what actually
+  happened administratively would defeat the entire point of keeping one.
+- **Section 2 (commented out, genuinely destructive)**: the literal "wipe
+  teams/athletes back to only the demo seed" reading — deletes every real,
+  non-demo team and registrant, sparing only the admin account. Left
+  commented out on purpose: production almost certainly has real
+  registrants by now, and Section 1 is very likely what "reset to pre-meet"
+  actually means in that case. Uncommenting it is a decision for whoever
+  runs the script against their own database, not something to default to
+  sight-unseen.
+
+Verified end to end against the local database: applied
+`e2e/helpers/seed-played-meet.sql` to produce real meet progress (146
+confirmed entries, 42 heats, 75 results, 39 Skins qualifications), ran
+Section 1, confirmed every one of those counts dropped to 0 while teams
+(4) and athletes (80) stayed exactly unchanged, then re-ran `db:verify`
+(62/62) to confirm the schema itself was undisturbed.
+
+### Testing
+
+**RLS**: DB-61 through DB-64 added to `supabase/tests/rls.spec.sql` —
+captain invites an unattached athlete / a different team's captain cannot;
+the sending captain cannot self-accept their own invite but the invitee
+accepting syncs `athletes.team_id`; a captain cannot invite an athlete who
+already has a team; invite-link preview doesn't increment `use_count` but
+redeem does exactly once, and a revoked link no longer redeems. Full suite:
+**211/211**.
+
+**`db:verify`**: `team_invite_links` added to the table smoke-read sweep;
+`preview_team_invite_token`/`redeem_team_invite_token` added as RPC checks
+(a bogus token must resolve to `null`, never error — the same contract a
+mistyped link gets in the real registration flow). **62/62**.
+
+**Vitest**: 309/309, unchanged — nothing in this feature set added new pure
+logic worth a dedicated unit test beyond what the RLS suite and the manual
+browser/curl verification already covered end to end.
+
+**E2E**: new `e2e/13-team-invites-and-dashboards.spec.ts` covers the invite
+link + fresh-signup auto-join, the in-app invite + athlete-side accept/
+decline (declines rather than accepts, so `CREDENTIALS.unattached` — the
+only seeded athlete with `team_id = NULL`, and several other specs'
+load-bearing fixture — stays unattached for every other spec; there is no
+"leave team" action anywhere in the app, so an accept here would be
+permanent), the athlete dashboard's current-team link, the teams page's
+captain-name display, the parent dashboard's 4-linked-children listing, and
+the athlete profile's new Heat/Leaderboard column pair. Full audit pass over
+the existing 12 spec files: `01-guest-gating.spec.ts` gained the four new
+protected routes (`/parent`, `/captain/roster`, `/captain/invitations`,
+`/dashboard/team`) to its guest-redirect sweep; `07-spectator.spec.ts`'s
+per-role AppHeader dropdown test — which this feature set's
+`ROLE_DASHBOARD_HREF` change would otherwise have broken outright — updated
+so a parent now expects a "Role Dashboard" link to `/parent` instead of
+none; `08-part5-checklist.spec.ts`'s Parent Flow test, whose own comment
+said "Parents don't have a dedicated roster page today," rewritten to
+actually use the page that now exists rather than working around its
+absence. Written and adjusted only — not executed as a suite in this
+session, per the explicit answer to "who runs e2e."
 
 ---
 

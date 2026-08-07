@@ -25,7 +25,7 @@ export type AgeGroup = "U14" | "U17" | "Open";
 
 export type PublishStatus = "draft" | "published";
 
-export type MembershipStatus = "pending" | "accepted";
+export type MembershipStatus = "pending" | "accepted" | "invited";
 
 export type HeatGroup = "U13_14" | "U17_OPEN";
 
@@ -233,6 +233,16 @@ export type TeamMembershipRow = {
   status: MembershipStatus;
   requested_at: string;
   responded_at: string | null;
+};
+
+export type TeamInviteLinkRow = {
+  id: string;
+  team_id: string;
+  token: string;
+  created_by: string;
+  created_at: string;
+  revoked_at: string | null;
+  use_count: number;
 };
 
 export type AthleteRow = {
@@ -643,6 +653,7 @@ export type Database = {
       users: Table<UserRow>;
       teams: Table<TeamRow>;
       team_memberships: Table<TeamMembershipRow>;
+      team_invite_links: Table<TeamInviteLinkRow>;
       event_results: Table<EventResultRow>;
       relay_squads: Table<RelaySquadRow>;
       relay_legs: Table<RelayLegRow>;
@@ -680,6 +691,18 @@ export type Database = {
       all_time_best_performers: View<AllTimeBestPerformerRow>;
     };
     Functions: {
+      create_team_invite_link: {
+        Args: { p_team_id: string };
+        Returns: string;
+      };
+      redeem_team_invite_token: {
+        Args: { p_token: string };
+        Returns: string | null;
+      };
+      preview_team_invite_token: {
+        Args: { p_token: string };
+        Returns: string | null;
+      };
       get_skins_qualifiers: {
         Args: { event_id_param: string };
         Returns: SkinsQualifierRpcRow[];

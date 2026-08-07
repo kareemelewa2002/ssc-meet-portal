@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { CheckCircle2, Loader2, Upload, Waves } from "lucide-react";
@@ -21,6 +21,7 @@ import {
   validateParentLinkage,
   type SignupRole,
 } from "@/lib/register";
+import { previewTeamInviteToken } from "@/lib/team-invites";
 import type { Gender } from "@/lib/supabase/types";
 
 const ROLE_TABS: { value: SignupRole; label: string }[] = [
@@ -33,10 +34,27 @@ const STROKE_OPTIONS = ["Freestyle", "Backstroke", "Breaststroke", "Butterfly", 
 function RegisterPageInner() {
   const searchParams = useSearchParams();
   const initialRole = (searchParams.get("role") as SignupRole) || "athlete";
+  const inviteToken = searchParams.get("invite");
 
   const [role, setRole] = useState<SignupRole>(
     ROLE_TABS.some((t) => t.value === initialRole) ? initialRole : "athlete",
   );
+
+  // Preview-only: shows "You're joining X" without consuming the token —
+  // actual redemption happens server-side at signup (see lib/register.ts).
+  // A stale/mistyped token resolves to null and the banner just doesn't
+  // show; it never blocks the form.
+  const [inviteTeamName, setInviteTeamName] = useState<string | null>(null);
+  useEffect(() => {
+    if (!inviteToken) return;
+    let cancelled = false;
+    previewTeamInviteToken(inviteToken).then((name) => {
+      if (!cancelled) setInviteTeamName(name);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
 
   // Account fields
   const [email, setEmail] = useState("");
@@ -139,6 +157,7 @@ function RegisterPageInner() {
               profileImageUrl: profileImageUrl || null,
               parentEmail: parentEmail || null,
               safetyAccepted: acceptSafety,
+              teamInviteToken: inviteToken,
             }
           : undefined,
       );
@@ -198,6 +217,15 @@ function RegisterPageInner() {
           <p className="text-sm text-muted-foreground">Join the Sprint Swimming Challenge</p>
         </div>
       </header>
+
+      {inviteTeamName && (
+        <Alert>
+          <AlertDescription>
+            You&apos;re signing up via an invite from <strong>{inviteTeamName}</strong> — you&apos;ll
+            join the team automatically once your account is created.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-3 gap-2 rounded-lg border bg-muted/30 p-1">
         {ROLE_TABS.map((tab) => (

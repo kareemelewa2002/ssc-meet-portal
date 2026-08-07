@@ -31,6 +31,7 @@ import { firstError } from "@/lib/fetch-policy";
 import {
   createTeam,
   fetchMyAthleteSummary,
+  fetchTeamCaptainNames,
   fetchTeamDetail,
   fetchTeams,
   type MyAthleteSummary,
@@ -54,6 +55,7 @@ export default function TeamsPage() {
   const { user } = useCurrentUser();
   const toast = useToast();
   const [teams, setTeams] = useState<TeamRow[]>([]);
+  const [captainNames, setCaptainNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [name, setName] = useState("");
@@ -85,14 +87,16 @@ export default function TeamsPage() {
 
   const load = async () => {
     setLoading(true);
-    const [teamsList, athleteSummary, joinRequest, locked] = await Promise.all([
+    const [teamsList, athleteSummary, joinRequest, locked, names] = await Promise.all([
       fetchTeams(),
       fetchMyAthleteSummary(),
       fetchMyJoinRequest(),
       fetchTransfersLocked(),
+      fetchTeamCaptainNames(),
     ]);
     setTransfersLocked(locked);
     setTeams(teamsList.data);
+    setCaptainNames(names);
     setMyAthlete(athleteSummary.data);
     setMyJoinRequest(joinRequest);
     setDataError(firstError(teamsList, athleteSummary));
@@ -271,7 +275,10 @@ export default function TeamsPage() {
                 </Avatar>
                 <div className="min-w-0 flex-1">
                   <CardTitle className="truncate">{team.name}</CardTitle>
-                  <CardDescription>{team.abbreviation ?? "—"}</CardDescription>
+                  <CardDescription>
+                    {team.abbreviation ?? "—"}
+                    {captainNames.get(team.id) && ` · Captain: ${captainNames.get(team.id)}`}
+                  </CardDescription>
                 </div>
                 {team.approved_by_admin ? (
                   <Badge className="gap-1">

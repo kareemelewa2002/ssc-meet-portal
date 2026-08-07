@@ -8,7 +8,12 @@ import type {
 } from "@/lib/supabase/types";
 import { firstOf } from "@/lib/live-heats";
 import { calculateAge } from "@/lib/age";
-import { describeError, failure, ok, type FetchResult } from "@/lib/fetch-policy";
+import {
+  describeError,
+  failure,
+  ok,
+  type FetchResult,
+} from "@/lib/fetch-policy";
 import { fetchWaBaseTimes, waPointsFor } from "@/lib/wa-points";
 
 /**
@@ -81,6 +86,13 @@ export interface CareerResultView {
   /** World Aquatics points, or null for an unrateable event / a DQ or NS
    * (neither produced a time). Never 0 — see lib/wa-points.ts. */
   waPoints: number | null;
+  /** Standing ACROSS EVERY HEAT of the event, on the athlete's own age-group
+   * board (public.event_results, own_age_group only — never one of the
+   * older boards they're also cumulatively ranked into). Distinct from
+   * finishPlace above, which is only the heat-level place. null for a DQ/NS
+   * (no place, never a fake 0/1) or if this swim hasn't been through the
+   * standings pipeline yet. */
+  eventPlace: number | null;
 }
 
 export interface SeriesStandingView {
@@ -148,8 +160,22 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 23800, volumeName: "SSC Vol. 2" , ageAtSwim: 22, waPoints: null },
-      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 26500, volumeName: "SSC Vol. 1" , ageAtSwim: 21, waPoints: null },
+      {
+        stroke: "Freestyle",
+        distanceM: 50,
+        bestTimeMs: 23800,
+        volumeName: "SSC Vol. 2",
+        ageAtSwim: 22,
+        waPoints: null,
+      },
+      {
+        stroke: "Butterfly",
+        distanceM: 50,
+        bestTimeMs: 26500,
+        volumeName: "SSC Vol. 1",
+        ageAtSwim: 21,
+        waPoints: null,
+      },
     ],
     careerResults: [
       {
@@ -167,6 +193,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T09:30:00Z",
         ageAtSwim: 21,
         waPoints: null,
+        eventPlace: null,
       },
       {
         id: "cr-2",
@@ -183,6 +210,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T14:10:00Z",
         ageAtSwim: 21,
         waPoints: null,
+        eventPlace: null,
       },
     ],
   },
@@ -215,7 +243,14 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 26800, volumeName: "SSC Vol. 1" , ageAtSwim: 16, waPoints: null },
+      {
+        stroke: "Freestyle",
+        distanceM: 50,
+        bestTimeMs: 26800,
+        volumeName: "SSC Vol. 1",
+        ageAtSwim: 16,
+        waPoints: null,
+      },
     ],
     careerResults: [
       {
@@ -233,6 +268,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T11:00:00Z",
         ageAtSwim: 16,
         waPoints: null,
+        eventPlace: null,
       },
     ],
   },
@@ -256,7 +292,14 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 27100, volumeName: "SSC Vol. 1" , ageAtSwim: 15, waPoints: null },
+      {
+        stroke: "Freestyle",
+        distanceM: 50,
+        bestTimeMs: 27100,
+        volumeName: "SSC Vol. 1",
+        ageAtSwim: 15,
+        waPoints: null,
+      },
     ],
     careerResults: [
       {
@@ -274,6 +317,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T11:05:00Z",
         ageAtSwim: 15,
         waPoints: null,
+        eventPlace: null,
       },
       {
         id: "cr-5",
@@ -290,6 +334,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T11:20:00Z",
         ageAtSwim: 15,
         waPoints: null,
+        eventPlace: null,
       },
     ],
   },
@@ -313,7 +358,14 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 24500, volumeName: "SSC Vol. 1" , ageAtSwim: 19, waPoints: null },
+      {
+        stroke: "Freestyle",
+        distanceM: 50,
+        bestTimeMs: 24500,
+        volumeName: "SSC Vol. 1",
+        ageAtSwim: 19,
+        waPoints: null,
+      },
     ],
     careerResults: [
       {
@@ -331,6 +383,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T09:31:00Z",
         ageAtSwim: 19,
         waPoints: null,
+        eventPlace: null,
       },
     ],
   },
@@ -363,7 +416,14 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Butterfly", distanceM: 50, bestTimeMs: 31200, volumeName: "SSC Vol. 1" , ageAtSwim: 13, waPoints: null },
+      {
+        stroke: "Butterfly",
+        distanceM: 50,
+        bestTimeMs: 31200,
+        volumeName: "SSC Vol. 1",
+        ageAtSwim: 13,
+        waPoints: null,
+      },
     ],
     careerResults: [
       {
@@ -381,6 +441,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T14:00:00Z",
         ageAtSwim: 13,
         waPoints: null,
+        eventPlace: null,
       },
       {
         id: "cr-8",
@@ -397,6 +458,7 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T09:40:00Z",
         ageAtSwim: 13,
         waPoints: null,
+        eventPlace: null,
       },
     ],
   },
@@ -420,7 +482,14 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
       },
     ],
     personalBests: [
-      { stroke: "Freestyle", distanceM: 50, bestTimeMs: 25000, volumeName: "SSC Vol. 1" , ageAtSwim: 24, waPoints: null },
+      {
+        stroke: "Freestyle",
+        distanceM: 50,
+        bestTimeMs: 25000,
+        volumeName: "SSC Vol. 1",
+        ageAtSwim: 24,
+        waPoints: null,
+      },
     ],
     careerResults: [
       {
@@ -438,12 +507,15 @@ export const DEMO_ATHLETES: AthleteProfileView[] = [
         swamAt: "2026-10-02T09:32:00Z",
         ageAtSwim: 24,
         waPoints: null,
+        eventPlace: null,
       },
     ],
   },
 ];
 
-export function toDirectoryCard(profile: AthleteProfileView): AthleteDirectoryCard {
+export function toDirectoryCard(
+  profile: AthleteProfileView,
+): AthleteDirectoryCard {
   return {
     id: profile.id,
     fullName: profile.fullName,
@@ -452,7 +524,9 @@ export function toDirectoryCard(profile: AthleteProfileView): AthleteDirectoryCa
     gender: profile.gender,
     teamName: profile.teamName,
     profileImageUrl: profile.profileImageUrl,
-    eventsSwum: new Set(profile.careerResults.map((r) => `${r.stroke}-${r.distanceM}`)).size,
+    eventsSwum: new Set(
+      profile.careerResults.map((r) => `${r.stroke}-${r.distanceM}`),
+    ).size,
     awards: profile.awards,
   };
 }
@@ -488,7 +562,9 @@ export function filterCareerResults(
   );
 }
 
-export async function fetchAthleteDirectory(): Promise<FetchResult<AthleteDirectoryCard[]>> {
+export async function fetchAthleteDirectory(): Promise<
+  FetchResult<AthleteDirectoryCard[]>
+> {
   try {
     const supabase = createClient();
     const { data, error } = await supabase
@@ -517,45 +593,53 @@ export async function fetchAthleteDirectory(): Promise<FetchResult<AthleteDirect
       age: number;
       age_group: AgeGroup;
       gender: Gender;
-      users: { full_name: string; profile_image_url: string | null } | { full_name: string; profile_image_url: string | null }[] | null;
+      users:
+        | { full_name: string; profile_image_url: string | null }
+        | { full_name: string; profile_image_url: string | null }[]
+        | null;
       teams: { name: string } | { name: string }[] | null;
       awards: Array<{
         id: string;
         award_type: AwardType;
         category: AgeGroup;
         gender: Gender;
-        meet_volumes: { volume_number: number; name: string } | { volume_number: number; name: string }[] | null;
+        meet_volumes:
+          | { volume_number: number; name: string }
+          | { volume_number: number; name: string }[]
+          | null;
       }> | null;
       entries: Array<{ id: string }> | null;
     };
 
-    return ok((data as unknown as DirectoryRow[]).map((row) => {
-      const user = firstOf(row.users);
-      const team = firstOf(row.teams);
-      const awardsRaw = row.awards ?? [];
-      const entries = row.entries ?? [];
-      return {
-        id: row.id,
-        fullName: user?.full_name ?? "Athlete",
-        age: row.age,
-        ageGroup: row.age_group,
-        gender: row.gender,
-        teamName: team?.name ?? null,
-        profileImageUrl: user?.profile_image_url ?? null,
-        eventsSwum: entries.length,
-        awards: awardsRaw.map((aw) => {
-          const vol = firstOf(aw.meet_volumes);
-          return {
-            id: aw.id,
-            awardType: aw.award_type,
-            category: aw.category,
-            gender: aw.gender,
-            volumeNumber: vol?.volume_number ?? 0,
-            volumeName: vol?.name ?? "SSC",
-          };
-        }),
-      };
-    }));
+    return ok(
+      (data as unknown as DirectoryRow[]).map((row) => {
+        const user = firstOf(row.users);
+        const team = firstOf(row.teams);
+        const awardsRaw = row.awards ?? [];
+        const entries = row.entries ?? [];
+        return {
+          id: row.id,
+          fullName: user?.full_name ?? "Athlete",
+          age: row.age,
+          ageGroup: row.age_group,
+          gender: row.gender,
+          teamName: team?.name ?? null,
+          profileImageUrl: user?.profile_image_url ?? null,
+          eventsSwum: entries.length,
+          awards: awardsRaw.map((aw) => {
+            const vol = firstOf(aw.meet_volumes);
+            return {
+              id: aw.id,
+              awardType: aw.award_type,
+              category: aw.category,
+              gender: aw.gender,
+              volumeNumber: vol?.volume_number ?? 0,
+              volumeName: vol?.name ?? "SSC",
+            };
+          }),
+        };
+      }),
+    );
   } catch (err) {
     return failure(
       describeError("Loading the athlete directory", err),
@@ -575,10 +659,17 @@ export async function fetchAthleteProfile(
       .from("athletes")
       // Qualify the FK — athletes has two (user_id and parent_id) — see the
       // matching comment in fetchAthleteDirectory() above.
-      .select("id, age, age_group, gender, date_of_birth, users!athletes_user_id_fkey ( full_name, profile_image_url ), teams ( name )")
+      .select(
+        "id, age, age_group, gender, date_of_birth, users!athletes_user_id_fkey ( full_name, profile_image_url ), teams ( name )",
+      )
       .eq("id", athleteId)
       .maybeSingle();
-    if (error) return failure(describeError("Loading athlete profile", error), null, demo);
+    if (error)
+      return failure(
+        describeError("Loading athlete profile", error),
+        null,
+        demo,
+      );
     // A real 404 (no such athlete) is not a failure — the page renders its
     // own "athlete not found" state.
     if (!athlete) return ok(null);
@@ -589,7 +680,10 @@ export async function fetchAthleteProfile(
       age_group: AgeGroup;
       gender: Gender;
       date_of_birth: string;
-      users: { full_name: string; profile_image_url: string | null } | { full_name: string; profile_image_url: string | null }[] | null;
+      users:
+        | { full_name: string; profile_image_url: string | null }
+        | { full_name: string; profile_image_url: string | null }[]
+        | null;
       teams: { name: string } | { name: string }[] | null;
     };
     const athleteRow = athlete as unknown as AthleteEmbed;
@@ -598,7 +692,9 @@ export async function fetchAthleteProfile(
 
     const { data: awardsData } = await supabase
       .from("awards")
-      .select("id, award_type, category, gender, meet_volumes ( volume_number, name )")
+      .select(
+        "id, award_type, category, gender, meet_volumes ( volume_number, name )",
+      )
       .eq("athlete_id", athleteId);
 
     const { data: seriesData } = await supabase
@@ -612,12 +708,35 @@ export async function fetchAthleteProfile(
     const { data: entryData } = await supabase
       .from("entries")
       .select(
-        "id, events ( name, stroke, distance_m, sessions ( meet_volumes ( volume_number, name, meet_date ) ) ), heat_lanes ( results ( id, result_outcome, official_time_ms, finish_place, dq_code, status, created_at ) )",
+        "id, events ( id, name, stroke, distance_m, sessions ( meet_volumes ( volume_number, name, meet_date ) ) ), heat_lanes ( results ( id, result_outcome, official_time_ms, finish_place, dq_code, status, created_at ) )",
       )
       .eq("athlete_id", athleteId);
 
-    type CareerVolumeEmbed = { volume_number: number; name: string; meet_date: string | null };
+    // Standing across every heat of the event, on this athlete's OWN
+    // age-group board only (own_age_group = age_group, i.e. is_open_entry
+    // false) — never one of the older boards they're also cumulatively
+    // ranked into. Keyed by event_id: each volume's "50m Freestyle" is a
+    // distinct events row, so this can't collide across volumes the way
+    // keying by event name would.
+    const { data: placementData } = await supabase
+      .from("event_results")
+      .select("event_id, event_place")
+      .eq("athlete_id", athleteId)
+      .eq("is_open_entry", false);
+    const placementByEventId = new Map<string, number | null>(
+      ((placementData ?? []) as { event_id: string; event_place: number | null }[]).map((r) => [
+        r.event_id,
+        r.event_place,
+      ]),
+    );
+
+    type CareerVolumeEmbed = {
+      volume_number: number;
+      name: string;
+      meet_date: string | null;
+    };
     type CareerEventEmbed = {
+      id: string;
       name: string;
       stroke: string;
       distance_m: number;
@@ -638,7 +757,9 @@ export async function fetchAthleteProfile(
     type CareerEntryRow = {
       id: string;
       events: CareerEventEmbed | CareerEventEmbed[] | null;
-      heat_lanes: Array<{ results: CareerResultEmbed | CareerResultEmbed[] | null }> | null;
+      heat_lanes: Array<{
+        results: CareerResultEmbed | CareerResultEmbed[] | null;
+      }> | null;
     };
 
     // Twelve public rows, fetched once and applied to every line of the
@@ -692,9 +813,13 @@ export async function fetchAthleteProfile(
           swamAt: result.created_at,
           ageAtSwim,
           waPoints,
+          eventPlace: placementByEventId.get(event.id) ?? null,
         });
 
-        if (result.result_outcome === "valid" && result.official_time_ms != null) {
+        if (
+          result.result_outcome === "valid" &&
+          result.official_time_ms != null
+        ) {
           const key = `${event.stroke}-${event.distance_m}`;
           const existing = pbMap.get(key);
           if (!existing || result.official_time_ms < existing.bestTimeMs) {
@@ -718,10 +843,15 @@ export async function fetchAthleteProfile(
       award_type: AwardType;
       category: AgeGroup;
       gender: Gender;
-      meet_volumes: { volume_number: number; name: string } | { volume_number: number; name: string }[] | null;
+      meet_volumes:
+        | { volume_number: number; name: string }
+        | { volume_number: number; name: string }[]
+        | null;
     };
 
-    const awards: AthleteAwardView[] = ((awardsData ?? []) as unknown as AwardEmbed[]).map((aw) => {
+    const awards: AthleteAwardView[] = (
+      (awardsData ?? []) as unknown as AwardEmbed[]
+    ).map((aw) => {
       const vol = firstOf(aw.meet_volumes);
       return {
         id: aw.id,
@@ -733,14 +863,16 @@ export async function fetchAthleteProfile(
       };
     });
 
-    const seriesStandings: SeriesStandingView[] = (seriesData ?? []).map((s) => ({
-      category: s.category,
-      placementRank: null,
-      improvementRank: null,
-      placementPoints: Number(s.placement_points),
-      improvementPoints: Number(s.improvement_points),
-      volumesCounted: Number(s.volumes_counted),
-    }));
+    const seriesStandings: SeriesStandingView[] = (seriesData ?? []).map(
+      (s) => ({
+        category: s.category,
+        placementRank: null,
+        improvementRank: null,
+        placementPoints: Number(s.placement_points),
+        improvementPoints: Number(s.improvement_points),
+        volumesCounted: Number(s.volumes_counted),
+      }),
+    );
 
     return ok({
       id: athleteRow.id,

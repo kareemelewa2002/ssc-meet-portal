@@ -124,10 +124,19 @@ begin
   if not exists (select 1 from pg_type where typname = 'membership_status') then
     create type public.membership_status as enum (
       'pending',
-      'accepted'
+      'accepted',
+      'invited'
     );
   end if;
 end $$;
+
+-- Deliberately NOT wrapped in a DO block — see the comment on
+-- entry_status's 'hold_expired' below for why. 'invited' is the captain-
+-- initiated direction (captain picks an unattached athlete, athlete
+-- accepts/declines) — the opposite of 'pending' (athlete requests, captain
+-- accepts/rejects). Both directions land on the same table and reuse the
+-- same accept trigger (sync_athlete_team_on_membership_accept below).
+alter type public.membership_status add value if not exists 'invited';
 
 -- The two heat-scheduling phases: U13-14 swims first, U17 + Open swim
 -- together afterward (see lib/seeding.ts).
@@ -415,6 +424,31 @@ create table if not exists public.team_memberships (
   responded_at timestamptz,
   unique (team_id, user_id)
 );
+
+-- ---------------------------------------------------------------------------
+-- team_invite_links — a shareable URL a captain hands to someone OUTSIDE the
+-- app who has no account yet. Deliberately not a team_memberships row: that
+-- table's user_id is a not-null FK to public.users, and there is no user
+-- row until the invitee actually finishes signing up. One reusable link per
+-- team (regenerating replaces it, see revoked_at), not one link per
+-- invitee — the token is meant to be pasted into a group chat, not minted
+-- fresh for each person.
+--
+-- Redemption happens at registration time via
+-- public.redeem_team_invite_token() (below), NOT a direct SELECT — an
+-- unauthenticated visitor evaluating whether a link is still valid must not
+-- be able to enumerate every token in this table.
+-- ---------------------------------------------------------------------------
+create table if not exists public.team_invite_links (
+  id uuid primary key default gen_random_uuid(),
+  team_id uuid not null references public.teams (id) on delete cascade,
+  token text not null unique,
+  created_by uuid not null references public.users (id),
+  created_at timestamptz not null default now(),
+  revoked_at timestamptz,
+  use_count integer not null default 0
+);
+create index if not exists team_invite_links_team_idx on public.team_invite_links (team_id);
 
 -- ---------------------------------------------------------------------------
 -- athletes
@@ -2794,6 +2828,8 @@ declare
   v_parent_id uuid;
   v_needs_parent boolean;
   v_specialty text[];
+  v_team_id uuid;
+  v_invite_token text;
 begin
   select superadmin_email into superadmin from public.app_settings limit 1;
 
@@ -2829,10 +2865,29 @@ begin
     select array(select jsonb_array_elements_text(coalesce(new.raw_user_meta_data -> 'specialty_events', '[]'::jsonb)))
       into v_specialty;
 
+    -- A captain's shareable invite link (public.create_team_invite_link),
+    -- carried through signUp()'s metadata the same way parent_email is.
+    -- Resolved and consumed HERE, inline, rather than via a separate
+    -- redeem_team_invite_token() call from the client: there is no active
+    -- session between signUp() returning and this trigger running (email
+    -- confirmation is required — see this function's own comment further
+    -- up in app code / lib/register.ts), so the client could never call
+    -- that RPC itself at the right moment. A stale/mistyped token leaves
+    -- v_team_id null and the athlete is simply created unattached, exactly
+    -- like redeem_team_invite_token()'s own contract: never blocks sign-up.
+    v_invite_token := nullif(trim(new.raw_user_meta_data ->> 'team_invite_token'), '');
+    v_team_id := null;
+    if v_invite_token is not null then
+      update public.team_invite_links
+      set use_count = use_count + 1
+      where token = v_invite_token and revoked_at is null
+      returning team_id into v_team_id;
+    end if;
+
     insert into public.athletes (
       user_id, date_of_birth, age, age_group, gender, height_cm, weight_kg,
       specialty_events, parent_id, parent_link_status, pending_parent_email,
-      approved_by_admin, safety_accepted_at, safety_accepted_by
+      approved_by_admin, safety_accepted_at, safety_accepted_by, team_id
     ) values (
       new.id,
       v_dob,
@@ -2862,7 +2917,8 @@ begin
         when v_needs_parent then null
         when (new.raw_user_meta_data ->> 'safety_accepted') = 'true' then new.id
         else null
-      end
+      end,
+      v_team_id
     );
   end if;
 
@@ -2974,7 +3030,10 @@ as $$
 declare
   v_current_team_id uuid;
 begin
-  if exists (
+  -- These two checks are specific to an ATHLETE-INITIATED request
+  -- ('pending') — a captain inviting someone ('invited', below) is a
+  -- different direction with its own rule, not a relaxation of this one.
+  if new.status = 'pending' and exists (
     select 1 from public.team_memberships
     where user_id = new.user_id and status = 'pending'
   ) then
@@ -2984,8 +3043,16 @@ begin
 
   select team_id into v_current_team_id from public.athletes where user_id = new.user_id;
 
-  if v_current_team_id is not null and public.meet_in_progress() then
+  if new.status = 'pending' and v_current_team_id is not null and public.meet_in_progress() then
     raise exception 'Team transfers are locked until the current meet volume concludes.';
+  end if;
+
+  -- A captain may only invite an UNATTACHED athlete. Enforced here, not only
+  -- in the app's search query, because RLS's WITH CHECK can't cleanly join
+  -- against athletes' current state — this is the same defense-in-depth
+  -- pattern the transfer lock above already uses.
+  if new.status = 'invited' and v_current_team_id is not null then
+    raise exception 'This athlete is already on a team and cannot be invited to another.';
   end if;
 
   return new;
@@ -3836,14 +3903,41 @@ create policy "user_view_own_memberships" on public.team_memberships
     user_id = auth.uid() or public.is_team_captain_of(team_id)
   );
 
+-- Restricted to status = 'pending' — an athlete requesting to join. The
+-- opposite direction (a captain inviting someone) is the policy below;
+-- keeping them as two separate, narrowly-scoped policies means neither can
+-- accidentally be used to perform the other's action.
 drop policy if exists "user_request_membership" on public.team_memberships;
 create policy "user_request_membership" on public.team_memberships
-  for insert with check (user_id = auth.uid());
+  for insert with check (user_id = auth.uid() and status = 'pending');
 
+drop policy if exists "captain_invite_to_membership" on public.team_memberships;
+create policy "captain_invite_to_membership" on public.team_memberships
+  for insert with check (
+    status = 'invited' and user_id <> auth.uid() and public.is_team_captain_of(team_id)
+  );
+
+-- Scoped to status = 'pending' rows only: this is the captain
+-- accepting/rejecting an ATHLETE-INITIATED request. It must not also reach
+-- 'invited' rows — a captain updating their own invite to 'accepted' would
+-- silently bypass the invitee's actual consent, which is the entire point
+-- of the invited/accepted split. See invitee_accept_own_invitation below
+-- for the other direction.
 drop policy if exists "captain_manage_membership_status" on public.team_memberships;
 create policy "captain_manage_membership_status" on public.team_memberships
-  for update using (public.is_team_captain_of(team_id))
+  for update using (public.is_team_captain_of(team_id) and status = 'pending')
   with check (public.is_team_captain_of(team_id));
+
+-- The invitee accepting a captain-sent invite — the mirror of the policy
+-- above. Restricted to the 'invited' -> 'accepted' transition only; a
+-- decline is a DELETE (captain_or_requester_delete_membership below already
+-- allows user_id = auth.uid() to delete their own row regardless of
+-- status), matching the existing convention that a rejected/declined
+-- membership row is removed outright rather than kept as a rejected state.
+drop policy if exists "invitee_accept_own_invitation" on public.team_memberships;
+create policy "invitee_accept_own_invitation" on public.team_memberships
+  for update using (user_id = auth.uid() and status = 'invited')
+  with check (user_id = auth.uid() and status = 'accepted');
 
 -- "Reject" (captain) and "cancel" (the requester) both just delete the
 -- pending row — team_memberships only persists real states (pending,
@@ -3851,6 +3945,113 @@ create policy "captain_manage_membership_status" on public.team_memberships
 drop policy if exists "captain_or_requester_delete_membership" on public.team_memberships;
 create policy "captain_or_requester_delete_membership" on public.team_memberships
   for delete using (user_id = auth.uid() or public.is_team_captain_of(team_id));
+
+-- ---------------------------------------------------------------------------
+-- team_invite_links
+-- ---------------------------------------------------------------------------
+-- No select policy at all for anonymous/unauthenticated callers — a token's
+-- validity is only ever checked through redeem_team_invite_token() below,
+-- a SECURITY DEFINER function, never a direct table read. Signed-in callers
+-- who are not this team's captain/admin have no reason to browse this
+-- table either.
+alter table public.team_invite_links enable row level security;
+
+drop policy if exists "admins_full_access_invite_links" on public.team_invite_links;
+create policy "admins_full_access_invite_links" on public.team_invite_links
+  for all using (public.is_admin()) with check (public.is_admin());
+
+drop policy if exists "captain_view_own_invite_links" on public.team_invite_links;
+create policy "captain_view_own_invite_links" on public.team_invite_links
+  for select using (public.is_team_captain_of(team_id));
+
+drop policy if exists "captain_create_own_invite_link" on public.team_invite_links;
+create policy "captain_create_own_invite_link" on public.team_invite_links
+  for insert with check (public.is_team_captain_of(team_id) and created_by = auth.uid());
+
+-- Revoking sets revoked_at — the only column a captain may ever change here;
+-- use_count is only ever touched by redeem_team_invite_token(), which runs
+-- as the table owner and bypasses this policy entirely.
+drop policy if exists "captain_revoke_own_invite_link" on public.team_invite_links;
+create policy "captain_revoke_own_invite_link" on public.team_invite_links
+  for update using (public.is_team_captain_of(team_id))
+  with check (public.is_team_captain_of(team_id));
+
+-- Generates (or replaces) the ONE active invite link for a team. Revokes
+-- whatever link the team already had rather than accumulating an unbounded
+-- pile of dead tokens — "regenerate" reads as one link, not many.
+create or replace function public.create_team_invite_link(p_team_id uuid)
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_token text;
+begin
+  if not public.is_team_captain_of(p_team_id) then
+    raise exception 'Only this team''s captain may create an invite link.';
+  end if;
+
+  update public.team_invite_links
+  set revoked_at = now()
+  where team_id = p_team_id and revoked_at is null;
+
+  -- Two concatenated gen_random_uuid()s, dashes stripped — 64 hex chars from
+  -- Postgres core's own CSPRNG-backed UUID generator, not pgcrypto's
+  -- gen_random_bytes(). pgcrypto lives in the `extensions` schema on this
+  -- project, not `public`, so a security definer function pinned to
+  -- `search_path = public` cannot call it unqualified — confirmed by
+  -- actually running this against the local test database, not just reading
+  -- the extension list.
+  v_token := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+
+  insert into public.team_invite_links (team_id, token, created_by)
+  values (p_team_id, v_token, auth.uid());
+
+  return v_token;
+end;
+$$;
+
+-- Validates and redeems a token in one step, called from the registration
+-- flow right before the new athlete row is inserted. Returns the team_id to
+-- join, or null for a missing/revoked token — the caller treats null as
+-- "proceed with no team," never as an error, since a stale or mistyped link
+-- must not block someone from creating an account at all.
+create or replace function public.redeem_team_invite_token(p_token text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_team_id uuid;
+begin
+  update public.team_invite_links
+  set use_count = use_count + 1
+  where token = p_token and revoked_at is null
+  returning team_id into v_team_id;
+
+  return v_team_id;
+end;
+$$;
+
+-- Read-only preview of what a token leads to, for the registration page to
+-- show "You're joining <team name>" before the visitor submits — does NOT
+-- increment use_count (that only happens once, at actual redemption above).
+-- Team name only: nothing else about the team is anyone's business before
+-- they've even signed up.
+create or replace function public.preview_team_invite_token(p_token text)
+returns text
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select t.name
+  from public.team_invite_links l
+  join public.teams t on t.id = l.team_id
+  where l.token = p_token and l.revoked_at is null;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- team_announcements

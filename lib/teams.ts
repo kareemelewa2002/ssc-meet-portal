@@ -56,6 +56,29 @@ export function didTransferTeams(history: TeamHistoryEntry[]): boolean {
 /** The public team directory grid — always approved-only, regardless of
  * viewer role. Pending teams surface separately via fetchPendingTeams(),
  * in the admin approval queue, never mixed into the public listing. */
+/** Captain full names, keyed by team id — full_name is public everywhere
+ * (unlike email/phone, which stay behind visible_contacts()), so a plain
+ * embed is fine here; no separate contact-privacy query needed just to show
+ * "who captains this team" on the directory grid. */
+export async function fetchTeamCaptainNames(): Promise<Map<string, string>> {
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("teams")
+      .select("id, users ( full_name )")
+      .not("captain_id", "is", null);
+    if (error || !data) return new Map();
+    type RawRow = { id: string; users: { full_name: string } | { full_name: string }[] | null };
+    return new Map(
+      (data as unknown as RawRow[])
+        .map((row) => [row.id, firstOf(row.users)?.full_name])
+        .filter((entry): entry is [string, string] => !!entry[1]),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
 export async function fetchTeams(): Promise<FetchResult<TeamRow[]>> {
   return runQuery<TeamRow[]>(
     "Loading the team directory",

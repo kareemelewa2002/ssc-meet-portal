@@ -114,23 +114,29 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
 test.describe("Part 5 checklist — Parent Flow", () => {
   test("parent1 is linked to their U14 swimmer", async ({ page }) => {
     await login(page, CREDENTIALS.parent1);
-    // Parents don't have a dedicated roster page today — the linkage is
-    // proven via the admin approvals queue showing the parent's email
-    // against athlete01's pending/verified parent link, and via the
-    // AppHeader confirming the Parent role loaded correctly.
+    // /parent (app/parent/page.tsx) is the parent's dedicated dashboard —
+    // lists every linked child (fetchMyLinkedChildren) and links out to
+    // each child's real profile. Reached via the AppHeader's Role
+    // Dashboard link, proving both the menu wiring and the linkage.
     const trigger = page.locator('header button:has([data-slot="avatar"])').first();
     await expect(trigger).toBeVisible({ timeout: 15_000 });
     await trigger.click();
     await expect(page.getByText("Parent", { exact: true })).toBeVisible({ timeout: 10_000 });
+    const dashboardItem = page.locator('[data-slot="dropdown-menu-item"]', { hasText: "Role Dashboard" });
+    await expect(dashboardItem).toBeVisible({ timeout: 10_000 });
+    await dashboardItem.click();
+    await page.waitForURL("**/parent");
 
-    await page.goto("/athletes", { waitUntil: "domcontentloaded" });
-    const card = page.locator('main a[href^="/athletes/"]').first();
-    await expect(card).toBeVisible({ timeout: 20_000 });
-    await card.click();
+    // parent1 has 4 linked children (e2e/helpers.ts) — each a real,
+    // reachable profile link, not just a name.
+    const resultsLinks = page.getByRole("link", { name: /Results, PBs & leaderboard placements/i });
+    await expect(resultsLinks.first()).toBeVisible({ timeout: 20_000 });
+    await expect(resultsLinks).toHaveCount(4);
+
+    await resultsLinks.first().click();
     await page.waitForURL("**/athletes/**");
-    // The linked U14 swimmer's public profile must be reachable by the
-    // parent — proving the account exists and the linkage isn't broken.
-    // Scoped to <main> — AppHeader also renders an <h1> for the page title.
+    // The linked swimmer's public profile must be reachable by the parent —
+    // proving the account exists and the linkage isn't broken.
     await expect(page.locator("main h1")).toBeVisible({ timeout: 15_000 });
   });
 });

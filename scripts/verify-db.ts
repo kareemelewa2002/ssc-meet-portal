@@ -77,6 +77,18 @@ const REQUIRED_RPCS: RpcCheck[] = [
     body: { p_dob: "2013-12-25", p_on_date: "2026-08-02" },
     expect: { value: 13, because: "born 2013 -> turns 13 in 2026, pre-birthday" },
   },
+  // A bogus token must resolve to null, not error — these run unauthenticated
+  // (anon key), same as anyone previewing/redeeming a mistyped invite link.
+  {
+    name: "preview_team_invite_token",
+    body: { p_token: "not-a-real-token" },
+    expect: { value: null, because: "a bogus token previews to null, not an error" },
+  },
+  {
+    name: "redeem_team_invite_token",
+    body: { p_token: "not-a-real-token" },
+    expect: { value: null, because: "a bogus token redeems to null, not an error" },
+  },
 ];
 
 /** Every table the public/spectator surface reads. A 400 here is the stale
@@ -86,6 +98,7 @@ const SMOKE_TABLES = [
   "athletes",
   "teams",
   "team_memberships",
+  "team_invite_links",
   "meet_volumes",
   // Public read: the registration form quotes the individual race price from
   // here, so a 400 on this table takes registration down with it.

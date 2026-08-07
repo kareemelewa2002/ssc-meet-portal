@@ -15,6 +15,11 @@ const PROTECTED_ROUTES = [
   "/admin",
   "/admin/seeding",
   "/dashboard",
+  "/dashboard/team",
+  "/parent",
+  "/captain",
+  "/captain/roster",
+  "/captain/invitations",
 ];
 
 test.describe("Guest route guard", () => {

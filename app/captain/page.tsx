@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Mail, Users } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
 import { TeamRoster } from "@/components/dashboard/team-roster";
 import { RelayBuilder } from "@/components/captain/relay-builder";
@@ -60,6 +62,22 @@ export default function CaptainPage() {
           </p>
         ) : (
           <>
+            <div className="grid grid-cols-2 gap-3">
+              <Link
+                href="/captain/roster"
+                className="flex min-h-[64px] items-center gap-3 rounded-2xl border-brutal bg-card p-3 shadow-brutal-sm transition-colors hover:bg-muted/50"
+              >
+                <Users className="size-5 shrink-0" />
+                <span className="text-sm font-bold">Roster &amp; Contacts</span>
+              </Link>
+              <Link
+                href="/captain/invitations"
+                className="flex min-h-[64px] items-center gap-3 rounded-2xl border-brutal bg-card p-3 shadow-brutal-sm transition-colors hover:bg-muted/50"
+              >
+                <Mail className="size-5 shrink-0" />
+                <span className="text-sm font-bold">Invite Athletes</span>
+              </Link>
+            </div>
             <RelayBuilder teams={teams} />
             <RelayPayments teams={teams} />
             <TeamRoster />

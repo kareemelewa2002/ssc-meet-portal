@@ -247,7 +247,13 @@ export default function AthleteProfilePage() {
                   <TableHead>Age</TableHead>
                   <TableHead>Time</TableHead>
                   <TableHead>Points</TableHead>
-                  <TableHead>Place</TableHead>
+                  {/* Heat place (results.finish_place) vs. Leaderboard place
+                      (public.event_results.event_place, across every heat of
+                      the event on this athlete's own age-group board) are
+                      genuinely different numbers — winning heat 1 is not the
+                      same as winning the event. */}
+                  <TableHead>Heat</TableHead>
+                  <TableHead>Leaderboard</TableHead>
                   <TableHead>Split</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -265,6 +271,7 @@ export default function AthleteProfilePage() {
                         read as a real score of nought. */}
                     <TableCell className="font-mono">{formatWaPoints(row.waPoints)}</TableCell>
                     <TableCell>{row.finishPlace ?? "—"}</TableCell>
+                    <TableCell>{row.eventPlace ?? "—"}</TableCell>
                     <TableCell className="font-mono">
                       {formatTimeMs(row.splitTimeMs)}
                     </TableCell>

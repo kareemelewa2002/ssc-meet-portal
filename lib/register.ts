@@ -31,6 +31,12 @@ export interface AthleteBioInput {
   specialtyEvents: string[];
   profileImageUrl?: string | null;
   parentEmail?: string | null;
+  /** From a captain's shareable invite link (?invite=<token>). Resolved and
+   * consumed inside public.handle_new_auth_user() at signup time — see the
+   * SQL function's own comment for why this can't be a separate client-side
+   * step (no active session exists between signUp() and that trigger
+   * running, since email confirmation is required). */
+  teamInviteToken?: string | null;
 }
 
 export interface ValidationResult {
@@ -193,6 +199,7 @@ export async function registerAccount(
               parent_email: athleteBio.parentEmail?.trim() || null,
               profile_image_url: athleteBio.profileImageUrl || null,
               safety_accepted: athleteBio.safetyAccepted === true,
+              team_invite_token: athleteBio.teamInviteToken?.trim() || null,
             }
           : {}),
       },

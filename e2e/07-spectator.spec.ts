@@ -91,7 +91,15 @@ test.describe("Spectator, leaderboards & navigation", () => {
         roleLabel: "Athlete",
         dashboardHref: null,
       },
-      { credEmail: CREDENTIALS.parent1, who: "Parent", roleLabel: "Parent", dashboardHref: null },
+      {
+        credEmail: CREDENTIALS.parent1,
+        who: "Parent",
+        roleLabel: "Parent",
+        // A parent now has a real dashboard (linked children + payment
+        // status) — see app/parent/page.tsx and ROLE_DASHBOARD_HREF in
+        // app/profile/page.tsx.
+        dashboardHref: "/parent",
+      },
       {
         credEmail: CREDENTIALS.approvedOpen,
         who: "Unattached athlete",

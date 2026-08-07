@@ -18,7 +18,17 @@ import { DataErrorBanner } from "@/components/ui/data-error-banner";
  * athlete profile (/athletes/[id]), which already renders the full career
  * ledger (PBs and every entry).
  */
-export function TeamRoster({ className }: { className?: string }) {
+export function TeamRoster({
+  className,
+  hideJoinRequests,
+}: {
+  className?: string;
+  /** /captain/roster reuses this component for the roster+contacts view
+   * only — join requests already have their own place on the main captain
+   * dashboard, so showing them again here would just be the same queue
+   * rendered twice. */
+  hideJoinRequests?: boolean;
+}) {
   const [team, setTeam] = useState<TeamRow | null>(null);
   const [detail, setDetail] = useState<TeamDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,7 +107,7 @@ export function TeamRoster({ className }: { className?: string }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <DataErrorBanner error={dataError} subject="your team roster" />
-        <TeamJoinRequests teamId={team.id} />
+        {!hideJoinRequests && <TeamJoinRequests teamId={team.id} />}
         {roster.length === 0 ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Users className="size-4" />

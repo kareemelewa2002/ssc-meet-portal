@@ -3145,6 +3145,155 @@ exception when others then
 end $$;
 
 -- =============================================================================
+-- DB-61..DB-64 — captain-initiated team invites (team_memberships.status =
+-- 'invited') and shareable invite links (team_invite_links). The opposite
+-- direction from the athlete-initiated 'pending' requests DB-9/DB-12 already
+-- cover.
+-- =============================================================================
+
+-- DB-61: the Riptide captain can invite unattached athlete39; the Blue
+-- Marlins captain (not this team's captain) cannot.
+do $$
+declare
+  v_riptide_captain uuid := ssc_test.user_id('captain.riptide@ssc-demo.test');
+  v_marlins_captain uuid := ssc_test.user_id('captain.marlins@ssc-demo.test');
+  v_riptide uuid := ssc_test.team_id('Riptide Swim Club');
+  v_athlete39 uuid := ssc_test.user_id('athlete39@ssc-demo.test');
+  v_row_id uuid;
+  v_wrong_captain_blocked boolean := false;
+begin
+  delete from public.team_memberships where user_id = v_athlete39;
+
+  perform ssc_test.act_as(v_riptide_captain);
+  insert into public.team_memberships (team_id, user_id, status)
+    values (v_riptide, v_athlete39, 'invited')
+    returning id into v_row_id;
+  perform set_config('role', 'postgres', true);
+
+  perform ssc_test.check('DB-61', 'a team''s own captain can invite an unattached athlete',
+    v_row_id is not null, null);
+
+  begin
+    perform ssc_test.act_as(v_marlins_captain);
+    insert into public.team_memberships (team_id, user_id, status)
+      values (v_riptide, v_athlete39, 'invited');
+    -- unique(team_id, user_id) means this would fail on the duplicate row
+    -- alone even if RLS let it through — so this must never reach this line.
+  exception when others then
+    v_wrong_captain_blocked := true;
+  end;
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-61', 'a captain of a DIFFERENT team cannot invite into Riptide',
+    v_wrong_captain_blocked, null);
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-61', 'captain invite insert', false, sqlerrm);
+end $$;
+
+-- DB-62: the captain who sent an invite cannot accept it on the invitee's
+-- behalf; the invitee accepting it DOES sync athletes.team_id, the same
+-- trigger the athlete-initiated 'pending' -> 'accepted' path already uses.
+do $$
+declare
+  v_riptide_captain uuid := ssc_test.user_id('captain.riptide@ssc-demo.test');
+  v_athlete39 uuid := ssc_test.user_id('athlete39@ssc-demo.test');
+  v_riptide uuid := ssc_test.team_id('Riptide Swim Club');
+  v_row_id uuid;
+  v_self_accept_rows int;
+  v_team_after_self_accept uuid;
+  v_team_after_real_accept uuid;
+begin
+  select id into v_row_id from public.team_memberships
+   where team_id = v_riptide and user_id = v_athlete39 and status = 'invited';
+
+  perform ssc_test.act_as(v_riptide_captain);
+  update public.team_memberships set status = 'accepted' where id = v_row_id;
+  get diagnostics v_self_accept_rows = row_count;
+  perform set_config('role', 'postgres', true);
+  select team_id into v_team_after_self_accept from public.athletes where user_id = v_athlete39;
+
+  perform ssc_test.check('DB-62', 'the sending captain cannot self-accept their own invite',
+    v_self_accept_rows = 0 and v_team_after_self_accept is null,
+    format('rows updated=%s team_id=%s', v_self_accept_rows, v_team_after_self_accept));
+
+  perform ssc_test.act_as(v_athlete39);
+  update public.team_memberships set status = 'accepted' where id = v_row_id;
+  perform set_config('role', 'postgres', true);
+  select team_id into v_team_after_real_accept from public.athletes where user_id = v_athlete39;
+
+  perform ssc_test.check('DB-62', 'the invitee accepting syncs athletes.team_id',
+    v_team_after_real_accept = v_riptide, format('team_id=%s', v_team_after_real_accept));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-62', 'invite accept', false, sqlerrm);
+end $$;
+
+-- DB-63: a captain cannot invite an athlete who already has a team —
+-- athlete39 just landed on Riptide in DB-62; Blue Marlins' captain tries to
+-- invite them too and must be refused by
+-- enforce_team_membership_request_rules(), not merely produce a stray row.
+do $$
+declare
+  v_marlins_captain uuid := ssc_test.user_id('captain.marlins@ssc-demo.test');
+  v_marlins uuid := ssc_test.team_id('Blue Marlins');
+  v_athlete39 uuid := ssc_test.user_id('athlete39@ssc-demo.test');
+  v_blocked boolean := false;
+begin
+  begin
+    perform ssc_test.act_as(v_marlins_captain);
+    insert into public.team_memberships (team_id, user_id, status)
+      values (v_marlins, v_athlete39, 'invited');
+  exception when others then
+    v_blocked := true;
+  end;
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-63', 'a captain cannot invite an athlete who already has a team',
+    v_blocked, null);
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-63', 'invite-already-on-a-team guard', false, sqlerrm);
+end $$;
+
+-- DB-64: shareable invite links. Redeeming a real token resolves the team
+-- and increments use_count exactly once; previewing the same token does
+-- NOT increment it; a revoked link no longer redeems.
+do $$
+declare
+  v_captain uuid := ssc_test.user_id('captain.riptide@ssc-demo.test');
+  v_riptide uuid := ssc_test.team_id('Riptide Swim Club');
+  v_token text;
+  v_preview_result text;
+  v_use_count_after_preview int;
+  v_redeem_result uuid;
+  v_use_count_after_redeem int;
+  v_redeem_after_revoke uuid;
+begin
+  perform ssc_test.act_as(v_captain);
+  select public.create_team_invite_link(v_riptide) into v_token;
+  perform set_config('role', 'postgres', true);
+
+  select public.preview_team_invite_token(v_token) into v_preview_result;
+  select use_count into v_use_count_after_preview from public.team_invite_links where token = v_token;
+  perform ssc_test.check('DB-64', 'preview resolves the team name without incrementing use_count',
+    v_preview_result = 'Riptide Swim Club' and v_use_count_after_preview = 0,
+    format('preview=%s use_count=%s', v_preview_result, v_use_count_after_preview));
+
+  select public.redeem_team_invite_token(v_token) into v_redeem_result;
+  select use_count into v_use_count_after_redeem from public.team_invite_links where token = v_token;
+  perform ssc_test.check('DB-64', 'redeeming resolves the team_id and increments use_count once',
+    v_redeem_result = v_riptide and v_use_count_after_redeem = 1,
+    format('team_id=%s use_count=%s', v_redeem_result, v_use_count_after_redeem));
+
+  update public.team_invite_links set revoked_at = now() where token = v_token;
+  select public.redeem_team_invite_token(v_token) into v_redeem_after_revoke;
+  perform ssc_test.check('DB-64', 'a revoked link no longer redeems',
+    v_redeem_after_revoke is null, format('result=%s', v_redeem_after_revoke));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  perform ssc_test.check('DB-64', 'invite link create/preview/redeem/revoke', false, sqlerrm);
+end $$;
+
+-- =============================================================================
 -- Report
 -- =============================================================================
 \echo ''
