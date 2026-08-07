@@ -60,14 +60,14 @@ export default function HomePage() {
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 pb-16 sm:p-8">
         <header
           className={cn(
-            "flex items-start justify-between gap-3 rounded-3xl border-2 border-black p-4 shadow-brutal-lg sm:p-6",
+            "flex items-start justify-between gap-3 rounded-3xl border-2 border-border-strong p-4 shadow-brutal-lg sm:p-6",
             outdoorMode ? "bg-black" : "bg-primary/5 backdrop-blur-md",
           )}
         >
           <div className="flex items-center gap-3">
             <div
               className={cn(
-                "flex size-12 shrink-0 items-center justify-center rounded-2xl border-2 border-black shadow-brutal-sm sm:size-14",
+                "flex size-12 shrink-0 items-center justify-center rounded-2xl border-2 border-border-strong shadow-brutal-sm sm:size-14",
                 outdoorMode ? "bg-yellow-300 text-black" : "bg-primary text-primary-foreground",
               )}
             >
@@ -114,7 +114,7 @@ export default function HomePage() {
                 >
                   <div
                     className={cn(
-                      "flex shrink-0 items-center justify-center rounded-xl border-2 border-black",
+                      "flex shrink-0 items-center justify-center rounded-xl border-2 border-border-strong",
                       isHero ? "size-12" : "size-10",
                       outdoorMode ? "bg-yellow-300 text-black" : "bg-muted text-foreground",
                     )}
@@ -171,7 +171,7 @@ export default function HomePage() {
                 <CardContent className="flex items-center gap-3 py-4">
                   <div
                     className={cn(
-                      "flex size-11 shrink-0 items-center justify-center rounded-xl border-2 border-black",
+                      "flex size-11 shrink-0 items-center justify-center rounded-xl border-2 border-border-strong",
                       outdoorMode ? "bg-yellow-300 text-black" : "bg-primary text-primary-foreground",
                     )}
                   >

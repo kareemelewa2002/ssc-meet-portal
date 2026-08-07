@@ -4,18 +4,30 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Radar } from "lucide-react";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
-import { TelemetryThemeScope } from "@/components/telemetry/telemetry-theme-scope";
 import { HeatLaneVisualizer } from "@/components/telemetry/heat-lane-visualizer";
 import { FilterPillNav } from "@/components/telemetry/filter-pill-nav";
 import { TelemetryLeaderboard } from "@/components/telemetry/telemetry-leaderboard";
-import { SwimmerModal, type SwimmerModalTarget } from "@/components/telemetry/swimmer-modal";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  SwimmerModal,
+  type SwimmerModalTarget,
+} from "@/components/telemetry/swimmer-modal";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { heatTitle } from "@/lib/format";
 import { fetchVolumeByNumber, fetchSessionsForVolume } from "@/lib/volumes";
 import { fetchMeetSettings } from "@/lib/meet-settings";
 import { fetchWaBaseTimes, type WaBaseTimes } from "@/lib/wa-points";
-import { fetchLiveEventsForSession, type LiveEventView, type LiveLaneView } from "@/lib/live-heats";
+import {
+  fetchLiveEventsForSession,
+  type LiveEventView,
+  type LiveLaneView,
+} from "@/lib/live-heats";
 import {
   ALL_FILTERS,
   applyTelemetryFilters,
@@ -54,7 +66,9 @@ export function TelemetryClient({ volId }: { volId: string }) {
   const [eventId, setEventId] = useState<string | null>(null);
   const [heatIndex, setHeatIndex] = useState(0);
   const [filters, setFilters] = useState<TelemetryFilters>(ALL_FILTERS);
-  const [modalTarget, setModalTarget] = useState<SwimmerModalTarget | null>(null);
+  const [modalTarget, setModalTarget] = useState<SwimmerModalTarget | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
 
@@ -111,9 +125,12 @@ export function TelemetryClient({ volId }: { volId: string }) {
   // falling back to the first surviving event here means there is never a
   // frame where the board renders against an event the filters excluded.
   const selectedEvent =
-    filteredEvents.find((e) => e.eventId === eventId) ?? filteredEvents[0] ?? null;
+    filteredEvents.find((e) => e.eventId === eventId) ??
+    filteredEvents[0] ??
+    null;
   const selectedHeat =
-    selectedEvent?.heats[Math.min(heatIndex, selectedEvent.heats.length - 1)] ?? null;
+    selectedEvent?.heats[Math.min(heatIndex, selectedEvent.heats.length - 1)] ??
+    null;
 
   const standings = useMemo(
     () => (selectedEvent ? buildEventStandings(selectedEvent, baseTimes) : []),
@@ -134,7 +151,8 @@ export function TelemetryClient({ volId }: { volId: string }) {
       laneNumber: lane.laneNumber,
       seedTimeMs: lane.seedTimeMs,
       isNt: lane.isNt,
-      officialTimeMs: lane.result?.status === "published" ? lane.result.officialTimeMs : null,
+      officialTimeMs:
+        lane.result?.status === "published" ? lane.result.officialTimeMs : null,
       waPoints: null,
     });
   }
@@ -159,168 +177,208 @@ export function TelemetryClient({ volId }: { volId: string }) {
   }
 
   return (
-    <TelemetryThemeScope>
-      <main className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-3 pb-24 sm:p-6">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Radar className="size-5" style={{ color: "var(--color-neon-cyan)" }} />
-            <h1 className="text-xl font-extrabold tracking-tight">
-              {volume?.name ?? "Loading…"} — Telemetry
-            </h1>
-          </div>
-          <OutdoorModeToggle />
+    <main className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-3 pb-24 sm:p-6">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Radar
+            className="size-5"
+            style={{ color: "var(--color-neon-cyan)" }}
+          />
+          <h1 className="text-xl font-extrabold tracking-tight">
+            {volume?.name ?? "Loading…"} — Telemetry
+          </h1>
         </div>
+        <OutdoorModeToggle />
+      </div>
 
-        <DataErrorBanner error={dataError} subject="this meet's telemetry" />
+      <DataErrorBanner error={dataError} subject="this meet's telemetry" />
 
-        {!loading && volume && (
-          <>
-            <div className="flex flex-wrap gap-3">
-              <Select value={sessionId ?? ""} onValueChange={(v) => setSessionId(v)}>
-                <SelectTrigger className="h-auto min-h-[48px] min-w-[9rem]" aria-label="Session">
-                  {/* Select.Value renders the raw value string unless given a
+      {!loading && volume && (
+        <>
+          <div className="flex flex-wrap gap-3">
+            <Select
+              value={sessionId ?? ""}
+              onValueChange={(v) => setSessionId(v)}
+            >
+              <SelectTrigger
+                className="h-auto min-h-[48px] min-w-[9rem]"
+                aria-label="Session"
+              >
+                {/* Select.Value renders the raw value string unless given a
                       render function — the same gotcha FilterSelect already
                       works around (components/events/filter-select.tsx). */}
-                  <SelectValue>
-                    {() => {
-                      const s = sessions.find((s) => s.id === sessionId);
-                      return s ? `Session ${s.session_number}` : "Session";
-                    }}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {sessions.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      Session {s.session_number}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <SelectValue>
+                  {() => {
+                    const s = sessions.find((s) => s.id === sessionId);
+                    return s ? `Session ${s.session_number}` : "Session";
+                  }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {sessions.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    Session {s.session_number}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-              <Select
-                value={selectedEvent?.eventId ?? ""}
-                onValueChange={(v) => {
-                  setEventId(v);
-                  setHeatIndex(0);
-                }}
+            <Select
+              value={selectedEvent?.eventId ?? ""}
+              onValueChange={(v) => {
+                setEventId(v);
+                setHeatIndex(0);
+              }}
+            >
+              <SelectTrigger
+                className="h-auto min-h-[48px] min-w-[12rem] flex-1"
+                aria-label="Event"
               >
-                <SelectTrigger className="h-auto min-h-[48px] min-w-[12rem] flex-1" aria-label="Event">
-                  <SelectValue>{() => selectedEvent?.name ?? "Event"}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {filteredEvents.map((e) => (
-                    <SelectItem key={e.eventId} value={e.eventId}>
-                      {e.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                <SelectValue>
+                  {() => selectedEvent?.name ?? "Event"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {filteredEvents.map((e) => (
+                  <SelectItem key={e.eventId} value={e.eventId}>
+                    {e.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-              {selectedEvent && selectedEvent.heats.length > 1 && (
-                <Select value={String(heatIndex)} onValueChange={(v) => setHeatIndex(Number(v))}>
-                  <SelectTrigger className="h-auto min-h-[48px] min-w-[8rem]" aria-label="Heat">
-                    {/* heatTitle, not the bare number: heat_number restarts
+            {selectedEvent && selectedEvent.heats.length > 1 && (
+              <Select
+                value={String(heatIndex)}
+                onValueChange={(v) => setHeatIndex(Number(v))}
+              >
+                <SelectTrigger
+                  className="h-auto min-h-[48px] min-w-[8rem]"
+                  aria-label="Heat"
+                >
+                  {/* heatTitle, not the bare number: heat_number restarts
                         per age board AND gender, so a plain "Heat 1" appears
                         several times in one event's list and picks the wrong
                         heat. */}
-                    <SelectValue>{() => (selectedHeat ? heatTitle(selectedHeat) : "Heat")}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedEvent.heats.map((h, i) => (
-                      <SelectItem key={h.heatId} value={String(i)}>
-                        {heatTitle(h)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
+                  <SelectValue>
+                    {() => (selectedHeat ? heatTitle(selectedHeat) : "Heat")}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedEvent.heats.map((h, i) => (
+                    <SelectItem key={h.heatId} value={String(i)}>
+                      {heatTitle(h)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
 
-            <div className="flex flex-wrap gap-3">
-              {options.genders.length > 1 && (
-                <FilterPillNav
-                  label="Gender"
-                  value={filters.gender}
-                  onChange={(gender) =>
-                    setFilters((prev) => ({ ...prev, gender: gender as TelemetryFilters["gender"] }))
-                  }
-                  options={[
-                    { value: "all", label: "All" },
-                    ...options.genders.map((g) => ({ value: g, label: GENDER_LABELS[g] ?? g })),
-                  ]}
-                />
-              )}
-              {options.strokes.length > 1 && (
-                <FilterPillNav
-                  label="Stroke"
-                  value={filters.stroke}
-                  onChange={(stroke) => setFilters((prev) => ({ ...prev, stroke }))}
-                  options={[
-                    { value: "all", label: "All" },
-                    ...options.strokes.map((s) => ({ value: s, label: s })),
-                  ]}
-                />
-              )}
-              {options.distances.length > 1 && (
-                <FilterPillNav
-                  label="Distance"
-                  value={filters.distance}
-                  onChange={(distance) => setFilters((prev) => ({ ...prev, distance }))}
-                  options={[
-                    { value: "all", label: "All" },
-                    ...options.distances.map((d) => ({ value: String(d), label: `${d}m` })),
-                  ]}
-                />
-              )}
-            </div>
-          </>
-        )}
-
-        {loading ? (
-          <p className="text-sm text-[var(--muted-foreground)]">Loading…</p>
-        ) : selectedEvent && selectedHeat ? (
-          <>
-            <motion.div
-              key={selectedHeat.heatId}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.25 }}
-            >
-              <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--muted-foreground)] uppercase">
-                {selectedEvent.distanceM}m {selectedEvent.stroke} · {heatTitle(selectedHeat)}
-              </p>
-              <HeatLaneVisualizer
-                heat={selectedHeat}
-                laneCount={laneCount}
-                stroke={selectedEvent.stroke}
-                distanceM={selectedEvent.distanceM}
-                onSelectLane={openFromLane}
+          <div className="flex flex-wrap gap-3">
+            {options.genders.length > 1 && (
+              <FilterPillNav
+                label="Gender"
+                value={filters.gender}
+                onChange={(gender) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    gender: gender as TelemetryFilters["gender"],
+                  }))
+                }
+                options={[
+                  { value: "all", label: "All" },
+                  ...options.genders.map((g) => ({
+                    value: g,
+                    label: GENDER_LABELS[g] ?? g,
+                  })),
+                ]}
               />
-            </motion.div>
+            )}
+            {options.strokes.length > 1 && (
+              <FilterPillNav
+                label="Stroke"
+                value={filters.stroke}
+                onChange={(stroke) =>
+                  setFilters((prev) => ({ ...prev, stroke }))
+                }
+                options={[
+                  { value: "all", label: "All" },
+                  ...options.strokes.map((s) => ({ value: s, label: s })),
+                ]}
+              />
+            )}
+            {options.distances.length > 1 && (
+              <FilterPillNav
+                label="Distance"
+                value={filters.distance}
+                onChange={(distance) =>
+                  setFilters((prev) => ({ ...prev, distance }))
+                }
+                options={[
+                  { value: "all", label: "All" },
+                  ...options.distances.map((d) => ({
+                    value: String(d),
+                    label: `${d}m`,
+                  })),
+                ]}
+              />
+            )}
+          </div>
+        </>
+      )}
 
-            <section aria-label="Event standings">
-              <h2 className="mb-2 text-xs font-semibold tracking-wide text-[var(--muted-foreground)] uppercase">
-                Standings · all heats
-              </h2>
-              <TelemetryLeaderboard standings={standings} onOpenProfile={openFromStanding} />
-            </section>
-          </>
-        ) : (
-          !dataError && (
-            <p className="text-sm text-[var(--muted-foreground)]">
-              {events.length === 0
-                ? "No events seeded for this session yet."
-                : "No events match these filters."}
+      {loading ? (
+        <p className="text-sm text-[var(--muted-foreground)]">Loading…</p>
+      ) : selectedEvent && selectedHeat ? (
+        <>
+          <motion.div
+            key={selectedHeat.heatId}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.25 }}
+          >
+            <p className="mb-2 text-xs font-semibold tracking-wide text-[var(--muted-foreground)] uppercase">
+              {selectedEvent.distanceM}m {selectedEvent.stroke} ·{" "}
+              {heatTitle(selectedHeat)}
             </p>
-          )
-        )}
+            <HeatLaneVisualizer
+              heat={selectedHeat}
+              laneCount={laneCount}
+              stroke={selectedEvent.stroke}
+              distanceM={selectedEvent.distanceM}
+              onSelectLane={openFromLane}
+            />
+          </motion.div>
 
-        <AnimatePresence>
-          {modalTarget && (
-            <SwimmerModal target={modalTarget} onClose={() => setModalTarget(null)} />
-          )}
-        </AnimatePresence>
-      </main>
-    </TelemetryThemeScope>
+          <section aria-label="Event standings">
+            <h2 className="mb-2 text-xs font-semibold tracking-wide text-[var(--muted-foreground)] uppercase">
+              Standings · all heats
+            </h2>
+            <TelemetryLeaderboard
+              standings={standings}
+              onOpenProfile={openFromStanding}
+            />
+          </section>
+        </>
+      ) : (
+        !dataError && (
+          <p className="text-sm text-[var(--muted-foreground)]">
+            {events.length === 0
+              ? "No events seeded for this session yet."
+              : "No events match these filters."}
+          </p>
+        )
+      )}
+
+      <AnimatePresence>
+        {modalTarget && (
+          <SwimmerModal
+            target={modalTarget}
+            onClose={() => setModalTarget(null)}
+          />
+        )}
+      </AnimatePresence>
+    </main>
   );
 }

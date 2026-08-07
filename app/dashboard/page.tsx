@@ -148,7 +148,7 @@ export default function DashboardPage() {
               {board.swimOff && (
                 // The last qualifying place is tied. Nobody is listed as
                 // holding it until they have raced for it.
-                <p className="mt-2 rounded-md border-2 border-black bg-neon-orange/15 p-2 text-xs">
+                <p className="mt-2 rounded-md border-2 border-border-strong bg-neon-orange/15 p-2 text-xs">
                   <span className="font-bold">Swim-off required.</span>{" "}
                   {board.swimOff.athletes.map((a) => a.athleteName).join(" and ")} are level on{" "}
                   {formatTimeMs(board.swimOff.contestedTimeMs)}, contesting{" "}

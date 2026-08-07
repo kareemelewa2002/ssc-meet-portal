@@ -36,7 +36,7 @@ export function PerformanceBadges({
           "h-5 gap-1 px-1.5 text-[10px] font-bold tracking-wide uppercase",
           outdoorMode
             ? "border-yellow-300 bg-yellow-300 text-black"
-            : "border-black bg-neon-lime text-black",
+            : "border-border-strong bg-neon-lime text-black",
           className,
         )}
       >

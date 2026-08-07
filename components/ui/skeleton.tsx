@@ -19,7 +19,7 @@ function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
       data-slot="skeleton"
       aria-hidden="true"
       className={cn(
-        "relative overflow-hidden rounded-lg border-2 border-black/15 bg-muted",
+        "relative overflow-hidden rounded-lg border-2 border-border-strong/15 bg-muted",
         // The travelling band. Starts off-plate (-translate-x-full) and is
         // driven across by animate-scan.
         "after:absolute after:inset-y-0 after:left-0 after:w-1/3 after:-translate-x-full",
@@ -35,7 +35,7 @@ function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
 /** Roster / directory rows: avatar + two text lines + a trailing chip. */
 function SkeletonRow({ className }: { className?: string }) {
   return (
-    <div className={cn("flex items-center gap-3 rounded-xl border-2 border-black/15 p-3", className)}>
+    <div className={cn("flex items-center gap-3 rounded-xl border-2 border-border-strong/15 p-3", className)}>
       <Skeleton className="size-10 shrink-0 rounded-full" />
       <div className="min-w-0 flex-1 space-y-2">
         <Skeleton className="h-3.5 w-2/5" />
@@ -49,7 +49,7 @@ function SkeletonRow({ className }: { className?: string }) {
 /** Heat sheet lanes: lane badge, swimmer, time readout. */
 function SkeletonLane({ className }: { className?: string }) {
   return (
-    <div className={cn("flex items-center gap-3 rounded-xl border-2 border-black/15 p-3", className)}>
+    <div className={cn("flex items-center gap-3 rounded-xl border-2 border-border-strong/15 p-3", className)}>
       <Skeleton className="size-11 shrink-0 rounded-lg" />
       <div className="min-w-0 flex-1 space-y-2">
         <Skeleton className="h-3.5 w-1/3" />
@@ -63,7 +63,7 @@ function SkeletonLane({ className }: { className?: string }) {
 /** Bento KPI tile: label over a large figure. */
 function SkeletonStat({ className }: { className?: string }) {
   return (
-    <div className={cn("space-y-2 rounded-2xl border-2 border-black/15 p-4", className)}>
+    <div className={cn("space-y-2 rounded-2xl border-2 border-border-strong/15 p-4", className)}>
       <Skeleton className="h-3 w-1/2" />
       <Skeleton className="h-7 w-1/3" />
     </div>

@@ -388,13 +388,13 @@ function RegisterPageInner() {
           <CardDescription>Both are required to create an account.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          <label className="flex cursor-pointer items-start gap-3 rounded-xl border-2 border-black p-3">
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border-2 border-border-strong p-3">
             <input
               type="checkbox"
               id="acceptPrivacy"
               checked={acceptPrivacy}
               onChange={(e) => setAcceptPrivacy(e.target.checked)}
-              className="mt-0.5 size-5 shrink-0 accent-black"
+              className="mt-0.5 size-5 shrink-0 accent-primary"
             />
             <span className="text-sm">
               <strong className="font-bold">Privacy.</strong> I agree that my name, age group, team
@@ -404,13 +404,13 @@ function RegisterPageInner() {
             </span>
           </label>
 
-          <label className="flex cursor-pointer items-start gap-3 rounded-xl border-2 border-black p-3">
+          <label className="flex cursor-pointer items-start gap-3 rounded-xl border-2 border-border-strong p-3">
             <input
               type="checkbox"
               id="acceptSafety"
               checked={acceptSafety}
               onChange={(e) => setAcceptSafety(e.target.checked)}
-              className="mt-0.5 size-5 shrink-0 accent-black"
+              className="mt-0.5 size-5 shrink-0 accent-primary"
             />
             <span className="text-sm">
               <strong className="font-bold">Safety & belongings.</strong> I understand that

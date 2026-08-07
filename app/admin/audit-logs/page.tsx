@@ -179,10 +179,10 @@ export default function AdminAuditLogsPage() {
                 No admin actions match these filters.
               </p>
             ) : (
-              <div className="overflow-x-auto rounded-lg border-2 border-black">
+              <div className="overflow-x-auto rounded-lg border-2 border-border-strong">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b-2 border-black bg-muted/50 text-left">
+                    <tr className="border-b-2 border-border-strong bg-muted/50 text-left">
                       <th className="w-8 p-2" />
                       <th className="p-2 font-semibold">Timestamp</th>
                       <th className="p-2 font-semibold">Admin</th>
@@ -196,7 +196,7 @@ export default function AdminAuditLogsPage() {
                       return (
                         <Fragment key={row.id}>
                           <tr
-                            className="cursor-pointer border-b border-black/10 last:border-b-0 hover:bg-muted/30"
+                            className="cursor-pointer border-b border-border-strong/10 last:border-b-0 hover:bg-muted/30"
                             onClick={() => setExpandedId(expanded ? null : row.id)}
                           >
                             <td className="p-2 align-top text-muted-foreground">
@@ -226,10 +226,10 @@ export default function AdminAuditLogsPage() {
                             </td>
                           </tr>
                           {expanded && (
-                            <tr className="border-b border-black/10 bg-muted/20">
+                            <tr className="border-b border-border-strong/10 bg-muted/20">
                               <td />
                               <td colSpan={4} className="p-3">
-                                <pre className="overflow-x-auto rounded-md border border-black/20 bg-background p-3 font-mono text-xs whitespace-pre-wrap">
+                                <pre className="overflow-x-auto rounded-md border border-border-strong/20 bg-background p-3 font-mono text-xs whitespace-pre-wrap">
                                   {JSON.stringify(row.details, null, 2)}
                                 </pre>
                               </td>

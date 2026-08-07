@@ -320,7 +320,7 @@ export default function TeamsPage() {
                     // only outcome is an error toast.
                     <Badge
                       variant="outline"
-                      className="w-full justify-center gap-1.5 border-2 border-black bg-neon-orange/15 py-2 text-[11px]"
+                      className="w-full justify-center gap-1.5 border-2 border-border-strong bg-neon-orange/15 py-2 text-[11px]"
                     >
                       <Lock className="size-3.5" />
                       Transfers Locked Until Meet Ends
@@ -364,7 +364,7 @@ export default function TeamsPage() {
               <div>
                 <p className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Captain</p>
                 {rosterDetail?.captain ? (
-                  <div className="rounded-lg border-2 border-black p-3 text-sm">
+                  <div className="rounded-lg border-2 border-border-strong p-3 text-sm">
                     <p className="font-medium">{rosterDetail.captain.fullName}</p>
                     {rosterDetail.captain.email || rosterDetail.captain.phone ? (
                       <div className="mt-1 space-y-0.5 text-muted-foreground">

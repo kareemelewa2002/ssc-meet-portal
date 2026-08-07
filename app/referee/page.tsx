@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { HeatResultEntry } from "@/components/referee/heat-result-entry";
 import { FilterSelect } from "@/components/events/filter-select";
 import { AppHeader } from "@/components/layout/app-header";
+import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { SkinsDeckSection } from "@/components/referee/skins-deck-section";
 import { resolveSkinsEventId } from "@/lib/skins-qualification";
 import { createClient } from "@/lib/supabase/client";
@@ -88,7 +89,13 @@ interface RefereeLane {
  * directly (see enforce_result_publish in supabase/schema.sql).
  */
 export default function RefereePage() {
-  const [outdoorMode, setOutdoorMode] = useState(false);
+  // Was a page-local useState(false) — meant this page's own toggle never
+  // reached app/globals.css's :root[data-outdoor="true"] escalation (that
+  // needs the shared context, mirrored onto <html> by
+  // OutdoorModeHtmlSync), even though every other outdoor-mode toggle in
+  // the app already used it. All the black/yellow styling below is
+  // unchanged; only where the boolean and its setter come from changed.
+  const { outdoorMode, toggle: toggleOutdoorMode } = useOutdoorMode();
   // Skins is a race in Session 3 like any other, so it is listed in the deck
   // in running order rather than hidden behind a tab of its own. Its position
   // comes from the event itself, so reordering the programme moves it too.
@@ -361,7 +368,7 @@ export default function RefereePage() {
           className="size-11 min-h-[48px] min-w-[48px]"
           aria-pressed={outdoorMode}
           aria-label="Toggle high-contrast outdoor mode"
-          onClick={() => setOutdoorMode((v) => !v)}
+          onClick={toggleOutdoorMode}
         >
           <Sun className="size-5" />
         </Button>

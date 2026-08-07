@@ -179,7 +179,7 @@ export function AdminKpiStrip({ className }: { className?: string }) {
           <div
             key={t.key}
             className={cn(
-              "rounded-2xl border-2 border-black bg-card p-3 transition-all sm:p-4",
+              "rounded-2xl border-2 border-border-strong bg-card p-3 transition-all sm:p-4",
               t.active ? t.glow : "shadow-brutal-sm",
             )}
           >

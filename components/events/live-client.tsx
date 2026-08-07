@@ -61,7 +61,7 @@ function LaneRow({
     >
       <div
         className={cn(
-          "flex min-w-[48px] items-center justify-center rounded-lg border-2 border-black px-2 py-1.5 font-telemetry text-sm font-extrabold",
+          "flex min-w-[48px] items-center justify-center rounded-lg border-2 border-border-strong px-2 py-1.5 font-telemetry text-sm font-extrabold",
           outdoorMode ? "bg-yellow-300 text-black" : "bg-muted",
         )}
       >
@@ -175,7 +175,7 @@ function LaneRow({
                   // series' Progress scoring, so it gets the lime glow.
                   <span
                     className={cn(
-                      "rounded-full border-2 border-black px-1.5 font-telemetry text-[10px] font-bold",
+                      "rounded-full border-2 border-border-strong px-1.5 font-telemetry text-[10px] font-bold",
                       drop > 0 ? "bg-neon-lime text-black" : "bg-neon-orange text-black",
                     )}
                   >
@@ -476,7 +476,7 @@ export function LiveEventsClient({
                   "gap-1.5 font-telemetry tracking-widest uppercase",
                   outdoorMode
                     ? "border-yellow-300 bg-yellow-300 text-black"
-                    : "border-black bg-neon-cyan text-black",
+                    : "border-border-strong bg-neon-cyan text-black",
                 )}
               >
                 <span className="animate-pulse-ring inline-flex size-2 rounded-full bg-black" />

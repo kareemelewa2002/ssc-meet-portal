@@ -67,7 +67,7 @@ export function AppHeader({ title, className }: AppHeaderProps) {
   return (
     <header
       className={cn(
-        "sticky top-0 z-30 flex min-h-[56px] items-center justify-between gap-2 border-b-2 border-black bg-background/80 px-2 py-2 backdrop-blur-md sm:px-6",
+        "sticky top-0 z-30 flex min-h-[56px] items-center justify-between gap-2 border-b-2 border-border-strong bg-background/80 px-2 py-2 backdrop-blur-md sm:px-6",
         className,
       )}
     >

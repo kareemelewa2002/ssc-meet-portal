@@ -82,7 +82,7 @@ export function SafetyAcceptances({ className }: { className?: string }) {
           </p>
         ) : (
           <>
-            <div className="rounded-xl border-2 border-black bg-muted/40 p-3 text-sm">
+            <div className="rounded-xl border-2 border-border-strong bg-muted/40 p-3 text-sm">
               I confirm that my child is <strong>fully responsible for their own safety and for
               their personal belongings</strong> on event days, and that SSC accepts no liability
               for loss, damage or injury at the venue. I also agree that their name, age group,
@@ -92,7 +92,7 @@ export function SafetyAcceptances({ className }: { className?: string }) {
             {pending.map((row) => (
               <div
                 key={row.athleteId}
-                className="flex flex-col gap-2 rounded-xl border-2 border-black p-3 sm:flex-row sm:items-center sm:justify-between"
+                className="flex flex-col gap-2 rounded-xl border-2 border-border-strong p-3 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div className="min-w-0">
                   <p className="truncate font-bold">{row.fullName}</p>

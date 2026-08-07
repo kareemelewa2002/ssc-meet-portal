@@ -217,7 +217,7 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
         </div>
 
         {event && (
-          <div className="space-y-3 rounded-xl border-2 border-black p-3">
+          <div className="space-y-3 rounded-xl border-2 border-border-strong p-3">
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <Badge>{need.male} male</Badge>
               <Badge>{need.female} female</Badge>
@@ -280,7 +280,7 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
           <div className="space-y-2">
             <p className="text-sm font-bold">Entered for this relay</p>
             {squadsForEvent.map((squad) => (
-              <div key={squad.id} className="space-y-2 rounded-xl border-2 border-black p-3">
+              <div key={squad.id} className="space-y-2 rounded-xl border-2 border-border-strong p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge>Squad {squad.squadLetter}</Badge>

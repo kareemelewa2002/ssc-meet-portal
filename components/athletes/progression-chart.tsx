@@ -110,7 +110,7 @@ function EventTrend({
   const improved = (points[points.length - 1].officialTimeMs as number) < (points[0].officialTimeMs as number);
 
   return (
-    <div className="rounded-xl border-2 border-black p-3 shadow-brutal-sm">
+    <div className="rounded-xl border-2 border-border-strong p-3 shadow-brutal-sm">
       <div className="mb-1 flex items-baseline justify-between gap-2">
         <p className="truncate text-xs font-bold uppercase tracking-wide">
           {distanceM}m {stroke}
@@ -128,7 +128,7 @@ function EventTrend({
         <path d={path} fill="none" stroke="currentColor" strokeWidth={2} className="text-neon-cyan" />
         {coords.map((c, i) => (
           <g key={i}>
-            <circle cx={c.x} cy={c.y} r={3.5} className="fill-black" />
+            <circle cx={c.x} cy={c.y} r={3.5} className="fill-foreground" />
             <title>
               Vol. {c.point.volumeNumber} — {formatTimeMs(c.point.officialTimeMs as number)}
             </title>

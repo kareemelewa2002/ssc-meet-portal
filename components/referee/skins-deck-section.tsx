@@ -195,7 +195,7 @@ export function SkinsDeckSection({
             ))}
 
             {step.kind === "swim-off" && (
-              <div className="space-y-2 rounded-md border-2 border-black bg-neon-orange/15 px-3 py-2 text-sm">
+              <div className="space-y-2 rounded-md border-2 border-border-strong bg-neon-orange/15 px-3 py-2 text-sm">
                 <p className="font-bold">Swim-off required to settle {roundLabel(currentRound)}</p>
                 <p>
                   {step.athletes.length} swimmers finished level on the last qualifying place,
@@ -229,7 +229,7 @@ export function SkinsDeckSection({
             )}
 
             {step.kind === "complete" && (
-              <div className="flex items-center gap-2 rounded-md border-2 border-black bg-primary/10 px-3 py-2 text-sm font-bold">
+              <div className="flex items-center gap-2 rounded-md border-2 border-border-strong bg-primary/10 px-3 py-2 text-sm font-bold">
                 <Trophy className="size-4 shrink-0" />
                 {step.winners.length > 1
                   ? `Dead heat — ${step.winners.length} winners share the title.`

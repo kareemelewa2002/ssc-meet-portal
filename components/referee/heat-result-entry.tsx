@@ -429,7 +429,7 @@ export function HeatResultEntry({
                         return (
                           <span
                             className={cn(
-                              "shrink-0 rounded-full border-2 border-black px-2 py-0.5 text-xs font-extrabold",
+                              "shrink-0 rounded-full border-2 border-border-strong px-2 py-0.5 text-xs font-extrabold",
                               delta > 0 ? "bg-neon-lime text-black" : "bg-neon-orange text-black",
                             )}
                           >
@@ -507,7 +507,7 @@ export function HeatResultEntry({
           // but disabled rather than absent: a missing button reads as "not
           // loaded yet", whereas a greyed one with a reason reads as a rule.
           <div className="space-y-2">
-            <p className="rounded-md border-2 border-black bg-neon-lime/15 p-3 text-sm">
+            <p className="rounded-md border-2 border-border-strong bg-neon-lime/15 p-3 text-sm">
               <span className="font-bold">Already published by Admin.</span> These times are live on
               the results page and leaderboards. Ask an Admin to correct a time from the review
               queue.
@@ -527,7 +527,7 @@ export function HeatResultEntry({
           // Sent, not yet published. Editing is allowed but deliberate: the
           // card reads as submitted until the user chooses to reopen it.
           <div className="space-y-2">
-            <p className="rounded-md border-2 border-black bg-neon-orange/15 p-3 text-sm">
+            <p className="rounded-md border-2 border-border-strong bg-neon-orange/15 p-3 text-sm">
               <span className="font-bold">
                 {alreadyPublished
                   ? "Published, and live on the results page."

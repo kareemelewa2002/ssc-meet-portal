@@ -122,7 +122,7 @@ export function TeamRoster({ className }: { className?: string }) {
                   {member.email && (
                     <a
                       href={`mailto:${member.email}`}
-                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border-2 border-black bg-background px-2.5 text-xs font-semibold shadow-brutal-sm transition-all hover:bg-muted active:translate-y-[2px] active:shadow-none"
+                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border-2 border-border-strong bg-background px-2.5 text-xs font-semibold shadow-brutal-sm transition-all hover:bg-muted active:translate-y-[2px] active:shadow-none"
                     >
                       <Mail className="size-3.5" />
                       {member.email}
@@ -131,7 +131,7 @@ export function TeamRoster({ className }: { className?: string }) {
                   {member.phone && (
                     <a
                       href={`tel:${member.phone}`}
-                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border-2 border-black bg-background px-2.5 text-xs font-semibold shadow-brutal-sm transition-all hover:bg-muted active:translate-y-[2px] active:shadow-none"
+                      className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border-2 border-border-strong bg-background px-2.5 text-xs font-semibold shadow-brutal-sm transition-all hover:bg-muted active:translate-y-[2px] active:shadow-none"
                     >
                       <Phone className="size-3.5" />
                       {member.phone}

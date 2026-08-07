@@ -6,9 +6,12 @@ import { motion, useReducedMotion } from "motion/react";
 import { X, TrendingDown, Trophy } from "lucide-react";
 import { formatTimeMs } from "@/lib/format";
 import { formatWaPoints } from "@/lib/wa-points";
-import { AGE_GROUP_LABELS, fetchAthleteProfile, type AthleteProfileView } from "@/lib/athletes";
+import {
+  AGE_GROUP_LABELS,
+  fetchAthleteProfile,
+  type AthleteProfileView,
+} from "@/lib/athletes";
 import { buildPbTrajectory, type PbTrajectoryPoint } from "@/lib/telemetry";
-import { TelemetryThemeScope } from "@/components/telemetry/telemetry-theme-scope";
 import type { AgeGroup } from "@/lib/supabase/types";
 
 /** Everything the modal needs about the ENTRY that was clicked. Deliberately
@@ -109,13 +112,11 @@ export function SwimmerModal({
 
   // Portalled to <body> so the overlay cannot be trapped inside a stacking
   // context created further up the telemetry page, and so it sits above the
-  // fixed bottom tab nav (z-40) on a phone rather than under its edge. The
-  // theme scope has to come WITH it: outside the telemetry subtree the
-  // .telemetry-dark custom properties do not exist, and the modal would
-  // render in the app's light palette. `display: contents` keeps the extra
-  // wrapper out of the body's layout while still inheriting the tokens.
+  // fixed bottom tab nav (z-40) on a phone rather than under its edge. No
+  // theme wrapper needed here anymore — the Aquatic Telemetry theme lives on
+  // :root now (TECH_STACK_DECISIONS.md §12), so a plain body-level portal
+  // already inherits it.
   return createPortal(
-    <TelemetryThemeScope className="contents">
     <motion.div
       className="fixed inset-0 z-[60] flex items-end justify-end sm:items-stretch"
       initial={{ opacity: 0 }}
@@ -128,7 +129,10 @@ export function SwimmerModal({
         aria-hidden
         onClick={onClose}
         className="absolute inset-0"
-        style={{ background: "oklch(0.08 0.02 255 / 0.7)", backdropFilter: "blur(4px)" }}
+        style={{
+          background: "oklch(0.08 0.02 255 / 0.7)",
+          backdropFilter: "blur(4px)",
+        }}
       />
 
       <motion.div
@@ -143,16 +147,21 @@ export function SwimmerModal({
         animate={{ opacity: 1, x: 0, y: 0 }}
         exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: "100%" }}
         transition={
-          reduceMotion ? { duration: 0.15 } : { type: "spring", stiffness: 300, damping: 32 }
+          reduceMotion
+            ? { duration: 0.15 }
+            : { type: "spring", stiffness: 300, damping: 32 }
         }
         className="glass-hud relative flex max-h-[88vh] w-full flex-col overflow-y-auto rounded-t-2xl border-l p-4 sm:max-h-none sm:w-[26rem] sm:rounded-t-none sm:rounded-l-2xl"
         style={{ borderColor: "var(--border)", background: "var(--card)" }}
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-extrabold tracking-tight">{target.athleteName}</h2>
+            <h2 className="truncate text-lg font-extrabold tracking-tight">
+              {target.athleteName}
+            </h2>
             <p className="truncate text-xs text-[var(--muted-foreground)]">
-              {target.teamName ?? "Unattached"} · {AGE_GROUP_LABELS[target.ageGroup]}
+              {target.teamName ?? "Unattached"} ·{" "}
+              {AGE_GROUP_LABELS[target.ageGroup]}
             </p>
           </div>
           <button
@@ -162,7 +171,8 @@ export function SwimmerModal({
             aria-label="Close swimmer details"
             className="flex size-10 shrink-0 items-center justify-center rounded-lg focus-visible:outline-2 focus-visible:outline-offset-2"
             style={{
-              background: "color-mix(in oklch, var(--foreground) 8%, transparent)",
+              background:
+                "color-mix(in oklch, var(--foreground) 8%, transparent)",
               outlineColor: "var(--color-neon-cyan)",
             }}
           >
@@ -177,11 +187,18 @@ export function SwimmerModal({
           <div className="mt-2 grid grid-cols-4 gap-2">
             <Stat label="Heat" value={String(target.heatNumber)} />
             <Stat label="Lane" value={String(target.laneNumber)} />
-            <Stat label="Seed" value={target.isNt ? "NT" : formatTimeMs(target.seedTimeMs)} />
+            <Stat
+              label="Seed"
+              value={target.isNt ? "NT" : formatTimeMs(target.seedTimeMs)}
+            />
             <Stat
               label="Swum"
               value={formatTimeMs(target.officialTimeMs)}
-              accent={target.officialTimeMs != null ? "var(--color-neon-cyan)" : undefined}
+              accent={
+                target.officialTimeMs != null
+                  ? "var(--color-neon-cyan)"
+                  : undefined
+              }
             />
           </div>
           {target.waPoints != null && (
@@ -197,7 +214,9 @@ export function SwimmerModal({
             {target.distanceM}m {target.stroke} progression
           </h3>
           {loading ? (
-            <p className="mt-2 text-sm text-[var(--muted-foreground)]">Loading history…</p>
+            <p className="mt-2 text-sm text-[var(--muted-foreground)]">
+              Loading history…
+            </p>
           ) : trajectory.length === 0 ? (
             <p className="mt-2 text-sm text-[var(--muted-foreground)]">
               No published swims in this event yet — this is their first.
@@ -205,12 +224,18 @@ export function SwimmerModal({
           ) : (
             <ol className="mt-2 flex list-none flex-col gap-1.5">
               {trajectory.map((point) => (
-                <TrajectoryRow key={`${point.swamAt}-${point.officialTimeMs}`} point={point} />
+                <TrajectoryRow
+                  key={`${point.swamAt}-${point.officialTimeMs}`}
+                  point={point}
+                />
               ))}
             </ol>
           )}
           {overallPb && (
-            <p className="mt-2 font-telemetry text-xs" style={{ color: "var(--color-neon-lime)" }}>
+            <p
+              className="mt-2 font-telemetry text-xs"
+              style={{ color: "var(--color-neon-lime)" }}
+            >
               Personal best {formatTimeMs(overallPb.bestTimeMs)}
               {overallPb.volumeName ? ` · ${overallPb.volumeName}` : ""}
             </p>
@@ -218,7 +243,10 @@ export function SwimmerModal({
         </section>
 
         {!loading && profile && profile.personalBests.length > 0 && (
-          <section className="mt-5" aria-label="Personal bests across all events">
+          <section
+            className="mt-5"
+            aria-label="Personal bests across all events"
+          >
             <h3 className="flex items-center gap-1.5 text-[10px] font-semibold tracking-widest text-[var(--muted-foreground)] uppercase">
               <Trophy className="size-3.5" aria-hidden />
               Every personal best
@@ -244,8 +272,7 @@ export function SwimmerModal({
           </section>
         )}
       </motion.div>
-    </motion.div>
-    </TelemetryThemeScope>,
+    </motion.div>,
     document.body,
   );
 }
@@ -253,7 +280,9 @@ export function SwimmerModal({
 function TrajectoryRow({ point }: { point: PbTrajectoryPoint }) {
   return (
     <li className="flex items-baseline justify-between gap-2 text-xs">
-      <span className="truncate text-[var(--muted-foreground)]">{point.volumeName}</span>
+      <span className="truncate text-[var(--muted-foreground)]">
+        {point.volumeName}
+      </span>
       <span className="flex shrink-0 items-baseline gap-2">
         <span className="font-telemetry font-bold tabular-nums">
           {formatTimeMs(point.officialTimeMs)}
@@ -262,7 +291,10 @@ function TrajectoryRow({ point }: { point: PbTrajectoryPoint }) {
           <span
             className="font-telemetry tabular-nums"
             style={{
-              color: point.deltaMs < 0 ? "var(--color-neon-lime)" : "var(--color-neon-orange)",
+              color:
+                point.deltaMs < 0
+                  ? "var(--color-neon-lime)"
+                  : "var(--color-neon-orange)",
             }}
           >
             {point.deltaMs < 0 ? "−" : "+"}
@@ -273,7 +305,8 @@ function TrajectoryRow({ point }: { point: PbTrajectoryPoint }) {
           <span
             className="rounded px-1 font-telemetry text-[10px] font-bold"
             style={{
-              background: "color-mix(in oklch, var(--color-neon-lime) 18%, transparent)",
+              background:
+                "color-mix(in oklch, var(--color-neon-lime) 18%, transparent)",
               color: "var(--color-neon-lime)",
             }}
           >
@@ -285,13 +318,24 @@ function TrajectoryRow({ point }: { point: PbTrajectoryPoint }) {
   );
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: string }) {
+function Stat({
+  label,
+  value,
+  accent,
+}: {
+  label: string;
+  value: string;
+  accent?: string;
+}) {
   return (
     <div>
       <p className="text-[10px] font-semibold tracking-widest text-[var(--muted-foreground)] uppercase">
         {label}
       </p>
-      <p className="font-telemetry text-sm font-bold tabular-nums" style={{ color: accent }}>
+      <p
+        className="font-telemetry text-sm font-bold tabular-nums"
+        style={{ color: accent }}
+      >
         {value}
       </p>
     </div>

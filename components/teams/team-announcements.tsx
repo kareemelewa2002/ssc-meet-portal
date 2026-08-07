@@ -136,7 +136,7 @@ export function TeamAnnouncements({
       )}
 
       {isCaptain && composing && (
-        <div className="mb-3 space-y-2 rounded-lg border-2 border-black p-3">
+        <div className="mb-3 space-y-2 rounded-lg border-2 border-border-strong p-3">
           <div className="space-y-1">
             <Label htmlFor="announcement-title" className="text-xs">
               Title

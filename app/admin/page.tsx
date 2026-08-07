@@ -66,7 +66,7 @@ export default function AdminPage() {
             <Link
               key={page.href}
               href={page.href}
-              className="flex min-h-[64px] items-center gap-3 rounded-2xl border-2 border-black bg-card p-3 shadow-brutal-sm transition-colors hover:bg-muted/50"
+              className="flex min-h-[64px] items-center gap-3 rounded-2xl border-2 border-border-strong bg-card p-3 shadow-brutal-sm transition-colors hover:bg-muted/50"
             >
               <Icon className="size-5 shrink-0" />
               <span className="min-w-0">
@@ -80,7 +80,7 @@ export default function AdminPage() {
         })}
       </nav>
 
-      <div className="grid grid-cols-2 gap-2 rounded-xl border-2 border-black bg-muted/30 p-1 sm:flex sm:flex-wrap sm:grid-cols-none">
+      <div className="grid grid-cols-2 gap-2 rounded-xl border-2 border-border-strong bg-muted/30 p-1 sm:flex sm:flex-wrap sm:grid-cols-none">
         {TABS.map((t) => (
           <Button
             key={t.id}

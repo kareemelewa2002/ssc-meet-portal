@@ -55,7 +55,7 @@ function MeetCard({ volume, live }: { volume: MeetVolumeRow; live: boolean }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-lg">{volume.name}</CardTitle>
           {live ? (
-            <Badge className="gap-1.5 border-black bg-neon-cyan font-telemetry tracking-widest text-black uppercase">
+            <Badge className="gap-1.5 border-border-strong bg-neon-cyan font-telemetry tracking-widest text-black uppercase">
               <span className="animate-pulse-ring inline-flex size-2 rounded-full bg-black" />
               Live
             </Badge>
@@ -73,7 +73,7 @@ function MeetCard({ volume, live }: { volume: MeetVolumeRow; live: boolean }) {
           <Link
             key={href}
             href={href}
-            className="flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl border-2 border-black bg-background px-2 py-2 text-center text-[11px] font-bold shadow-brutal-sm transition-all hover:-translate-y-0.5 hover:bg-muted hover:shadow-brutal active:translate-y-[2px] active:shadow-none sm:text-xs"
+            className="flex min-h-[52px] flex-col items-center justify-center gap-1 rounded-xl border-2 border-border-strong bg-background px-2 py-2 text-center text-[11px] font-bold shadow-brutal-sm transition-all hover:-translate-y-0.5 hover:bg-muted hover:shadow-brutal active:translate-y-[2px] active:shadow-none sm:text-xs"
           >
             <Icon className="size-4" />
             {label}

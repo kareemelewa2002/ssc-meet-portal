@@ -969,6 +969,166 @@ ranked across 8 heats with correct ties, deltas and WA points, plus the
 `/events/1/heats` page still rendering `oklch(1 0 0)` — the light theme is
 still untouched.
 
+*(Superseded by Phase 3 below — the light theme no longer exists anywhere in
+the app; the "still untouched" note above is a historical record of what was
+true at the end of phase 2, not the current state.)*
+
+### Phase 3 — promoted to the app-wide theme, and what that actually required
+
+The phase-1/2 design was always for `.telemetry-dark` to become the whole
+app's theme eventually, landing scoped first specifically so it could be
+validated before that commitment (see the phase-1 section above). This phase
+made that promotion.
+
+**The CSS move itself was small.** Every token `.telemetry-dark` defined
+already overrode a variable name the original light `:root` used
+(`--background`, `--card`, `--border`, …), by design — so promoting it was
+deleting the light `:root` block and the `.telemetry-dark` class selector,
+and keeping one `:root` with the dark values. `Outdoor Mode`'s escalation
+(`.telemetry-dark[data-outdoor="true"]`) became `:root[data-outdoor="true"]`
+the same way. The one real gap: that attribute was only ever being *set* on a
+`<div>` inside the telemetry route (`telemetry-theme-scope.tsx`, now
+deleted). For the escalation to reach the whole app, something has to mirror
+`useOutdoorMode()`'s boolean onto `<html>` globally — added as
+`components/providers/outdoor-mode-html-sync.tsx`, a tiny always-mounted
+client component (`useEffect` + `document.documentElement.setAttribute`)
+mounted once in `app/layout.tsx` inside `OutdoorModeProvider`. The provider
+itself stays a plain boolean context, unchanged — this is the one place that
+translates the boolean into the DOM, rather than the provider reaching
+outside React on every consumer's behalf.
+
+**The actual work was finding what *wasn't* wired to those tokens.** A grep
+before touching anything turned up **110 occurrences across 35 files** of
+literal, non-token color — `border-black`, `bg-black`, `text-black`,
+`ring-black/10`, `fill-black`, `accent-black` — including every shared UI
+primitive the app is built from (`components/ui/button.tsx`, `card.tsx`,
+`badge.tsx`, `dialog.tsx`, `input.tsx`, `alert.tsx`, `avatar.tsx`,
+`toast.tsx`, `tabs.tsx`, `skeleton.tsx`) plus registration, payments-adjacent
+dashboards, referee scoring, and admin. Flipping `--background`/`--card` to
+dark while those stayed literal `#000` would have shipped nearly-invisible
+black-on-near-black borders across the entire app's chrome — buttons,
+dialogs, inputs, badges — on day one. This was surfaced and confirmed with
+the user before proceeding, since it turned a CSS-variable swap into a
+design-system migration touching a third of the component tree.
+
+Each occurrence was read in context, not blindly replaced, because the right
+fix differed by what the color was actually doing:
+
+- **Structural outline colors** (`border-black`, `border-black/10`,
+  `border-black/15`, `border-black/20`, an avatar's `after:border-black`) —
+  **59 occurrences, mechanically replaced** with a new token,
+  `border-border-strong` (`--color-border-strong` in `@theme inline`,
+  backing `--border-strong` in `:root`). This had to be a *separate* token
+  from `--border-brutal`: `--border-brutal` is a full CSS `border` shorthand
+  (width + style + color) used as one utility class, but several sites use a
+  single-sided border (`border-t-2 border-black`, `border-b-2
+  border-black`) where pulling in `border-brutal`'s width would have added
+  borders on sides that were never meant to have one. `--border-strong` is
+  just the color half, reusable on any side. Both tokens share the same
+  color value, so they still read as one consistent hard edge everywhere.
+- **A focus ring** (`components/ui/input.tsx`'s `ring-black/10`) — the same
+  reasoning: a literal black ring at low opacity is close to imperceptible
+  against a near-black background. Replaced with `ring-border-strong/20`
+  (same token, opacity bumped slightly for a focus indicator specifically,
+  where visibility is an accessibility property, not just a style choice).
+- **An SVG data-point fill** (`components/athletes/progression-chart.tsx`'s
+  `fill-black` on each dot of the PB trend line) — replaced with
+  `fill-foreground`, which already tracks light/dark correctly the same way
+  the chart's line color (`text-neon-cyan`, via `stroke="currentColor"`)
+  always did.
+- **A native checkbox tick color** (`app/register/page.tsx`'s
+  `accent-black` on the privacy/safety consent checkboxes) — replaced with
+  `accent-primary`, the app's actual brand color, rather than a color that
+  would have rendered a solid-black checkbox square on a dark page.
+- **Left alone, deliberately, after individual review:** every remaining
+  `bg-black`/`text-black` match (51 of the original 110). Two different,
+  valid reasons showed up repeatedly and neither needed touching:
+  1. **`text-black` next to a bright fill** — `bg-neon-lime text-black`,
+     `bg-yellow-300 text-black`, `bg-amber-400 text-black`, medal-place
+     badges, delta chips. This is contrast against that specific bright
+     color, not against the page background, and stays correct under any
+     theme because the neon/medal palette itself never changed.
+  2. **`outdoorMode && "bg-black text-yellow-300"` (and its many variants)
+     across `app/referee/page.tsx`, `components/events/live-client.tsx`,
+     `leaderboard-client.tsx`, `schedule-client.tsx`, `filter-select.tsx`,
+     `skins-round-card.tsx`, `heat-result-entry.tsx`, `points-board.tsx`,
+     `meet-summary-stats.tsx`, `app/page.tsx`** — this app's *other*,
+     pre-existing high-contrast mode. It predates this theme, is a
+     completely separate mechanism (hardcoded literal colors read straight
+     off the `outdoorMode` boolean via props/context, not CSS custom
+     properties), and is a real, load-bearing accessibility feature — a
+     referee reading times in direct pool-deck sunlight. It was
+     intentionally left untouched rather than unified with the new
+     `data-outdoor` CSS mechanism: the two now layer (dark-navy-or-escalated
+     base surface underneath, deliberate yellow accent overrides on top on
+     the specific screens that already had them) rather than conflict, and
+     a referee's already-working high-contrast mode never changed shape
+     mid-migration.
+  3. Two `bg-black` dots (`components/events/live-client.tsx`,
+     `app/meets/page.tsx`, both a pulsing "Live" indicator) sit *inside* a
+     `bg-neon-cyan` badge, not against the page — same reasoning as (1).
+  4. `print:bg-white print:text-black` in `live-client.tsx` is
+     print-media-query-scoped and intentionally always light — a printed
+     poolside heat sheet should never be dark, matching the pre-existing
+     `@media print` rule at the bottom of `globals.css` that already forces
+     white/black regardless of the on-screen theme.
+
+**Shadow tokens telemetry never needed got the same treatment for
+consistency.** `.telemetry-dark` had only ever redefined `--shadow-brutal`,
+`-sm` and `-lg` (what the phase-1/2 lane cards and leaderboard actually
+used). Promoting to `:root` meant `--shadow-brutal-xl` (used by
+`components/ui/dialog.tsx`) and the four color variants —
+`-lime`/`-cyan`/`-orange`/`-violet` (`admin-kpi-strip.tsx`, `meets/page.tsx`)
+— needed real dark-appropriate values too, or every modal and KPI glow card
+would still cast the old flat `4px 4px 0px #000` shadow. Extended using the
+exact same visual language already established for `--shadow-brutal`: a
+1px hairline ring in `--border-strong` plus a low-opacity glow bloom in the
+relevant accent color, rather than a black offset drop shadow. No component
+`className` changes were needed for these — they're consumed as
+`shadow-brutal-xl` / `shadow-[var(--shadow-brutal-cyan)]`, so redefining the
+token in `globals.css` was the whole fix.
+
+**Known, deliberately out of scope:** a handful of `components/ui/*`
+primitives (`select.tsx`, `checkbox.tsx`, `switch.tsx`, `badge.tsx`,
+`button.tsx`, `input.tsx`, `tabs.tsx`, `dropdown-menu.tsx`) carry Tailwind's
+stock `dark:` variant classes from the original shadcn scaffold
+(`dark:bg-input/30`, `dark:aria-invalid:ring-destructive/40`, etc.), which
+activate under `prefers-color-scheme: dark` — a behavior that already
+existed before this change, on any device with OS-level dark mode, and is
+unrelated to it. They layer harmlessly on top of the new `:root` values
+(slightly different opacities on already-dark-appropriate tokens, nothing
+that clashes) rather than conflicting, so they were left alone rather than
+stripped out as part of an already-large migration; a future pass could
+remove them as dead weight now that dark is the only theme, but nothing
+about them is broken today.
+
+**Verification.** `tsc --noEmit` and `eslint` clean, **309/309** Vitest
+unchanged. Then, because none of the above is the kind of bug a type checker
+or a unit test can see, a real Chrome browser swept a representative page
+from every major surface — home, login, register, meets, dashboard, heats,
+live, leaderboard, schedule, telemetry, admin, audit logs, referee scoring —
+both signed out and as an athlete, admin, and referee, confirming
+`document.body`'s computed background is the dark token on every one of
+them, and confirming Outdoor Mode's escalation now reaches `<html>` (and
+therefore every route) rather than only the telemetry subtree.
+
+That last check caught a real, pre-existing bug: `app/referee/page.tsx`
+declared its own page-local `useState(false)` for outdoor mode, styled
+directly off it, rather than reading the shared `useOutdoorMode()` context
+every other outdoor-mode toggle in the app already used. Its toggle button
+worked exactly as before *on that page* — but could never reach the new
+global escalation, because it was never talking to the context
+`OutdoorModeHtmlSync` reads from. Confirmed by toggling it in the browser and
+reading `document.documentElement.getAttribute("data-outdoor")`: `null`
+after the click. Fixed by switching the page to `const { outdoorMode, toggle
+} = useOutdoorMode()` in place of the local state — every downstream
+`outdoorMode`-conditional class in that ~300-line file is unchanged, since
+the variable name and its truthiness are identical; only where it comes from
+changed. Re-verified: toggling outdoor mode from `/referee` now sets
+`data-outdoor="true"` on `<html>` and the escalation (`oklch(0 0 0)`) is
+still active after navigating away to `/dashboard` without touching the
+toggle again.
+
 ---
 
 ## 11. Test Suite & Findings

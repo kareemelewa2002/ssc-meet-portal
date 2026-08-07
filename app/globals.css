@@ -37,6 +37,11 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  /* The cyber-brutalist "hard outline" color, standalone from --border-brutal
+     (a full border SHORTHAND) so single-sided borders — border-t-2, border-b-2,
+     an avatar's after:border — can use it as a plain color utility
+     (border-border-strong) without pulling in a width they don't want. */
+  --color-border-strong: var(--border-strong);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -64,22 +69,28 @@
  * These were hard-coded as shadow-[4px_4px_0px_#000] across nine component
  * files, which made retuning the brand a find-and-replace. Everything now
  * reads from here, so the whole surface is one edit away.
+ *
+ * Promoted from the Aquatic Telemetry dark theme (formerly scoped to
+ * `.telemetry-dark`, now the only theme — see the app-wide promotion note
+ * below and TECH_STACK_DECISIONS.md §12). The flat black hard-shadow this
+ * app shipped with first was designed for a white plate; on a dark hull it
+ * read as mud, so the "hard edge" is a bright hairline + a colored glow
+ * bloom instead of a black offset drop shadow.
  * --------------------------------------------------------------------- */
 :root {
-  --border-brutal: 2px solid #000;
+  --border-strong: color-mix(in oklch, var(--color-neon-cyan) 35%, var(--border));
+  --border-brutal: 1px solid var(--border-strong);
 
-  --shadow-brutal-sm: 2px 2px 0px #000;
-  --shadow-brutal: 4px 4px 0px #000;
-  --shadow-brutal-lg: 6px 6px 0px #000;
-  --shadow-brutal-xl: 8px 8px 0px #000;
+  --shadow-brutal-sm: 0 0 0 1px color-mix(in oklch, var(--color-neon-cyan) 20%, transparent);
+  --shadow-brutal: 0 0 0 1px color-mix(in oklch, var(--color-neon-cyan) 25%, transparent), 0 8px 24px -8px oklch(0.05 0.02 255 / 0.6);
+  --shadow-brutal-lg: 0 0 0 1px color-mix(in oklch, var(--color-neon-cyan) 25%, transparent), 0 16px 40px -12px oklch(0.05 0.02 255 / 0.7);
+  --shadow-brutal-xl: 0 0 0 1px var(--border-strong), 0 24px 56px -16px oklch(0.05 0.02 255 / 0.75);
 
-  /* Hard offset + a low-opacity neon bloom. The bloom is what separates this
-     from flat neo-brutalism: it reads as backlit instrumentation rather than
-     a sticker. */
-  --shadow-brutal-lime: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-lime) 55%, transparent);
-  --shadow-brutal-cyan: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-cyan) 55%, transparent);
-  --shadow-brutal-orange: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-orange) 55%, transparent);
-  --shadow-brutal-violet: 4px 4px 0px #000, 0 0 16px -2px color-mix(in oklch, var(--color-neon-violet) 55%, transparent);
+  /* Hairline + a low-opacity neon bloom, one variant per accent color. */
+  --shadow-brutal-lime: 0 0 0 1px var(--border-strong), 0 0 20px -2px color-mix(in oklch, var(--color-neon-lime) 55%, transparent);
+  --shadow-brutal-cyan: 0 0 0 1px var(--border-strong), 0 0 20px -2px color-mix(in oklch, var(--color-neon-cyan) 55%, transparent);
+  --shadow-brutal-orange: 0 0 0 1px var(--border-strong), 0 0 20px -2px color-mix(in oklch, var(--color-neon-orange) 55%, transparent);
+  --shadow-brutal-violet: 0 0 0 1px var(--border-strong), 0 0 20px -2px color-mix(in oklch, var(--color-neon-violet) 55%, transparent);
 }
 
 @utility shadow-brutal {
@@ -124,35 +135,32 @@
 }
 
 /* -----------------------------------------------------------------------
- * Aquatic Telemetry — dark theme, scoped to `.telemetry-dark`.
+ * Aquatic Telemetry — the app-wide theme.
  *
- * This is deliberately a CLASS SCOPE, not a `:root` override or a
- * `prefers-color-scheme` media query: the rest of the app (registration,
- * admin, captain, referee scoring) stays on the existing light
- * cyber-brutalist system unchanged while this ships. The intent is for this
- * to become the app-wide theme eventually, but it lands first on
- * /events/[volId]/telemetry only — see TECH_STACK_DECISIONS.md.
- *
- * Every token below OVERRIDES a variable name the existing light `:root`
- * already defines (--background, --card, --border, etc.) rather than
- * inventing parallel ones, so every existing utility class
- * (bg-background, text-foreground, glass-hud, shadow-brutal-cyan,
- * font-telemetry…) works correctly inside this scope with no separate
- * "dark" variant of each component to build and maintain.
+ * Landed first scoped to a `.telemetry-dark` class on one route
+ * (/events/[volId]/telemetry only), by design, so it could be validated
+ * before committing the whole app to it — see TECH_STACK_DECISIONS.md §12.
+ * Now promoted straight into `:root`: every token below still overrides the
+ * SAME variable name the original light theme defined (--background,
+ * --card, --border, etc.), so every utility class that already read from
+ * these tokens (bg-background, text-foreground, glass-hud,
+ * shadow-brutal-cyan, font-telemetry…) needed no changes at all — only
+ * literal, non-token colors (bare `border-black`/`bg-white`/etc., see
+ * TECH_STACK_DECISIONS.md's migration notes) had to be found and fixed.
  *
  * The neon-cyan/lime/orange/violet accent palette is UNCHANGED from the
- * light theme — those tokens already read as "electric accents," and they
- * read even more like backlit instrumentation against a dark hull than they
- * did against white.
+ * original light theme — those tokens already read as "electric accents,"
+ * and they read even more like backlit instrumentation against a dark hull
+ * than they did against white.
  * --------------------------------------------------------------------- */
-.telemetry-dark {
+:root {
   --background: oklch(0.16 0.03 255); /* deep midnight slate-blue, not neutral black */
   --foreground: oklch(0.96 0.01 240);
   --card: oklch(0.21 0.035 255);
   --card-foreground: oklch(0.96 0.01 240);
   --popover: oklch(0.21 0.035 255);
   --popover-foreground: oklch(0.96 0.01 240);
-  --primary: oklch(0.78 0.13 200); /* cyan-leaning primary, not the light theme's near-black */
+  --primary: oklch(0.78 0.13 200); /* cyan-leaning primary, not the old theme's near-black */
   --primary-foreground: oklch(0.14 0.03 255);
   --secondary: oklch(0.27 0.03 255);
   --secondary-foreground: oklch(0.92 0.01 240);
@@ -164,62 +172,8 @@
   --border: oklch(0.32 0.03 250);
   --input: oklch(0.32 0.03 250);
   --ring: var(--color-neon-cyan);
-
-  /* Hard-edge brutal shadows read as mud on a dark hull — the black offset
-     shadow was designed for a white plate. Inside this theme, the "hard
-     edge" is a bright hairline instead of a black drop shadow. */
-  --border-brutal: 1px solid color-mix(in oklch, var(--color-neon-cyan) 35%, var(--border));
-  --shadow-brutal-sm: 0 0 0 1px color-mix(in oklch, var(--color-neon-cyan) 20%, transparent);
-  --shadow-brutal: 0 0 0 1px color-mix(in oklch, var(--color-neon-cyan) 25%, transparent), 0 8px 24px -8px oklch(0.05 0.02 255 / 0.6);
-  --shadow-brutal-lg: 0 0 0 1px color-mix(in oklch, var(--color-neon-cyan) 25%, transparent), 0 16px 40px -12px oklch(0.05 0.02 255 / 0.7);
-
-  color-scheme: dark;
-  background: var(--background);
-  color: var(--foreground);
-}
-
-/** Outdoor Mode's role inside the telemetry theme: not a second theme, an
- * escalation of THIS one. Direct sun defeats translucency and subtle glow
- * long before it defeats color choice, so the overrides here strip
- * transparency and softness rather than changing the palette — glass-hud's
- * blur becomes a flat fill, borders go from a tinted hairline to solid
- * white, and shadows drop their glow bloom (which is invisible in daylight
- * anyway and just costs a compositor layer). */
-.telemetry-dark[data-outdoor="true"] {
-  --background: oklch(0 0 0);
-  --card: oklch(0.1 0 0);
-  --border: oklch(0.95 0 0);
-  --border-brutal: 2px solid oklch(0.95 0 0);
-  --muted-foreground: oklch(0.85 0 0);
-  --shadow-brutal-sm: none;
-  --shadow-brutal: none;
-  --shadow-brutal-lg: none;
-}
-.telemetry-dark[data-outdoor="true"] .glass-hud,
-.telemetry-dark[data-outdoor="true"] [data-glass] {
-  backdrop-filter: none;
-  background-color: var(--card);
-}
-
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* Unchanged, dead shadcn boilerplate — nothing in the app renders a chart
+     or a sidebar nav, so there is nothing here to re-theme. */
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
@@ -234,6 +188,48 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  color-scheme: dark;
+}
+
+/** Outdoor Mode's role in this theme: not a second theme, an escalation of
+ * this one — global now, not telemetry-only, via `data-outdoor` set on
+ * `<html>` by OutdoorModeHtmlSync (components/providers). Direct sun defeats
+ * translucency and subtle glow long before it defeats color choice, so the
+ * overrides here strip transparency and softness rather than changing the
+ * palette — glass-hud's blur becomes a flat fill, borders go from a tinted
+ * hairline to solid white, and every glow-bloom shadow drops flat (a bloom
+ * is invisible in daylight anyway and just costs a compositor layer).
+ *
+ * This is intentionally separate from the app's OTHER, older outdoor-mode
+ * mechanism — the black/yellow overrides hardcoded per-component on the
+ * referee, live and leaderboard screens (outdoorMode && "bg-black
+ * text-yellow-300", etc). That one predates this theme, reads correctly
+ * against ANY background because its colors are literal rather than
+ * token-driven, and is left completely alone here: a referee mid-meet must
+ * not have a working, load-bearing high-contrast mode change shape. The two
+ * mechanisms layer without conflicting — this one is the base surface, that
+ * one is deliberate accent overrides on top of it. */
+:root[data-outdoor="true"] {
+  --background: oklch(0 0 0);
+  --card: oklch(0.1 0 0);
+  --border: oklch(0.95 0 0);
+  --border-strong: oklch(0.95 0 0);
+  --border-brutal: 2px solid oklch(0.95 0 0);
+  --muted-foreground: oklch(0.85 0 0);
+  --shadow-brutal-sm: none;
+  --shadow-brutal: none;
+  --shadow-brutal-lg: none;
+  --shadow-brutal-xl: none;
+  --shadow-brutal-lime: none;
+  --shadow-brutal-cyan: none;
+  --shadow-brutal-orange: none;
+  --shadow-brutal-violet: none;
+}
+[data-outdoor="true"] .glass-hud,
+[data-outdoor="true"] [data-glass] {
+  backdrop-filter: none;
+  background-color: var(--card);
 }
 
 @layer base {
