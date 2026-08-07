@@ -23,6 +23,10 @@ thought was true.
 - **Supabase** — Postgres, Auth, Realtime, Row Level Security, `pg_cron`
 - **Resend** for outbound email (`lib/email.ts`, plain HTML string templates —
   no `@react-email/components`; see §5)
+- **`motion`** (the current package name for what was Framer Motion) — spring
+  physics and layout animation for the Aquatic Telemetry UI; see §12. The
+  only animation dependency in the app — every other page uses plain CSS
+  transitions/keyframes (`app/globals.css`'s `.animate-scan`, `.press`, etc.)
 - **Playwright** for end-to-end tests, **Vitest** for unit tests
 - Deployed on **Vercel**
 
@@ -724,6 +728,249 @@ delay — the same reasoning `login()`'s own extended timeout in
 
 ---
 
+## 12. Aquatic Telemetry — dark theme, heat visualizer, filters, leaderboard, modal
+
+### This wasn't a blank slate — the app already had a bespoke telemetry design system
+
+Before writing any component, `app/globals.css` turned out to already define
+a "cyber-brutalist telemetry" system: a neon-cyan/lime/orange/violet accent
+palette, a `glass-hud` utility (backdrop blur + translucent fill + hard
+border), `font-telemetry` (tabular-nums monospace, exactly what a live
+timer/split/lane number needs), `shadow-brutal-cyan`-style hard-shadow +
+glow-bloom combinations, `press`/`press-active` tactile states, and
+reduced-motion-aware keyframes (`ssc-scan`, `ssc-pulse-ring`) — all already
+used across the referee and live-results screens. What did NOT exist: any
+dark theme (every token in `:root` was light-only) and any animation
+dependency capable of real spring physics or shared-layout transitions
+(`layoutId`-style). This section is about the second of those, not a
+reinvention of the first — the Heat & Lane Visualizer's cards use
+`glass-hud`, `font-telemetry`, and the existing neon tokens directly, not a
+parallel set of "telemetry v2" utilities.
+
+### `.telemetry-dark` — a class scope, not `:root` or a media query
+
+The stated end-goal is an app-wide dark re-theme, but it lands first as a
+class (`app/globals.css`'s `.telemetry-dark`), applied only inside
+`/events/[volId]/telemetry` (`components/telemetry/telemetry-theme-scope.tsx`),
+rather than as a `:root` override or a `prefers-color-scheme` media query.
+Every existing page — registration, admin, captain, referee scoring, the
+existing `/heats` / `/live` / `/leaderboard` routes — keeps rendering the
+current light theme completely unmodified; nothing needed updating in any of
+those files for this to ship safely. Every token inside `.telemetry-dark`
+**overrides a variable name the light `:root` already defines**
+(`--background`, `--card`, `--border`, `--shadow-brutal*`, …) rather than
+inventing parallel ones, so `glass-hud`, `font-telemetry`, and every other
+existing utility work correctly inside the new scope with zero component
+changes of their own. Promoting this from a scoped class to the app's actual
+`:root` theme later is a CSS-only change when that decision is made — no
+component in `components/telemetry/` needs to change for it.
+
+Inside the dark scope, hard black offset shadows (`--shadow-brutal`, tuned
+for a white plate) are replaced with a tinted hairline + soft ambient shadow
+— a black drop-shadow reads as mud on a dark hull; the "hard edge" instead
+comes from a `color-mix`'d cyan-tinted 1px ring.
+
+### Outdoor Mode is this theme's escalation, not a second toggle
+
+Per the explicit decision behind this feature: the existing, widely-used
+`OutdoorModeProvider`/`useOutdoorMode()` (unchanged, still driving the
+black/yellow high-contrast mode on every *other* page exactly as before) is
+reused as-is inside the telemetry scope, but means something different
+there — `TelemetryThemeScope` reads the same boolean and sets
+`data-outdoor="true"` on the `.telemetry-dark` root, and
+`.telemetry-dark[data-outdoor="true"]` in `globals.css` strips transparency
+and glow rather than swapping the palette: `glass-hud`'s blur becomes a flat
+fill, the tinted hairline border becomes solid white, and shadow blooms
+(invisible in direct sun anyway, and a wasted compositor layer) drop to
+`none`. Direct sunlight defeats translucency and soft glow long before it
+defeats color choice, so the escalation removes exactly those two things
+rather than re-theming.
+
+### Component hierarchy & state
+
+```
+app/events/[volId]/telemetry/page.tsx        (RSC — awaits params only)
+  components/telemetry/telemetry-client.tsx   ("use client" — session/event/
+                                                heat/filter selection, all
+                                                fetching, modal target)
+    components/telemetry/telemetry-theme-scope.tsx  (applies .telemetry-dark
+                                                       + data-outdoor)
+      components/telemetry/filter-pill-nav.tsx       (phase 2 — one animated
+                                                        radiogroup row)
+      components/telemetry/heat-lane-visualizer.tsx  (the pool: N lane slots,
+                                                        occupied + ghost)
+        components/telemetry/lane-card.tsx            (one lane)
+      components/telemetry/telemetry-leaderboard.tsx (phase 2 — accordion of
+                                                        event standings)
+        components/telemetry/standing-card.tsx        (phase 2 — one
+                                                         expandable swimmer)
+      components/telemetry/swimmer-modal.tsx         (phase 2 — portalled
+                                                        glass slide-over)
+```
+
+Plain `useState`, matching every other data page in this app — there is no
+global store anywhere in this codebase, and session/event/heat selection is
+page-local UI state that no other route needs to read. All data comes from
+**existing** query functions, reused rather than duplicated:
+`fetchVolumeByNumber` / `fetchSessionsForVolume` (`lib/volumes.ts`),
+`fetchMeetSettings` for `laneCount` (`lib/meet-settings.ts`), and
+`fetchLiveEventsForSession` (`lib/live-heats.ts`) — the exact same function
+`/events/[volId]/live` already uses, so a lane's name/team/seed time/live
+result is identically sourced on both pages. The one genuinely new query is
+`lib/telemetry.ts`'s `fetchPersonalBestsForEventShape()`, since no existing
+view carries "this swimmer's best time in this exact stroke+distance,
+independent of which volume."
+
+Lane position is simply `laneNumber` ascending, top to bottom — "center-out"
+lane assignment (fast seeds in the middle lanes) is a **seeding-time**
+decision this app already makes elsewhere (`lib/skins-lanes.ts`'s
+`centredLanes()`), not something the visualizer itself computes; it only
+renders whichever lane number each swimmer was already assigned.
+
+### Compositor-safe motion, and the honest cost of not using CSS-only transitions
+
+`lane-card.tsx` animates only `transform` (`x`, `scale`) and `opacity` —
+never `height`/`width`/`margin` — via `motion.div`'s `initial`/`animate`/
+`whileHover`/`whileTap`, with `{ type: "spring", stiffness: 300, damping: 28 }`
+for entrance and a lighter, snappier spring for hover. `useReducedMotion()`
+(from `motion/react`) drives a real branch, not just a shorter duration: a
+reduced-motion visitor gets an opacity-only fade with no transform and no
+spring at all, and hover/tap animations are skipped entirely — the existing
+global CSS `@media (prefers-reduced-motion: reduce)` rule in `globals.css`
+only shortens CSS transition durations, which does nothing for a
+JS-driven Motion animation, so this had to be handled explicitly in the
+component rather than inherited for free.
+
+### Two real bugs, both caught before they shipped
+
+1. **`.eq("events.stroke", …)` on an embedded table 400'd.**
+   `fetchPersonalBestsForEventShape()`'s first draft filtered the
+   `events` embed server-side via PostgREST dot-notation
+   (`.eq("events.stroke", stroke)`). This codebase's hand-maintained
+   `Database` type declares no FK relationship metadata, which makes that
+   kind of embedded-table filter unreliable — confirmed by reproducing the
+   exact request directly against PostgREST, which returned `42703` /
+   `"column results_2.outcome does not exist"` for a *different*, more
+   basic reason (see #2), but the underlying "filter the embed at the
+   database" approach was already the wrong pattern regardless: it is not
+   what `lib/athletes.ts`'s own career-results query does (see its
+   comment — it fetches broadly per athlete and filters client-side for
+   exactly this reason). Fixed by matching that established pattern rather
+   than inventing a new one.
+2. **Wrong column name.** The `results` table's outcome column is
+   `result_outcome`, not `outcome` — visible in `lib/athletes.ts`'s own
+   `CareerResultEmbed` type, missed on the first pass, caught immediately by
+   directly curling the PostgREST endpoint and reading the raw
+   `42703 column … does not exist` error rather than only the React
+   console's generic 400.
+3. **Base UI's `<Select.Value>` renders the raw value string unless given a
+   render function** — confirmed already known and worked around exactly
+   once before, in `components/events/filter-select.tsx`'s own comment,
+   which this file's first draft didn't reuse and so hit the same bug fresh
+   (session/event/heat pickers briefly rendered raw UUIDs instead of
+   labels). Fixed the same way `FilterSelect` already does:
+   `<SelectValue>{() => label}</SelectValue>`.
+
+All three were caught by actually running the feature in a browser against
+real seeded data (Playwright, not just `tsc`/`eslint`) before calling it
+done — `tsc` and `eslint` were both clean through every one of these; none
+of the three is a type error.
+
+### Phase 2 — pill filter nav, leaderboard cards, swimmer modal
+
+Built on the phase-1 foundation, in the same two directories, with the
+phase-1 route, theme scope and visualizer unchanged apart from the lane cards
+gaining an optional `onSelect`.
+
+**Filtering happens on already-fetched data.** `deriveFilterOptions()` and
+`applyTelemetryFilters()` (both pure, both in `lib/telemetry.ts`) narrow the
+`LiveEventView[]` already in state. Choosing a pill triggers no router
+navigation and no query — only the *session* picker crosses a network
+boundary, because only it changes which events exist. The pill nav offers
+only the strokes/distances/genders actually present in the loaded session, so
+no combination of pills can produce an empty board by offering something that
+was never there.
+
+**Gender comes off the heat, not the event.** Heats are split male/female by
+the seeding pipeline; events are not gendered. The gender pill therefore
+narrows an event's *heats*, and an event whose every heat is filtered out
+drops from the list rather than rendering as an empty shell. A legacy heat
+with a null gender (seeded before the split) is excluded rather than claimed
+for both.
+
+**Selection is derived, not stored-and-corrected.** `selectedEvent` falls
+back to the first surviving event rather than being repaired in an effect, so
+there is never a frame where the board renders against an event the current
+filters excluded.
+
+**`heatTitle()`, not `Heat {n}`.** Verifying the heat picker against real
+seeded data showed four options all reading "Heat 1" — `heat_number` restarts
+per age board *and* gender, so the bare number is ambiguous within one event
+and the picker selected the wrong heat. Fixed by reusing `lib/format.ts`'s
+existing `heatTitle()` ("17 & Under / Open Women Heat 2"), which exists for
+exactly this reason. This was a latent phase-1 bug the filters surfaced.
+
+**Standings rank across every heat of the event**, which is not any single
+heat's finish order. Standard competition ranking: ties share a place and the
+next distinct time skips the places consumed (1, 2, 2, 4). DQs, no-shows and
+not-yet-swum entries are *listed but unranked*, sorted last in heat/lane
+order — a DQ is a result and hiding it would misrepresent the field, but it
+is not a place. WA points come from the existing `fetchWaBaseTimes()` /
+`waPointsFor()`, and are never awarded for a DQ even when a base time exists.
+
+**The one deliberate exception to the compositor rule.** Every other
+animation in this feature is `transform`/`opacity` only. Card expansion
+animates `height: 0 → auto` on a single detail panel per card, because the
+rows below genuinely have to reflow and a transform cannot do that; the
+`layout="position"` on the sibling list items resolves *their* movement back
+to a transform. The cost is bounded — one animating panel at a time (the
+leaderboard is an accordion, not independent toggles) inside
+`overflow-hidden` — and it is what the brief specified. Reduced motion drops
+it to an opacity fade with no height animation at all.
+
+**`layoutId` for the sliding pill.** Motion's layout projection resolves the
+indicator's move between pills to a `transform`, so it never animates
+`left`/`width`. `useId()` scopes the `layoutId` per `FilterPillNav` instance —
+without it the Gender row's indicator would fly across to the Stroke row,
+since Motion matches `layoutId` globally.
+
+**The modal is portalled to `<body>` — with its theme scope.** `createPortal`
+keeps the overlay out of any stacking context created further up the page and
+above the fixed bottom tab nav (`z-40`). But portalling escapes
+`.telemetry-dark` too, and the first attempt rendered the modal in the app's
+light palette. Fixed by wrapping the portal content in
+`<TelemetryThemeScope className="contents">` — `display: contents` keeps the
+wrapper out of the body's layout while the custom properties still inherit.
+Verified by asserting the dialog's computed background is
+`oklch(0.21 0.035 255)`.
+
+**Accessibility.** The pill rows are real `radiogroup`/`radio`s; the
+leaderboard is `aria-live="polite"` because places change underneath a viewer
+as results publish; expandable cards use `aria-expanded`/`aria-controls`; the
+modal is `role="dialog" aria-modal` with Escape-to-close, a minimal Tab trap,
+and focus returned to the row that opened it (verified: focus lands back on
+"Swimmer profile", not the top of the page). Lane cards keep `role="listitem"`
+on the wrapper and put the click target on an inner `<button>` — a listitem
+that is also a button is not a shape a screen reader can announce honestly.
+
+**Reduced motion** is a real branch in every new component, not a shorter
+duration: opacity-only entrances, no `whileHover`/`whileTap`, no height
+animation, and a zero-duration layout transition (the indicator still *moves*
+to the right pill, it just arrives instantly — the contract is "no travel",
+not "no indicator"). Verified end to end with Playwright's
+`reducedMotion: "reduce"`.
+
+**Testing.** 17 new Vitest cases in `lib/__tests__/telemetry.test.ts` cover
+the pure transforms: filter derivation, gender-narrowing without mutating the
+source, cross-heat ranking, tie handling, unranked DQs, delta sign, NT
+entries, and points refusal for unrateable events and DQs. Verified in a real
+browser against the seeded played meet (volume 1, session 3): 39 swimmers
+ranked across 8 heats with correct ties, deltas and WA points, plus the
+`/events/1/heats` page still rendering `oklch(1 0 0)` — the light theme is
+still untouched.
+
+---
+
 ## 11. Test Suite & Findings
 
 ### Baseline
@@ -732,7 +979,7 @@ delay — the same reasoning `login()`'s own extended timeout in
 | --- | --- | --- |
 | RLS assertions, scratch Postgres cluster | 202 | `npm run test:rls` |
 | Schema drift guard (trigger/policy/column inventory) | 59 checks | `npm run db:verify` |
-| Vitest unit tests | 292 | `npm run test` |
+| Vitest unit tests | 309 | `npm run test` |
 | Playwright E2E specs | 71 | `npx playwright test` |
 
 The RLS and Vitest numbers are exact and re-verified every time this file is
