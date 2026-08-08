@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { resolveUserId } from "@/lib/auth-user";
 import { firstOf } from "@/lib/live-heats";
 import type { MembershipStatus } from "@/lib/supabase/types";
 
@@ -12,16 +13,17 @@ export interface JoinRequestResult {
  * progress) are enforced server-side by
  * public.enforce_team_membership_request_rules() — this is a thin wrapper
  * that just surfaces that trigger's error message. */
-export async function requestToJoinTeam(teamId: string): Promise<JoinRequestResult> {
+export async function requestToJoinTeam(
+  teamId: string,
+  userId?: string,
+): Promise<JoinRequestResult> {
   const supabase = createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { success: false, error: "Sign in to request to join a team." };
+  const uid = await resolveUserId(supabase, userId);
+  if (!uid) return { success: false, error: "Sign in to request to join a team." };
 
   const { error } = await supabase
     .from("team_memberships")
-    .insert({ team_id: teamId, user_id: user.id, status: "pending" });
+    .insert({ team_id: teamId, user_id: uid, status: "pending" });
   if (error) return { success: false, error: error.message };
   return { success: true };
 }
@@ -44,17 +46,15 @@ export interface MyJoinRequest {
 
 /** The signed-in user's own pending request, if any — used to disable
  * "Request to Join" elsewhere and drive a "Pending at X" status chip. */
-export async function fetchMyJoinRequest(): Promise<MyJoinRequest | null> {
+export async function fetchMyJoinRequest(userId?: string): Promise<MyJoinRequest | null> {
   try {
     const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return null;
+    const uid = await resolveUserId(supabase, userId);
+    if (!uid) return null;
     const { data, error } = await supabase
       .from("team_memberships")
       .select("id, team_id, status, requested_at, teams ( name )")
-      .eq("user_id", user.id)
+      .eq("user_id", uid)
       .eq("status", "pending")
       .maybeSingle();
     if (error || !data) return null;

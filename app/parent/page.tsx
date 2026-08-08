@@ -12,6 +12,9 @@ import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
 import { fetchMyLinkedChildren, type LinkedChildCard } from "@/lib/parents";
+import { MyRaces } from "@/components/dashboard/my-races";
+import { fetchActiveVolume } from "@/lib/volumes";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { fetchMyEntryPaymentStatus, type AthletePaymentStatus } from "@/lib/payments";
 import { formatEgp } from "@/lib/pricing";
 import type { AgeGroup } from "@/lib/supabase/types";
@@ -26,17 +29,26 @@ import type { AgeGroup } from "@/lib/supabase/types";
  * link on /dashboard does for themselves.
  */
 export default function ParentDashboardPage() {
+  const { user, loading: userLoading } = useCurrentUser();
   const [children, setChildren] = useState<LinkedChildCard[] | null>(null);
   const [payments, setPayments] = useState<Map<string, AthletePaymentStatus[]>>(new Map());
+  const [volume, setVolume] = useState<{ id: string; name: string } | null>(null);
   const [dataError, setDataError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (userLoading) return;
     let cancelled = false;
     (async () => {
-      const result = await fetchMyLinkedChildren();
+      const [result, activeVolume] = await Promise.all([
+        fetchMyLinkedChildren(user?.id),
+        fetchActiveVolume(),
+      ]);
       if (cancelled) return;
       setChildren(result.data);
       setDataError(result.error);
+      if (activeVolume.data) {
+        setVolume({ id: activeVolume.data.id, name: activeVolume.data.name });
+      }
 
       const entries = await Promise.all(
         result.data.map(async (child) => [child.athleteId, (await fetchMyEntryPaymentStatus(child.athleteId)).data] as const),
@@ -46,7 +58,7 @@ export default function ParentDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user, userLoading]);
 
   return (
     <div className="min-h-screen">
@@ -55,7 +67,8 @@ export default function ParentDashboardPage() {
         <header className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Parent Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            Every child linked to your account, their results, and their payment status.
+            Every child linked to your account — their races and heat assignments, results, and
+            payment status.
           </p>
         </header>
 
@@ -99,6 +112,18 @@ export default function ParentDashboardPage() {
                     <Trophy className="size-4" />
                     Results, PBs &amp; leaderboard placements
                   </Link>
+
+                  {/* Per child, not aggregated: a parent with several
+                      swimmers needs to know which of THEM is in heat 3, and
+                      one merged list would not answer that. */}
+                  {volume && (
+                    <MyRaces
+                      athleteId={child.athleteId}
+                      meetVolumeId={volume.id}
+                      volumeName={volume.name}
+                      title={`${child.fullName.split(" ")[0]}'s races`}
+                    />
+                  )}
 
                   {childPayments.length > 0 && (
                     <div className="space-y-2">

@@ -350,6 +350,28 @@ end $$;
 -- 2. CORE TABLES
 -- =============================================================================
 
+-- Defined before the tables because public.entry_payments and
+-- public.relay_squad_payments both use it as a column DEFAULT, and a default
+-- expression must resolve at CREATE TABLE time — a from-scratch apply fails
+-- outright if this lives further down beside the other helper functions.
+create or replace function public.current_collector()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$ select auth.uid() $$;
+
+comment on function public.current_collector() is
+  'auth.uid() behind a SECURITY DEFINER wrapper, so it is reachable from a '
+  'column DEFAULT. A default is evaluated as the INSERTING role, and that '
+  'role is not guaranteed USAGE on schema auth — the RLS suite''s scratch '
+  'cluster grants it on public only, and a bare `default auth.uid()` fails '
+  'there with "permission denied for schema auth". RLS policies get away '
+  'with calling auth.uid() directly because policy expressions are evaluated '
+  'as the table owner; defaults and SECURITY INVOKER triggers are not.';
+
+
 -- ---------------------------------------------------------------------------
 -- app_settings — single-row configuration table. Holds the email of the
 -- system creator (the only account allowed to self-bootstrap as 'admin').
@@ -1458,8 +1480,11 @@ create table if not exists public.entry_payments (
   -- Gateway transaction id, when there is a gateway. Null for cash.
   external_reference text,
   -- The admin who took the money. Null only if a future gateway collects it
-  -- with no human involved.
-  collected_by uuid references public.users (id) on delete set null,
+  -- with no human involved, or if the row was written outside an
+  -- authenticated session (psql/service role). Never client-supplied for a
+  -- real request: public.enforce_collected_by() overrides it with auth.uid()
+  -- on insert — see that function for why a default alone is not enough.
+  collected_by uuid references public.users (id) on delete set null default public.current_collector(),
   collected_at timestamptz not null default now(),
   note text
 );
@@ -2722,6 +2747,48 @@ $$;
 create or replace trigger audit_entry_payment_insert_trigger
   after insert on public.entry_payments
   for each row execute function public.audit_entry_payment_insert();
+
+-- ---------------------------------------------------------------------------
+-- public.enforce_collected_by — the payment tables' "who collected" rule.
+-- ---------------------------------------------------------------------------
+-- Both payment tables record a collector that the CLIENT used to supply:
+-- lib/admin-cash-payments.ts inserted it from the browser and
+-- confirm_relay_squad_payment() took it as a parameter. The audit trail was
+-- never at risk — log_admin_action() above already writes actor_id :=
+-- auth.uid() into the append-only admin_actions — but collected_by is the
+-- copy the cash desk and the payment-status screens DISPLAY, so the two could
+-- disagree and the readable one was the forgeable one.
+--
+-- A column default cannot fix that on its own: a default only applies when
+-- the column is omitted, and the problem is a caller supplying a wrong value
+-- explicitly. Nor can an insert policy's WITH CHECK, because
+-- confirm_relay_squad_payment() is SECURITY DEFINER and bypasses RLS
+-- altogether. A BEFORE INSERT trigger is the one mechanism that covers both
+-- write paths.
+--
+-- Overrides only when a session exists. psql/service-role writes (seeds, ops
+-- scripts, backfills) have no auth.uid() and are already outside RLS, so
+-- forcing NULL over an attribution the operator passed deliberately would
+-- break legitimate seeding while buying no security at all.
+create or replace function public.enforce_collected_by()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_actor uuid := public.current_collector();
+begin
+  if v_actor is not null then
+    new.collected_by := v_actor;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace trigger enforce_entry_payment_collected_by
+  before insert on public.entry_payments
+  for each row execute function public.enforce_collected_by();
 
 -- PRICING_UPDATE — pricing_packages and pricing_tiers each get their own
 -- function for the same reason audit_entry_payment_insert() is not shared
@@ -5008,7 +5075,8 @@ create table if not exists public.relay_squad_payments (
   -- individual entry this amount has no "which tier" ambiguity to record.
   amount_egp integer not null check (amount_egp >= 0),
   method text not null default 'cash',
-  collected_by uuid references public.users (id) on delete set null,
+  -- Server-derived, exactly as on entry_payments above.
+  collected_by uuid references public.users (id) on delete set null default public.current_collector(),
   collected_at timestamptz not null default now(),
   note text,
   -- One payment per squad. A squad that needs re-billing (a leg swapped after
@@ -5049,6 +5117,11 @@ $$;
 create or replace trigger audit_relay_squad_payment_insert_trigger
   after insert on public.relay_squad_payments
   for each row execute function public.audit_relay_squad_payment_insert();
+
+-- Same collector rule as entry_payments — see public.enforce_collected_by().
+create or replace trigger enforce_relay_squad_payment_collected_by
+  before insert on public.relay_squad_payments
+  for each row execute function public.enforce_collected_by();
 
 -- ---------------------------------------------------------------------------
 -- public.quote_relay_squad_egp — what a squad costs, and whether it can be
@@ -5105,9 +5178,16 @@ $$;
 -- ordering as the individual cash desk, so a failure between the two steps
 -- leaves the squad unpaid and re-collectable rather than confirmed with no
 -- receipt.
+-- p_collected_by is gone: public.enforce_collected_by() resolves the
+-- collector from auth.uid(), and a parameter that accepts an id then silently
+-- ignores it is worse than no parameter at all. Dropped by full signature
+-- first — Postgres treats the 3-arg and 2-arg forms as different functions,
+-- so without the drop the old one lingers and PostgREST can still resolve a
+-- call that supplies it.
+drop function if exists public.confirm_relay_squad_payment(uuid, uuid, text);
+
 create or replace function public.confirm_relay_squad_payment(
   p_squad_id uuid,
-  p_collected_by uuid,
   p_note text default null
 )
 returns uuid
@@ -5131,8 +5211,12 @@ begin
     raise exception 'This relay squad has already been paid';
   end if;
 
-  insert into public.relay_squad_payments (squad_id, amount_egp, collected_by, note)
-  values (p_squad_id, v_quote.amount_egp, p_collected_by, p_note);
+  -- collected_by omitted deliberately: the column default and the BEFORE
+  -- INSERT trigger both resolve it to auth.uid(). This function is SECURITY
+  -- DEFINER and so runs with RLS bypassed, but auth.uid() still reads the
+  -- request's JWT claim — which is exactly why the rule lives in a trigger.
+  insert into public.relay_squad_payments (squad_id, amount_egp, note)
+  values (p_squad_id, v_quote.amount_egp, p_note);
 
   update public.relay_squads set status = 'confirmed' where id = p_squad_id;
 

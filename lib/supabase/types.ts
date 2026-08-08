@@ -848,7 +848,7 @@ export type Database = {
         Returns: { legs_filled: number; amount_egp: number; payable: boolean }[];
       };
       confirm_relay_squad_payment: {
-        Args: { p_squad_id: string; p_collected_by: string; p_note?: string };
+        Args: { p_squad_id: string; p_note?: string };
         Returns: string;
       };
       reclaim_relay_squad_hold: {

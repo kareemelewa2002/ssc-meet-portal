@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { resolveUserId } from "@/lib/auth-user";
 import { runQuery, type FetchResult } from "@/lib/fetch-policy";
 import { firstOf } from "@/lib/live-heats";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
@@ -220,17 +221,17 @@ export interface MyIncomingInvitation {
 /** The signed-in athlete's own incoming invite awaiting a response, if any
  * — the mirror of fetchMyJoinRequest() (lib/team-memberships.ts), which is
  * the athlete's own OUTGOING request instead. */
-export async function fetchMyIncomingInvitation(): Promise<MyIncomingInvitation | null> {
+export async function fetchMyIncomingInvitation(
+  userId?: string,
+): Promise<MyIncomingInvitation | null> {
   try {
     const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return null;
+    const uid = await resolveUserId(supabase, userId);
+    if (!uid) return null;
     const { data, error } = await supabase
       .from("team_memberships")
       .select("id, team_id, requested_at, teams ( name )")
-      .eq("user_id", user.id)
+      .eq("user_id", uid)
       .eq("status", "invited")
       .maybeSingle();
     if (error || !data) return null;

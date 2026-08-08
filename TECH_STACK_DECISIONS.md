@@ -1441,6 +1441,111 @@ session, per the explicit answer to "who runs e2e."
 
 ---
 
+## 14. Shared auth resolution, server-derived payment attribution, consolidated dashboards
+
+### 14.1 `useCurrentUser` is one shared store, not one per consumer
+
+The hook ran its own `getUser()` **and** its own `onAuthStateChange`
+subscription inside every component that called it. `HeatResultEntry` calls
+it and the referee deck renders one card per heat, so a 40-heat meet meant 40
+GoTrue round-trips on mount, 40 live auth subscriptions, and another 40
+concurrent calls on every auth event.
+
+A Playwright trace of `05-referee.spec.ts`'s two-device test showed the
+consequence: hundreds of `GET /auth/v1/user` degrading to 504 and then to
+transport-level failures, which took the page's *other* requests with them.
+The referee's own `POST /rest/v1/results` failed with status `-1`, so a saved
+time never reached the database and the second device correctly showed
+nothing — a realtime bug that was not a realtime bug. A direct two-client
+probe confirmed the `postgres_changes` path itself was healthy throughout.
+
+Now a module-level store: N consumers share one subscription, one
+`getUser()`, one profile read. Auth events use the session the callback
+already carries instead of re-querying, and a token refresh that does not
+change the user id does no work at all.
+
+### 14.2 `collected_by` is server-derived
+
+Both payment tables recorded a collector the client supplied. Precision
+matters about what was actually at risk: `admin_actions` **already** logged
+the true actor for both inserts (`log_admin_action()` writes `actor_id :=
+auth.uid()` into an append-only table). The tamper-proof trail was never the
+exposure. `collected_by` is the denormalized copy the cash desk and
+payment-status screens *display* — so the two could disagree, and the one
+people read was the forgeable one.
+
+Three mechanical findings shaped the fix:
+
+- **A default alone cannot do it.** Defaults apply only when the column is
+  omitted, and the problem was a caller supplying a wrong value explicitly.
+- **An insert policy's `WITH CHECK` cannot do it either.**
+  `confirm_relay_squad_payment()` is `SECURITY DEFINER` and bypasses RLS
+  entirely. A `BEFORE INSERT` trigger is the one mechanism covering both
+  write paths.
+- **`default auth.uid()` fails under the RLS suite's grants.** A column
+  default is evaluated as the *inserting* role, which is not guaranteed
+  `USAGE` on schema `auth` — the scratch cluster grants `public` only. RLS
+  policies get away with calling `auth.uid()` directly because policy
+  expressions are evaluated as the table owner; defaults and `SECURITY
+  INVOKER` triggers are not. Hence `public.current_collector()`, a
+  `SECURITY DEFINER` wrapper.
+
+The trigger overrides only when `auth.uid()` is not null, so psql /
+service-role writes (seeds, backfills, ops scripts) keep whatever the
+operator passed. Those paths are already outside RLS; refusing them would
+break seeding and buy no security.
+
+`p_collected_by` was dropped from `confirm_relay_squad_payment()` rather than
+left in place — a parameter that accepts an id and silently ignores it is
+worse than no parameter. `confirmCashPayment()` lost its `collectedBy` field
+for the same reason. Covered by DB-47 (the `SECURITY DEFINER` path, asserted
+where the row provably exists) and DB-65 (explicit forgery overridden;
+omission defaulted).
+
+**Ordering trap:** `current_collector()` must be defined *above* the table
+definitions in `schema.sql`, because a default expression resolves at CREATE
+TABLE time. Placed with the other helper functions it applied fine to an
+existing database and failed every from-scratch build — caught only because
+the RLS suite provisions a scratch cluster.
+
+### 14.3 Dashboards consolidated around shared components
+
+`AthleteOverview` (team standing, races, payments, results link) and
+`MyRaces` are components, not per-page copies. `/dashboard` renders the
+first; `/captain` renders it too, because a captain **is** an athlete —
+captaincy is `teams.captain_id`, not a role — and previously none of the half
+of the meet that is about *them* was reachable from their own dashboard.
+`/parent` renders `MyRaces` once per linked child, per child rather than
+aggregated: a parent with several swimmers needs to know which of *them* is
+in heat 3.
+
+`lib/my-meet.ts` is new and read-only by construction. The data always
+existed — `entries` drives the registration form's greying-out, `heat_lanes`
+is read in full by the referee deck — but a registered swimmer had no way to
+see their own races, heat or lane without hunting the public heat sheet.
+Heat and lane render only once the sheet is `published`: an unpublished
+seeding is a draft an admin may still change.
+
+### 14.4 `getUser()` sweep
+
+The `lib/*.ts` helpers that scope a query to the signed-in user now take an
+optional `userId`, resolved through `lib/auth-user.ts`. Optional, not
+required: forcing every call site to thread an id would either churn them all
+at once or tempt callers into passing something unverified. Not a trust
+boundary either way — the id only shapes which rows the client *asks* for,
+and RLS decides what it may see.
+
+Note the brief in this session asked to "retain server-scoped `getUser()`
+inside server components, server actions, and route handlers." There are
+none: every one of these pages is `"use client"` on the browser client. The
+clause had no target, and the lib helpers are plain async functions that
+cannot call a hook — which is what the optional parameter exists to solve.
+
+**Baselines after this work:** RLS **214/214**, `db:verify` **62/62**,
+Vitest **309/309**, tsc/eslint clean.
+
+---
+
 ## Permanent Operational Standing Rules
 
 These are not architectural notes — they are binding process rules for every

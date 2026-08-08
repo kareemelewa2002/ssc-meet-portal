@@ -178,6 +178,10 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "public", table: "relay_squad_payments", trigger: "audit_relay_squad_payment_insert_trigger" },
   { schema: "public", table: "pricing_packages", trigger: "audit_pricing_package_change_trigger" },
   { schema: "public", table: "pricing_tiers", trigger: "audit_pricing_tier_change_trigger" },
+  // Server-derived payment attribution — collected_by is forced to auth.uid()
+  // rather than trusted from the client. See public.enforce_collected_by().
+  { schema: "public", table: "entry_payments", trigger: "enforce_entry_payment_collected_by" },
+  { schema: "public", table: "relay_squad_payments", trigger: "enforce_relay_squad_payment_collected_by" },
 ];
 
 /** Retired triggers, with what each one actually breaks if it survives. Any

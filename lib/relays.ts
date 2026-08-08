@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { resolveUserId } from "@/lib/auth-user";
 import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
 import type { AgeGroup, EntryStatus, Gender } from "@/lib/supabase/types";
 
@@ -183,17 +184,16 @@ export interface RelaySquadView {
 }
 
 /** The teams this user captains. Captaincy is a relationship, not a role. */
-export async function fetchCaptainedTeams(): Promise<
-  FetchResult<{ id: string; name: string }[]>
-> {
+export async function fetchCaptainedTeams(
+  userId?: string,
+): Promise<FetchResult<{ id: string; name: string }[]>> {
   const supabase = createClient();
-  const { data: auth } = await supabase.auth.getUser();
-  if (!auth.user) return ok([]);
+  const uid = await resolveUserId(supabase, userId);
+  if (!uid) return ok([]);
 
   return runQuery<{ id: string; name: string }[]>(
     "Loading the teams you captain",
-    async () =>
-      supabase.from("teams").select("id, name").eq("captain_id", auth.user!.id).order("name"),
+    async () => supabase.from("teams").select("id, name").eq("captain_id", uid).order("name"),
     { empty: [] },
   );
 }

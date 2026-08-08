@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { AppHeader } from "@/components/layout/app-header";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { didTransferTeams, fetchTeamHistoryForAthlete, type TeamHistoryEntry } from "@/lib/teams";
 
 const DEMO_HISTORY: TeamHistoryEntry[] = [
@@ -15,6 +16,7 @@ const DEMO_HISTORY: TeamHistoryEntry[] = [
 ];
 
 export default function DashboardTeamsPage() {
+  const { user, loading: userLoading } = useCurrentUser();
   const [history, setHistory] = useState<TeamHistoryEntry[]>(DEMO_HISTORY);
   const [loading, setLoading] = useState(true);
 
@@ -22,11 +24,10 @@ export default function DashboardTeamsPage() {
     let cancelled = false;
     (async () => {
       try {
+        // The shared store is the single resolution of "who is signed in" for
+        // the whole page; this used to be its own auth.getUser() round-trip.
+        if (userLoading || !user) return;
         const supabase = createClient();
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) return;
 
         const { data: athlete } = await supabase
           .from("athletes")
@@ -44,7 +45,7 @@ export default function DashboardTeamsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user, userLoading]);
 
   const sorted = [...history].sort((a, b) => a.volumeNumber - b.volumeNumber);
   const transferred = didTransferTeams(history);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Building2, Loader2, Lock, Plus, ShieldCheck, UserPlus, Users, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,7 +44,6 @@ import {
   requestToJoinTeam,
   type MyJoinRequest,
 } from "@/lib/team-memberships";
-import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { useToast } from "@/hooks/use-toast";
 import type { TeamRow } from "@/lib/supabase/types";
@@ -85,12 +84,19 @@ export default function TeamsPage() {
     setRosterLoading(false);
   };
 
-  const load = async () => {
+  // useCallback keyed on the signed-in user, so the list reloads once the
+  // shared store resolves rather than keeping the first render's null in a
+  // stale closure — which would silently fall back to the per-helper
+  // auth.getUser() this change exists to remove.
+  const load = useCallback(async () => {
     setLoading(true);
+    // user.id threaded through: these three each resolved the signed-in user
+    // with their own auth.getUser() round-trip, and this page already has it
+    // from the shared store.
     const [teamsList, athleteSummary, joinRequest, locked, names] = await Promise.all([
       fetchTeams(),
-      fetchMyAthleteSummary(),
-      fetchMyJoinRequest(),
+      fetchMyAthleteSummary(user?.id),
+      fetchMyJoinRequest(user?.id),
       fetchTransfersLocked(),
       fetchTeamCaptainNames(),
     ]);
@@ -101,11 +107,11 @@ export default function TeamsPage() {
     setMyJoinRequest(joinRequest);
     setDataError(firstError(teamsList, athleteSummary));
     setLoading(false);
-  };
+  }, [user?.id]);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
 
   const handleRequestToJoin = async (team: TeamRow) => {
     setJoinBusyTeamId(team.id);
@@ -147,10 +153,6 @@ export default function TeamsPage() {
     }
     setSubmitting(true);
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
       if (!user) {
         setError("Sign in as a coach or team captain to create a team.");
         return;

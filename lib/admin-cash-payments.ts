@@ -167,7 +167,10 @@ export async function confirmCashPayment(input: {
   amountEgp: number;
   tier: PricingTier;
   lines: PriceLine[];
-  collectedBy: string | null;
+  // No collectedBy: public.enforce_collected_by() derives the collector from
+  // auth.uid() on insert, so a value passed from here would be overwritten.
+  // Dropped rather than left in place, because a field that looks like it
+  // sets the audit collector but silently cannot is worse than no field.
   note?: string;
 }): Promise<{ success: boolean; error?: string }> {
   if (input.entryIds.length === 0) {
@@ -183,7 +186,6 @@ export async function confirmCashPayment(input: {
       tier: input.tier,
       amount_egp: input.amountEgp,
       method: "cash",
-      collected_by: input.collectedBy,
       note: input.note ?? null,
     })
     .select("id")

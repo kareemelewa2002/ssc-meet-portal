@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { resolveUserId } from "@/lib/auth-user";
 import { runQuery, type FetchResult } from "@/lib/fetch-policy";
 import { firstOf } from "@/lib/live-heats";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
@@ -26,13 +27,14 @@ export interface LinkedChildCard {
  * already grants a parent SELECT on every athlete row where
  * parent_id = auth.uid(), with no age restriction — the age<15 gate in
  * owns_athlete() only governs WRITE access, not this read. */
-export async function fetchMyLinkedChildren(): Promise<FetchResult<LinkedChildCard[]>> {
+export async function fetchMyLinkedChildren(
+  userId?: string,
+): Promise<FetchResult<LinkedChildCard[]>> {
   const supabase = createClient();
   return runQuery<LinkedChildCard[]>(
     "Loading your linked children",
     async () => {
-      const { data: authData } = await supabase.auth.getUser();
-      const parentId = authData.user?.id;
+      const parentId = await resolveUserId(supabase, userId);
       if (!parentId) return { data: [], error: null };
 
       const { data, error } = await supabase

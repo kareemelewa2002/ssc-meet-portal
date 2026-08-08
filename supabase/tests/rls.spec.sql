@@ -2508,7 +2508,7 @@ begin
 
   perform ssc_test.act_as(v_captain);
   begin
-    perform public.confirm_relay_squad_payment(v_squad, v_captain);
+    perform public.confirm_relay_squad_payment(v_squad);
   exception when others then
     v_blocked := true;
   end;
@@ -2530,20 +2530,30 @@ declare
   v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
   v_amount int;
   v_status text;
+  v_collector uuid;
 begin
   select squad_id into v_squad from rls_relay_fixture;
 
   perform ssc_test.act_as(v_admin);
-  perform public.confirm_relay_squad_payment(v_squad, v_admin, 'DB-47 probe');
+  perform public.confirm_relay_squad_payment(v_squad, 'DB-47 probe');
   perform set_config('role', 'postgres', true);
 
-  select amount_egp into v_amount from public.relay_squad_payments where squad_id = v_squad;
+  select amount_egp, collected_by into v_amount, v_collector
+    from public.relay_squad_payments where squad_id = v_squad;
   select status::text into v_status from public.relay_squads where id = v_squad;
 
   perform ssc_test.check(
     'DB-47', 'an admin can confirm a complete relay squad''s payment',
     v_status = 'confirmed' and v_amount = 4 * 300,
     format('status=%s amount=%s', v_status, v_amount));
+  -- The collector reaching the table through a SECURITY DEFINER function,
+  -- which runs with RLS bypassed: the BEFORE INSERT trigger is the only thing
+  -- that could have set this, so a correct value proves the rule holds on the
+  -- one write path an insert policy's WITH CHECK could never have covered.
+  -- confirm_relay_squad_payment() no longer even TAKES a collector.
+  perform ssc_test.check(
+    'DB-47', 'the relay payment records auth.uid() as collector, not a parameter',
+    v_collector = v_admin, format('collected_by=%s admin=%s', v_collector, v_admin));
 exception when others then
   perform set_config('role', 'postgres', true);
   perform ssc_test.check('DB-47', 'admin confirms relay payment', false, sqlerrm);
@@ -2561,7 +2571,7 @@ begin
 
   perform ssc_test.act_as(v_admin);
   begin
-    perform public.confirm_relay_squad_payment(v_squad, v_admin);
+    perform public.confirm_relay_squad_payment(v_squad);
   exception when others then
     v_refused := true;
   end;
@@ -3291,6 +3301,53 @@ begin
 exception when others then
   perform set_config('role', 'postgres', true);
   perform ssc_test.check('DB-64', 'invite link create/preview/redeem/revoke', false, sqlerrm);
+end $$;
+
+-- DB-65: collected_by is server-derived on the payment tables. An
+-- authenticated admin who explicitly supplies SOMEONE ELSE'S id has it
+-- overwritten with their own (public.enforce_collected_by), so the figure the
+-- cash desk displays can never disagree with the admin_actions audit row.
+do $$
+declare
+  v_admin uuid := ssc_test.user_id('elewakareem2002@gmail.com');
+  v_other uuid := ssc_test.user_id('referee1@ssc-demo.test');
+  v_athlete uuid;
+  v_volume uuid;
+  v_payment uuid;
+  v_stored uuid;
+  v_defaulted uuid;
+begin
+  select id into v_athlete from public.athletes limit 1;
+  select id into v_volume from public.meet_volumes order by volume_number limit 1;
+
+  perform ssc_test.act_as(v_admin);
+
+  -- Explicitly forged collector.
+  insert into public.entry_payments (athlete_id, meet_volume_id, tier, amount_egp, collected_by, note)
+  values (v_athlete, v_volume, 'standard', 1, v_other, 'DB-65 forged')
+  returning id into v_payment;
+  select collected_by into v_stored from public.entry_payments where id = v_payment;
+
+  -- Column omitted entirely — the DEFAULT auth.uid() path.
+  insert into public.entry_payments (athlete_id, meet_volume_id, tier, amount_egp, note)
+  values (v_athlete, v_volume, 'standard', 1, 'DB-65 omitted')
+  returning id into v_payment;
+  select collected_by into v_defaulted from public.entry_payments where id = v_payment;
+
+  perform set_config('role', 'postgres', true);
+  delete from public.entry_payments where note like 'DB-65%';
+
+  perform ssc_test.check(
+    'DB-65', 'an explicitly forged collected_by is overwritten with auth.uid()',
+    v_stored = v_admin and v_stored <> v_other,
+    format('stored=%s admin=%s other=%s', v_stored, v_admin, v_other));
+  perform ssc_test.check(
+    'DB-65', 'an omitted collected_by defaults to auth.uid()',
+    v_defaulted = v_admin, format('stored=%s admin=%s', v_defaulted, v_admin));
+exception when others then
+  perform set_config('role', 'postgres', true);
+  delete from public.entry_payments where note like 'DB-65%';
+  perform ssc_test.check('DB-65', 'collected_by is server-derived', false, sqlerrm);
 end $$;
 
 -- =============================================================================

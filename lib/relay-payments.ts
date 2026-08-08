@@ -197,13 +197,14 @@ export async function fetchPendingRelaySquadPayments(): Promise<
  * comment in schema.sql for why a captain cannot do this themselves. */
 export async function confirmRelaySquadPayment(input: {
   squadId: string;
-  collectedBy: string;
   note?: string;
 }): Promise<{ success: boolean; error?: string }> {
   const supabase = createClient();
+  // No collectedBy: the collector is resolved server-side from auth.uid() by
+  // public.enforce_collected_by(), so there is nothing for a caller to get
+  // wrong (or to forge).
   const { error } = await supabase.rpc("confirm_relay_squad_payment", {
     p_squad_id: input.squadId,
-    p_collected_by: input.collectedBy,
     p_note: input.note ?? undefined,
   });
   if (error) return { success: false, error: error.message };

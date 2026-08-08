@@ -10,6 +10,8 @@ import { RelayPayments } from "@/components/captain/relay-payments";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { fetchCaptainedTeams } from "@/lib/relays";
+import { AthleteOverview } from "@/components/dashboard/athlete-overview";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 /**
  * Team captain dashboard.
@@ -20,13 +22,15 @@ import { fetchCaptainedTeams } from "@/lib/relays";
  * "does any team point at me", which is exactly what the RLS policies check.
  */
 export default function CaptainPage() {
+  const { user, loading: userLoading } = useCurrentUser();
   const [teams, setTeams] = useState<{ id: string; name: string }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (userLoading) return;
     let cancelled = false;
     (async () => {
-      const res = await fetchCaptainedTeams();
+      const res = await fetchCaptainedTeams(user?.id);
       if (cancelled) return;
       setTeams(res.data);
       setError(res.error);
@@ -34,7 +38,7 @@ export default function CaptainPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [user, userLoading]);
 
   return (
     <div className="min-h-screen">
@@ -43,7 +47,8 @@ export default function CaptainPage() {
         <header className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Captain Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            Your team roster and relay squads. Tap any swimmer for their full PB ledger.
+            Your own races and payments, plus your team&rsquo;s roster, invitations and relay
+            squads. Tap any swimmer for their full PB ledger.
           </p>
         </header>
 
@@ -78,6 +83,11 @@ export default function CaptainPage() {
                 <span className="text-sm font-bold">Invite Athletes</span>
               </Link>
             </div>
+            {/* A captain competes too — captaincy is teams.captain_id, not a
+                role — so their own entries, heat assignments and entry fees
+                belong here rather than only on /dashboard. Same component
+                the athlete dashboard renders, not a second copy. */}
+            <AthleteOverview />
             <RelayBuilder teams={teams} />
             <RelayPayments teams={teams} />
             <TeamRoster />

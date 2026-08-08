@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
+import { resolveUserId } from "@/lib/auth-user";
 import { firstOf } from "@/lib/live-heats";
 import { describeError, failure, ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
 import type { TeamRow } from "@/lib/supabase/types";
@@ -115,17 +116,15 @@ export async function fetchPendingTeams(): Promise<FetchResult<TeamRow[]>> {
  * independent of the role column (see supabase/schema.sql's user_role
  * comment: a coach stays 'coach' even while also serving as a team's
  * captain). Null if this coach doesn't captain any team yet. */
-export async function fetchMyManagedTeam(): Promise<FetchResult<TeamRow | null>> {
+export async function fetchMyManagedTeam(userId?: string): Promise<FetchResult<TeamRow | null>> {
   try {
     const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const uid = await resolveUserId(supabase, userId);
     // Signed out is a legitimate state, not a failure.
-    if (!user) return ok(null);
+    if (!uid) return ok(null);
     return await runQuery<TeamRow | null>(
       "Loading the team you manage",
-      async () => supabase.from("teams").select("*").eq("captain_id", user.id).maybeSingle(),
+      async () => supabase.from("teams").select("*").eq("captain_id", uid).maybeSingle(),
       { empty: null },
     );
   } catch (err) {
@@ -143,19 +142,19 @@ export interface MyAthleteSummary {
  * they're an athlete — drives team-creation eligibility (Open-only) and the
  * "Request to Join Team" button's state on the Teams page. Null for
  * non-athlete roles or signed-out visitors. */
-export async function fetchMyAthleteSummary(): Promise<FetchResult<MyAthleteSummary | null>> {
+export async function fetchMyAthleteSummary(
+  userId?: string,
+): Promise<FetchResult<MyAthleteSummary | null>> {
   try {
     const supabase = createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const uid = await resolveUserId(supabase, userId);
     // Signed out, or a coach/parent/admin with no athlete row — both are
     // legitimate "no summary" states, not failures.
-    if (!user) return ok(null);
+    if (!uid) return ok(null);
     const result = await runQuery<{ id: string; age_group: string; team_id: string | null } | null>(
       "Loading your athlete profile",
       async () =>
-        supabase.from("athletes").select("id, age_group, team_id").eq("user_id", user.id).maybeSingle(),
+        supabase.from("athletes").select("id, age_group, team_id").eq("user_id", uid).maybeSingle(),
       { empty: null },
     );
     if (result.error || !result.data) return { ...result, data: null };
