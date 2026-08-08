@@ -25,10 +25,11 @@ import {
 import { fetchActiveVolume } from "@/lib/volumes";
 import { formatEgp, priceLineKindLabel } from "@/lib/pricing";
 import { tierLabel } from "@/lib/pricing";
-import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 export function CashPayments({ className }: { className?: string }) {
   const toast = useToast();
+  const { user } = useCurrentUser();
   const [rows, setRows] = useState<PendingPaymentAthlete[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,9 +75,10 @@ export function CashPayments({ className }: { className?: string }) {
       }
 
       // Who took the money is part of the record, not decoration: a cash desk
-      // with no attribution cannot be reconciled afterwards.
-      const { data: auth } = await createClient().auth.getUser();
-
+      // with no attribution cannot be reconciled afterwards. Taken from the
+      // session this page already resolved rather than a fresh round-trip per
+      // confirmation — and note it is client-supplied either way, since
+      // entry_payments.collected_by has no server-side default or trigger.
       const res = await confirmCashPayment({
         athleteId: row.athleteId,
         meetVolumeId: volumeId,
@@ -84,7 +86,7 @@ export function CashPayments({ className }: { className?: string }) {
         amountEgp: row.totalEgp,
         tier: row.tier,
         lines: row.lines,
-        collectedBy: auth.user?.id ?? null,
+        collectedBy: user?.id ?? null,
       });
       if (!res.success) throw new Error(res.error ?? "Failed to confirm cash payment.");
       setRows((prev) => prev.filter((r) => r.athleteId !== row.athleteId));

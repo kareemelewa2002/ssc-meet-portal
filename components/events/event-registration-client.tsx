@@ -8,6 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/hooks/use-current-user";
 import { fetchVolumeByNumber } from "@/lib/volumes";
 import { fetchTeams } from "@/lib/teams";
 import { canSubmitEntries } from "@/lib/register";
@@ -94,7 +95,16 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
   const [success, setSuccess] = useState(false);
   const [previousBest, setPreviousBest] = useState<Map<string, number>>(new Map());
 
+  // The signed-in user comes from the shared resolution every page already
+  // performs (AppHeader mounts it), not from this component's own
+  // auth.getUser() round-trip — see hooks/use-current-user.ts.
+  const { user, loading: userLoading } = useCurrentUser();
+
   useEffect(() => {
+    // Nothing here can be decided until the session is known: an athlete
+    // lookup keyed on a not-yet-resolved user would report "sign in to
+    // register" to someone who is signed in.
+    if (userLoading) return;
     let cancelled = false;
     (async () => {
       const volResult = await fetchVolumeByNumber(volId);
@@ -139,9 +149,6 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
 
       try {
         const supabase = createClient();
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
         if (!user) {
           if (!cancelled) setAuthError("Sign in to register for a meet volume.");
           return;
@@ -206,7 +213,9 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [volId]);
+    // `user` is referentially stable once resolved (one shared object in the
+    // store), so this runs once per volume rather than on every render.
+  }, [volId, userLoading, user]);
 
   // Admin approval deliberately does NOT gate registration any more: an
   // athlete signs up, picks their races, and the admin then approves the

@@ -22,7 +22,7 @@ import {
   type RelaySquadPayment,
 } from "@/lib/relay-payments";
 import { formatEgp } from "@/lib/pricing";
-import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/hooks/use-current-user";
 
 /**
  * The relay half of the cash desk — kept as its own card rather than folded
@@ -39,6 +39,7 @@ import { createClient } from "@/lib/supabase/client";
  */
 export function RelaySquadPayments({ className }: { className?: string }) {
   const toast = useToast();
+  const { user } = useCurrentUser();
   const [rows, setRows] = useState<RelaySquadPayment[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -66,10 +67,14 @@ export function RelaySquadPayments({ className }: { className?: string }) {
     setBusySquadId(row.squadId);
     setError(null);
     try {
-      const { data: auth } = await createClient().auth.getUser();
+      // Who took the money, from the session already resolved for this page
+      // rather than a fresh network round-trip per click. Note this id is
+      // client-supplied either way — relay_squad_payments.collected_by has no
+      // server-side default or trigger, so the attribution is only as strong
+      // as the RLS that decides who may insert at all.
       const res = await confirmRelaySquadPayment({
         squadId: row.squadId,
-        collectedBy: auth.user?.id ?? "",
+        collectedBy: user?.id ?? "",
       });
       if (!res.success) throw new Error(res.error ?? "Failed to confirm relay payment.");
       setRows((prev) => prev.filter((r) => r.squadId !== row.squadId));
