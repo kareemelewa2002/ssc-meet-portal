@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { CREDENTIALS, SEED_PASSWORD, login, requireFixture, tryLogin } from "./helpers";
 
 /**
@@ -15,98 +15,172 @@ import { CREDENTIALS, SEED_PASSWORD, login, requireFixture, tryLogin } from "./h
  * other spec relying on it. Tests below that touch this fixture therefore
  * decline/revoke rather than accept — the invite-link auto-join path is
  * instead proven with a disposable, uniquely-emailed throwaway account.
+ *
+ * Anything that signs a SECOND account in does so in its own browser
+ * context, never context.newPage(). Pages in one context share cookies, so
+ * a second sign-in silently replaces the first page's session — the captain
+ * would be signed out from under the assertions still to come.
  */
 
 function uniqueEmail(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000)}@ssc-demo.test`;
+  // @gmail.com, matching 02-registration.spec.ts: local GoTrue is stricter
+  // about the domains it will accept for a real signup than the admin API
+  // seed-demo.sql uses for the @ssc-demo.test fixtures.
+  return `${prefix}.${Date.now()}.${Math.floor(Math.random() * 1000)}@gmail.com`;
+}
+
+/**
+ * The two acknowledgement boxes, ticked the way 02-registration.spec.ts
+ * established: force + an explicit toBeChecked(), because the signup form
+ * re-renders as fields are filled and Playwright's stability heuristic can
+ * time out on a checkbox it has already ticked.
+ */
+async function acceptTerms(page: Page) {
+  const privacy = page.locator("#acceptPrivacy");
+  const safety = page.locator("#acceptSafety");
+  await privacy.check({ force: true });
+  await safety.check({ force: true });
+  await expect(privacy).toBeChecked();
+  await expect(safety).toBeChecked();
+}
+
+/** Waits out the skeletons on /captain/invitations — every control below is
+ * mounted only once fetchMyManagedTeam() resolves, so probing for one before
+ * that resolves reads "absent" for a button that is merely late. */
+async function openInvitationsPage(page: Page) {
+  await page.goto("/captain/invitations", { waitUntil: "domcontentloaded" });
+  await expect(page.getByText("Shareable link")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Pending invitations")).toBeVisible({ timeout: 20_000 });
 }
 
 test.describe("Captain: shareable invite link", () => {
-  test("generating a link, then registering through it, auto-joins the team", async ({ page, context }) => {
+  test("generating a link, then registering through it, auto-joins the team", async ({ page, browser }) => {
     test.slow();
 
     await login(page, CREDENTIALS.captainRiptide);
-    await page.goto("/captain/invitations", { waitUntil: "domcontentloaded" });
+    await openInvitationsPage(page);
 
+    // Exactly one of these exists once the card has loaded: "Create invite
+    // link" when the team has none, "Regenerate" when a previous run left one
+    // behind. Regenerating resets use_count to zero so this run's redemption
+    // is unambiguous.
     const createBtn = page.getByRole("button", { name: /create invite link/i });
     if (await createBtn.count()) {
       await createBtn.click();
     } else {
-      // A link already exists from a previous run — regenerate so use_count
-      // starts at zero and this run's redemption is unambiguous.
-      await page.getByRole("button", { name: /regenerate/i }).click();
+      await page.getByRole("button", { name: "Regenerate", exact: true }).click();
     }
-    const code = page.locator("code");
+
+    const code = page.locator("main code");
     await expect(code).toBeVisible({ timeout: 15_000 });
     const inviteUrl = (await code.textContent())?.trim();
     expect(inviteUrl).toMatch(/\/register\?invite=/);
 
-    // A brand-new browser context, unauthenticated, following the link.
-    const registerPage = await context.newPage();
-    await registerPage.goto(inviteUrl!);
-    await expect(registerPage.getByText(/You're signing up via an invite from/i)).toBeVisible();
-    await expect(registerPage.getByText("Riptide Swim Club")).toBeVisible({ timeout: 15_000 });
+    // A genuinely separate context: unauthenticated, no captain cookies.
+    const guestContext = await browser.newContext();
+    const registerPage = await guestContext.newPage();
+    try {
+      await registerPage.goto(inviteUrl!);
+      await expect(registerPage.getByText(/You're signing up via an invite from/i)).toBeVisible({
+        timeout: 15_000,
+      });
+      await expect(registerPage.getByText("Riptide Swim Club")).toBeVisible({ timeout: 15_000 });
 
-    const email = uniqueEmail("invitee");
-    await registerPage.locator("#fullName").fill("Invite Test Swimmer");
-    await registerPage.locator("#email").fill(email);
-    await registerPage.locator("#phone").fill("+201000000000");
-    await registerPage.locator("#password").fill(SEED_PASSWORD);
-    await registerPage.locator("#confirmPassword").fill(SEED_PASSWORD);
-    await registerPage.locator("#dob").fill("2000-01-01");
-    await registerPage.getByRole("button", { name: "male", exact: true }).click();
-    await registerPage.locator("#acceptSafety").check();
-    await registerPage.locator("#acceptPrivacy").check();
-    await registerPage.getByRole("button", { name: "Create account" }).click();
-    await expect(registerPage.getByText(/Account created/i)).toBeVisible({ timeout: 20_000 });
+      const email = uniqueEmail("e2e.invitee");
+      await registerPage.locator("#fullName").fill("Invite Test Swimmer");
+      await registerPage.locator("#email").fill(email);
+      await registerPage.locator("#phone").fill("+201000000000");
+      await registerPage.locator("#password").fill(SEED_PASSWORD);
+      await registerPage.locator("#confirmPassword").fill(SEED_PASSWORD);
+      await registerPage.locator("#dob").fill("2000-01-01"); // Open age, no parent gate
+      await registerPage.getByRole("button", { name: "male", exact: true }).click();
+      await acceptTerms(registerPage);
+      await registerPage.getByRole("button", { name: "Create account" }).click();
 
-    await registerPage.close();
+      // GoTrue throttles signups two different ways and only one of them says
+      // "rate limit" — see 02-registration.spec.ts. Exact text, not /account
+      // created/i: the AppHeader title on this same screen is "Account
+      // Created", and a case-insensitive match hits both, which is a
+      // strict-mode violation rather than a pass.
+      const rateLimited = registerPage.getByText(/rate limit|for security purposes/i);
+      const success = registerPage.getByText("Account created!");
+      await expect(rateLimited.or(success)).toBeVisible({ timeout: 30_000 });
+      test.skip(
+        await rateLimited.isVisible(),
+        "Supabase auth email send rate limit hit — cannot exercise the signup path this run.",
+      );
+      await expect(success).toBeVisible();
+
+      // The actual claim under test. Redemption happens server-side inside
+      // public.handle_new_auth_user(), so "the form submitted" proves nothing
+      // on its own — sign the new account in and confirm it landed on the
+      // roster with no approval step.
+      await login(registerPage, email);
+      await registerPage.goto("/dashboard/team", { waitUntil: "domcontentloaded" });
+      await expect(
+        registerPage.locator('main [data-slot="card-title"]', { hasText: "Riptide Swim Club" }),
+      ).toBeVisible({ timeout: 20_000 });
+    } finally {
+      await guestContext.close();
+    }
   });
 });
 
 test.describe("Captain: in-app invite + athlete-side response", () => {
   test("captain searches and invites an unattached athlete; it appears as Pending; athlete sees and declines it", async ({
     page,
-    context,
+    browser,
   }) => {
     test.slow();
 
     await login(page, CREDENTIALS.captainRiptide);
-    await page.goto("/captain/invitations", { waitUntil: "domcontentloaded" });
+    await openInvitationsPage(page);
 
     // CREDENTIALS.unattached (athlete39) is seeded as "Selim Fahmy" — see
     // supabase/seed-demo.sql.
+    const revokeSelim = page.getByRole("button", { name: "Revoke invitation to Selim Fahmy" });
+    // An unclean previous run can leave the invite already sent. Cleared from
+    // the Pending list, which renders straight from the server on load —
+    // the search results below are behind a 350ms debounce plus a fetch, so
+    // probing THEM for prior state reads empty every time regardless.
+    if (await revokeSelim.count()) {
+      await revokeSelim.click();
+      await expect(revokeSelim).toHaveCount(0, { timeout: 15_000 });
+    }
+
     const searchBox = page.getByLabel("Search unattached athletes");
     await searchBox.fill("Selim Fahmy");
-    const inviteBtn = page.getByRole("button", { name: "Invite" });
-    // Might already be invited from a previous unclean run — if so, revoke
-    // first so this test starts from a known state.
-    if ((await inviteBtn.count()) === 0) {
-      const existingRevoke = page.locator('[aria-label*="Revoke invitation to Selim Fahmy"]');
-      if (await existingRevoke.count()) {
-        await existingRevoke.click();
-        await searchBox.fill("");
-        await searchBox.fill("Selim Fahmy");
-      }
-    }
+    const inviteBtn = page.getByRole("button", { name: "Invite", exact: true });
     await expect(inviteBtn).toBeVisible({ timeout: 15_000 });
     await inviteBtn.click();
-    await expect(page.getByText("Selim Fahmy")).toBeVisible({ timeout: 15_000 });
+
+    // Asserted via the revoke control's aria-label rather than the bare name:
+    // the name can legitimately appear twice (search result + pending row)
+    // mid-transition, and getByText would fail strict mode on the overlap.
+    await expect(revokeSelim).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText("Awaiting response")).toBeVisible();
+    await expect(page.getByText(/Could not send that invite/i)).toHaveCount(0);
 
-    // Athlete-side: the invite appears on /dashboard with Accept/Decline.
-    const athletePage = await context.newPage();
-    const signedIn = await tryLogin(athletePage, CREDENTIALS.unattached);
-    requireFixture(signedIn, `the unattached athlete account ${CREDENTIALS.unattached}`);
-    await athletePage.goto("/dashboard", { waitUntil: "domcontentloaded" });
+    // Athlete-side, in its own context so the captain above stays signed in.
+    const athleteContext = await browser.newContext();
+    const athletePage = await athleteContext.newPage();
+    try {
+      const signedIn = await tryLogin(athletePage, CREDENTIALS.unattached);
+      requireFixture(signedIn, `the unattached athlete account ${CREDENTIALS.unattached}`);
+      await athletePage.goto("/dashboard", { waitUntil: "domcontentloaded" });
 
-    await expect(athletePage.getByText("Team invitation")).toBeVisible({ timeout: 15_000 });
-    await expect(athletePage.getByText(/Riptide Swim Club invited you/i)).toBeVisible();
-    // Decline, not accept — keeps athlete39 unattached for every other spec.
-    await athletePage.getByRole("button", { name: "Decline" }).click();
-    await expect(athletePage.getByText("Team invitation")).toHaveCount(0, { timeout: 15_000 });
+      await expect(athletePage.getByText("Team invitation")).toBeVisible({ timeout: 15_000 });
+      await expect(athletePage.getByText(/Riptide Swim Club invited you/i)).toBeVisible();
+      // Decline, not accept — keeps athlete39 unattached for every other spec.
+      await athletePage.getByRole("button", { name: "Decline", exact: true }).click();
+      await expect(athletePage.getByText("Team invitation")).toHaveCount(0, { timeout: 15_000 });
+    } finally {
+      await athleteContext.close();
+    }
 
-    await athletePage.close();
+    // And the captain's pending list empties out once it's declined.
+    await openInvitationsPage(page);
+    await expect(revokeSelim).toHaveCount(0);
   });
 });
 
@@ -124,9 +198,16 @@ test.describe("Athlete dashboard: current team", () => {
     await expect(teamLink).toBeVisible({ timeout: 15_000 });
     await teamLink.click();
     await expect(page).toHaveURL(/\/dashboard\/team/);
-    await expect(page.getByRole("heading", { name: "Riptide Swim Club" })).toBeVisible({
-      timeout: 15_000,
-    });
+
+    // CardTitle renders a plain <div data-slot="card-title"> (see
+    // components/ui/card.tsx) — it carries no heading role, so the team name
+    // has to be matched on the slot rather than by getByRole("heading").
+    await expect(
+      page.locator('main [data-slot="card-title"]', { hasText: "Riptide Swim Club" }),
+    ).toBeVisible({ timeout: 15_000 });
+    // The page's whole point is contact info the athlete could not see before.
+    await expect(page.getByText(/swimmers? on the roster/i)).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('main a[href^="mailto:"]').first()).toBeVisible({ timeout: 15_000 });
   });
 });
 
@@ -144,7 +225,11 @@ test.describe("Parent dashboard", () => {
     requireFixture(signedIn, `the parent account ${CREDENTIALS.parent1}`);
     await page.goto("/parent", { waitUntil: "domcontentloaded" });
 
-    await expect(page.getByRole("heading", { name: "Parent Dashboard" })).toBeVisible();
+    // Scoped to main: AppHeader renders the page title in its own <h1>, so an
+    // unscoped heading query matches twice and fails strict mode.
+    await expect(
+      page.locator("main").getByRole("heading", { name: "Parent Dashboard" }),
+    ).toBeVisible({ timeout: 15_000 });
     const resultsLinks = page.getByRole("link", { name: /Results, PBs & leaderboard placements/i });
     // parent1 has 4 linked children per e2e/helpers.ts.
     await expect(resultsLinks).toHaveCount(4, { timeout: 15_000 });

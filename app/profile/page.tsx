@@ -13,13 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser, ROLE_LABELS } from "@/hooks/use-current-user";
-import type { UserRole } from "@/lib/supabase/types";
-
-const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
-  admin: "/admin",
-  referee: "/referee",
-  parent: "/parent",
-};
+import { ROLE_DASHBOARD_HREF } from "@/lib/role-dashboards";
 
 /**
  * "Profile" in the AppHeader dropdown. Athletes have a full public profile

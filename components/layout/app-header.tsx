@@ -19,20 +19,13 @@ import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
 import { NotificationBell } from "@/components/notifications/notification-bell";
-import type { UserRole } from "@/lib/supabase/types";
+import { ROLE_DASHBOARD_HREF } from "@/lib/role-dashboards";
 
 export interface AppHeaderProps {
   /** Page title shown centered in the bar. */
   title?: string;
   className?: string;
 }
-
-/** Only roles with a dedicated deck portal get a "Role Dashboard" link —
- * athletes/parents use /profile and the public pages instead. */
-const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
-  admin: "/admin",
-  referee: "/referee",
-};
 
 function initialsFor(fullName: string): string {
   return fullName
