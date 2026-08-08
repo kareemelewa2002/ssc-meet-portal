@@ -212,6 +212,10 @@ export function RefereeHeatCards({ className }: { className?: string }) {
             <div
               key={heat.heatId}
               data-testid="review-heat-card"
+              // The visible label is "{event} — {heatTitle}", and heat numbers
+              // restart per age board AND gender, so matching a card by its
+              // text can select a different heat that happens to share one.
+              data-heat-id={heat.heatId}
               className="space-y-3 rounded-lg border p-3"
             >
               <div className="flex flex-wrap items-center justify-between gap-2">

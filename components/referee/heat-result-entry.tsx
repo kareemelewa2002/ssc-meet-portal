@@ -93,6 +93,12 @@ export function HeatResultEntry({
   const [saved, setSaved] = useState(false);
   const [alreadySubmitted, setAlreadySubmitted] = useState(false);
   const [alreadyPublished, setAlreadyPublished] = useState(false);
+  // Whether this card's postgres_changes channel has actually reached
+  // SUBSCRIBED. Surfaced on the card as data-realtime so a second device can
+  // be waited on deterministically: a change published BEFORE the channel is
+  // subscribed is never replayed, so anything that writes while this still
+  // reads "connecting" silently misses the update.
+  const [realtimeReady, setRealtimeReady] = useState(false);
   // A submitted card presents as submitted until the user explicitly chooses
   // to edit it, so re-submitting is always a decision rather than a side
   // effect of tapping a lane.
@@ -172,6 +178,9 @@ export function HeatResultEntry({
     })();
 
     const laneIdSet = new Set(laneIds);
+    // Re-subscribing (the lane set changed) means the previous channel is
+    // gone, so this card is momentarily deaf again until the new one lands.
+    setRealtimeReady(false);
     const supabase = createClient();
     const channel = supabase
       .channel(`referee-heat-results-${heatId}`)
@@ -193,7 +202,9 @@ export function HeatResultEntry({
           applyResultRow(row);
         },
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (!cancelled) setRealtimeReady(status === "SUBSCRIBED");
+      });
 
     return () => {
       cancelled = true;
@@ -307,6 +318,7 @@ export function HeatResultEntry({
   return (
     <Card
       data-testid={`heat-card-${heatId}`}
+      data-realtime={realtimeReady ? "subscribed" : "connecting"}
       className={cn(
         outdoorMode && "border-yellow-300/40 bg-black text-yellow-300",
         className,

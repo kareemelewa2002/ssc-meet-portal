@@ -135,13 +135,21 @@ test.describe("Consolidated Referee deck", () => {
       await page.getByRole("button", { name: /Referee Heat Cards/ }).click();
       await page.waitForTimeout(2500);
 
-      const queued = page
-        .locator('[data-testid="review-heat-card"]')
-        .filter({ hasText: `Heat ${fixture.heatNumber}` })
-        .first();
+      // Addressed by heat id, not by "Heat {n}": heat numbers restart per age
+      // board and per gender, so a text match can select a different card
+      // entirely — and .first() would then publish the wrong heat and leave
+      // this fixture merely submitted, failing the referee-side assertion
+      // below for a reason that has nothing to do with the code under test.
+      const queued = page.locator(
+        `[data-testid="review-heat-card"][data-heat-id="${fixture.heatId}"]`,
+      );
       await expect(queued).toBeVisible({ timeout: 15_000 });
       await queued.getByRole("button", { name: /Publish Heat Card/ }).click();
-      await page.waitForTimeout(2500);
+      // Asserted, not slept on: switching back to the referee before the
+      // publish lands tests an unpublished card and fails misleadingly.
+      await expect(queued.getByText("Published", { exact: true })).toBeVisible({
+        timeout: 20_000,
+      });
 
       // Back as the referee: published is read-only, and says so.
       await logout(page);
@@ -238,8 +246,11 @@ test.describe("Consolidated Referee deck", () => {
 
       // B's postgres_changes channel has to reach SUBSCRIBED before A writes:
       // an event published into the gap is not replayed, and the test would
-      // fail for a timing reason rather than a broken subscription.
-      await pageB.waitForTimeout(3000);
+      // fail for a timing reason rather than a broken subscription. This was
+      // a blind 3s sleep, which is either too long or — on a cold start,
+      // which is exactly when it matters — not long enough. The card now
+      // reports its own channel state, so this waits for the real signal.
+      await expect(cardB).toHaveAttribute("data-realtime", "subscribed", { timeout: 30_000 });
 
       await cardA.getByRole("button", { name: "Valid Time" }).first().click();
       await cardA.locator('input[id^="time-"]').first().fill("31.42");

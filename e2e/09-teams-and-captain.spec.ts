@@ -119,6 +119,13 @@ test.describe("Team join-request workflow", () => {
     requireFixture(signedIn, `the unattached athlete account ${CREDENTIALS.unattached}`);
     await page.goto("/teams", { waitUntil: "domcontentloaded" });
 
+    // Wait for the cards to hydrate before probing for prior state. The
+    // leftover check below is a .count(), which does not auto-wait — run
+    // against a still-loading page it reads "absent" every time, so a real
+    // leftover request slips through and then disables every Request button
+    // for the rest of the test.
+    await expect(page.locator('[data-slot="card"]').first()).toBeVisible({ timeout: 20_000 });
+
     // A leftover pending request (previous run, or a cancelled cleanup that
     // never finished) disables every other Request button — clear it first.
     const leftover = page.getByRole("button", { name: /Cancel Request \(Pending\)/ });
@@ -147,7 +154,7 @@ test.describe("Team join-request workflow", () => {
     await expect(page.getByRole("button", { name: "Request to Join Team" }).first()).toBeEnabled();
   });
 
-  test("a team's captain sees a pending join request and can accept or reject it in the roster modal", async ({ page, context }) => {
+  test("a team's captain sees a pending join request and can accept or reject it in the roster modal", async ({ page, browser }) => {
     // The longest flow in the suite: two browser contexts, two full sign-ins,
     // and a chain of 15-20s waits on realtime-backed lists. It was overrunning
     // the 90s default at the very LAST step — the reject had already gone
@@ -155,47 +162,61 @@ test.describe("Team join-request workflow", () => {
     // than trimming the waits, which are what make the test reliable.
     test.slow();
 
-    // Requester (athlete13) files a request to Blue Marlins.
-    const requesterPage = await context.newPage();
-    // Must be the unattached athlete — anyone already on a team is blocked by
-    // the transfer lock while the volume is 'scheduled'.
-    const signedIn = await tryLogin(requesterPage, CREDENTIALS.unattached);
-    requireFixture(signedIn, `the unattached athlete account ${CREDENTIALS.unattached}`);
-    await requesterPage.goto("/teams", { waitUntil: "domcontentloaded" });
+    // The requester gets its OWN context. It used to be context.newPage(),
+    // which shares cookies with `page` — so signing the requester in first
+    // left a live athlete session on the context, and the captain's sign-in
+    // below then happened over it. That is the failure 05-referee.spec.ts
+    // already documents: signing in over a live session leaves the form
+    // spinning and never navigates, so login() times out.
+    const requesterContext = await browser.newContext();
+    const requesterPage = await requesterContext.newPage();
+    try {
+      // Must be the unattached athlete — anyone already on a team is blocked by
+      // the transfer lock while the volume is 'scheduled'.
+      const signedIn = await tryLogin(requesterPage, CREDENTIALS.unattached);
+      requireFixture(signedIn, `the unattached athlete account ${CREDENTIALS.unattached}`);
+      await requesterPage.goto("/teams", { waitUntil: "domcontentloaded" });
 
-    const blueMarlinsCard = requesterPage.locator('[data-slot="card"]', { hasText: "Blue Marlins" });
-    // Clear any pending request left on another team so Blue Marlins is requestable.
-    const leftover = requesterPage.getByRole("button", { name: /Cancel Request \(Pending\)/ });
-    if (await leftover.count()) {
-      await leftover.first().click();
-      await expect(leftover).toHaveCount(0, { timeout: 15_000 });
+      const blueMarlinsCard = requesterPage.locator('[data-slot="card"]', { hasText: "Blue Marlins" });
+      await expect(blueMarlinsCard).toBeVisible({ timeout: 20_000 });
+      // Clear any pending request left on another team so Blue Marlins is
+      // requestable. Probed only after the cards have hydrated — .count()
+      // does not auto-wait, so on a still-loading page it always reads zero.
+      const leftover = requesterPage.getByRole("button", { name: /Cancel Request \(Pending\)/ });
+      if (await leftover.count()) {
+        await leftover.first().click();
+        await expect(leftover).toHaveCount(0, { timeout: 15_000 });
+      }
+      const requestBtn = blueMarlinsCard.getByRole("button", { name: "Request to Join Team" });
+      await expect(requestBtn).toBeEnabled({ timeout: 20_000 });
+      await requestBtn.click();
+      await expect(
+        blueMarlinsCard.getByRole("button", { name: /Cancel Request \(Pending\)/ }),
+      ).toBeVisible({ timeout: 15_000 });
+
+      // Captain (captain.riptide manages Riptide, not Blue Marlins — use the
+      // Blue Marlins captain instead: captain.marlins, per SEED_CREDENTIALS.md).
+      await login(page, CREDENTIALS.captainMarlins);
+      await page.goto("/teams", { waitUntil: "domcontentloaded" });
+      const marlinsCard = page.locator('[data-slot="card"]', { hasText: "Blue Marlins" });
+      const rosterBtn = marlinsCard.getByRole("button", { name: "View Roster & Captain Contact" });
+      await expect(rosterBtn).toBeVisible({ timeout: 20_000 });
+      await rosterBtn.scrollIntoViewIfNeeded();
+      await rosterBtn.click();
+
+      const joinRequestsHeading = page.getByText(/Join Requests/);
+      await expect(joinRequestsHeading).toBeVisible({ timeout: 20_000 });
+      const rejectBtn = page.getByRole("button", { name: "Reject" }).first();
+      await expect(rejectBtn).toBeVisible({ timeout: 15_000 });
+      // Reject rather than accept, so this test doesn't permanently move the
+      // unattached fixture onto Blue Marlins' roster on every run.
+      await rejectBtn.click();
+      // Asserted rather than slept on — a reject that silently failed would
+      // otherwise leave a pending request behind for every spec after this
+      // one (13-team-invites depends on this same account being clean).
+      await expect(rejectBtn).toHaveCount(0, { timeout: 15_000 });
+    } finally {
+      await requesterContext.close();
     }
-    const requestBtn = blueMarlinsCard.getByRole("button", { name: "Request to Join Team" });
-    await expect(requestBtn).toBeEnabled({ timeout: 20_000 });
-    await requestBtn.click();
-    await expect(
-      blueMarlinsCard.getByRole("button", { name: /Cancel Request \(Pending\)/ }),
-    ).toBeVisible({ timeout: 15_000 });
-
-    // Captain (captain.riptide manages Riptide, not Blue Marlins — use the
-    // Blue Marlins captain instead: captain.marlins, per SEED_CREDENTIALS.md).
-    await login(page, CREDENTIALS.captainMarlins);
-    await page.goto("/teams", { waitUntil: "domcontentloaded" });
-    const marlinsCard = page.locator('[data-slot="card"]', { hasText: "Blue Marlins" });
-    const rosterBtn = marlinsCard.getByRole("button", { name: "View Roster & Captain Contact" });
-    await expect(rosterBtn).toBeVisible({ timeout: 20_000 });
-    await rosterBtn.scrollIntoViewIfNeeded();
-    await rosterBtn.click();
-
-    const joinRequestsHeading = page.getByText(/Join Requests/);
-    await expect(joinRequestsHeading).toBeVisible({ timeout: 20_000 });
-    const rejectBtn = page.getByRole("button", { name: "Reject" }).first();
-    await expect(rejectBtn).toBeVisible({ timeout: 15_000 });
-    // Reject rather than accept, so this test doesn't permanently move the
-    // unattached fixture onto Blue Marlins' roster on every run.
-    await rejectBtn.click();
-    await page.waitForTimeout(1000);
-
-    await requesterPage.close();
   });
 });

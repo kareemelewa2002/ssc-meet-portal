@@ -115,11 +115,23 @@ test.describe("Captain: shareable invite link", () => {
       // public.handle_new_auth_user(), so "the form submitted" proves nothing
       // on its own — sign the new account in and confirm it landed on the
       // roster with no approval step.
-      await login(registerPage, email);
-      await registerPage.goto("/dashboard/team", { waitUntil: "domcontentloaded" });
-      await expect(
-        registerPage.locator('main [data-slot="card-title"]', { hasText: "Riptide Swim Club" }),
-      ).toBeVisible({ timeout: 20_000 });
+      //
+      // In a THIRD context, not this one: supabase signUp() returns a live
+      // session (auth.email.enable_confirmations = false in
+      // supabase/config.toml), so guestContext is already authenticated by
+      // now. Signing in over a live session leaves the login form spinning
+      // and never navigating — the failure mode 05-referee.spec.ts documents.
+      const verifyContext = await browser.newContext();
+      try {
+        const verifyPage = await verifyContext.newPage();
+        await login(verifyPage, email);
+        await verifyPage.goto("/dashboard/team", { waitUntil: "domcontentloaded" });
+        await expect(
+          verifyPage.locator('main [data-slot="card-title"]', { hasText: "Riptide Swim Club" }),
+        ).toBeVisible({ timeout: 20_000 });
+      } finally {
+        await verifyContext.close();
+      }
     } finally {
       await guestContext.close();
     }
