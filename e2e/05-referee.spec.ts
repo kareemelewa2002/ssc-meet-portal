@@ -147,9 +147,12 @@ test.describe("Consolidated Referee deck", () => {
       await queued.getByRole("button", { name: /Publish Heat Card/ }).click();
       // Asserted, not slept on: switching back to the referee before the
       // publish lands tests an unpublished card and fails misleadingly.
-      await expect(queued.getByText("Published", { exact: true })).toBeVisible({
-        timeout: 20_000,
-      });
+      //
+      // The signal is the card LEAVING the queue, not gaining a "Published"
+      // badge. RefereeHeatCards.publish() drops an ordinary card from the
+      // list on success (only a Skins round stays, so it can be reopened),
+      // so waiting for a badge on this card could never resolve.
+      await expect(queued).toHaveCount(0, { timeout: 20_000 });
 
       // Back as the referee: published is read-only, and says so.
       await logout(page);
@@ -258,7 +261,13 @@ test.describe("Consolidated Referee deck", () => {
       const saveA = cardA.getByRole("button", { name: /Save Progress/ });
       await expect(saveA).toBeEnabled({ timeout: 5_000 });
       await saveA.click();
-      await pageA.waitForTimeout(1500);
+      // A's write must be confirmed before B is judged on it. Without this,
+      // a save that failed at the transport layer presents as "the realtime
+      // subscription is broken" — which is exactly how the getUser() flood
+      // that saturated GoTrue disguised itself in the trace for this spec.
+      await expect(
+        pageA.getByRole("heading", { name: /Heat card submitted|Progress saved/ }),
+      ).toBeVisible({ timeout: 20_000 });
 
       // B never touched anything — a live postgres_changes subscription,
       // not a local optimistic update, must be what surfaces A's save.

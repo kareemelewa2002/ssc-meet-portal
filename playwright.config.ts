@@ -83,9 +83,10 @@ export default defineConfig({
     // a suite run against state nobody verified proves nothing. Failing loudly
     // on a busy port is the point — kill the squatter and run again.
     reuseExistingServer: false,
-    // A cold production build (no .next cache) exceeds 3 minutes on this
-    // machine, and switching between the live and test environments always
-    // invalidates that cache because NEXT_PUBLIC_* is inlined at build time.
-    timeout: 600_000,
+    // A cold production build on this machine regularly exceeds 10 minutes
+    // (db:verify + next build), and switching between the live and test
+    // environments always invalidates the .next cache because NEXT_PUBLIC_*
+    // is inlined at build time.
+    timeout: 900_000,
   },
 });

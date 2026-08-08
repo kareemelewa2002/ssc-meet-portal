@@ -55,6 +55,13 @@ test.describe("Part 5 checklist — Athlete Flow", () => {
       (await page.getByText(/safety & privacy acknowledgement must be accepted/i).count()) === 0,
       "the U14 swimmer's safety acknowledgement accepted by their parent",
     );
+    // The OTHER legal gate canSubmitEntries() enforces. Checked explicitly
+    // because its only other symptom is a disabled Submit button, which
+    // reads as a pricing or selection failure rather than what it is.
+    requireFixture(
+      (await page.getByText(/Parent\/guardian authorization is required/i).count()) === 0,
+      "the U14 swimmer's parent/guardian linkage verified",
+    );
     const selectButtons = page.getByRole("button", { name: "Select" });
     await expect(selectButtons.first()).toBeVisible({ timeout: 20_000 });
     const available = await selectButtons.evaluateAll(

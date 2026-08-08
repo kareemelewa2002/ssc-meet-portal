@@ -309,11 +309,18 @@ export async function freeRegistrationSlots(email: string): Promise<Fixture | nu
 }
 
 /**
- * Ensures a U14 swimmer's safety acknowledgement is on file.
+ * Clears both legal gates on a U14 swimmer: the safety acknowledgement AND
+ * parent/guardian linkage.
  *
- * Registration is blocked until a parent accepts it, so a database where that
- * has been cleared makes the entry specs unrunnable. Restored to whatever it
- * was afterwards, so the "outstanding acknowledgement" path stays testable.
+ * canSubmitEntries() (lib/register.ts) blocks entry on either one, and this
+ * fixture used to restore only the first. A U14 picked by
+ * findAthleteWithCapacity() whose parent_link_status was still 'pending'
+ * therefore reached the registration form, priced the 2-race package
+ * correctly, and then sat on a permanently disabled Submit button — the
+ * failure read as a pricing bug when the price on screen was right all along.
+ *
+ * Both values are restored afterwards, so the "outstanding acknowledgement"
+ * and "awaiting parent authorization" paths stay testable elsewhere.
  */
 export async function acceptSafetyFixture(email: string): Promise<Fixture | null> {
   const admin = await as(CREDENTIALS.admin);
@@ -324,7 +331,7 @@ export async function acceptSafetyFixture(email: string): Promise<Fixture | null
   if (!user?.user) return null;
   const { data: rows } = await admin
     .from("athletes")
-    .select("id, safety_accepted_at, safety_accepted_by")
+    .select("id, safety_accepted_at, safety_accepted_by, parent_link_status")
     .eq("user_id", user.user.id);
   const row = rows?.[0];
   if (!row) return null;
@@ -332,15 +339,20 @@ export async function acceptSafetyFixture(email: string): Promise<Fixture | null
   const previous = {
     safety_accepted_at: row.safety_accepted_at as string | null,
     safety_accepted_by: row.safety_accepted_by as string | null,
+    parent_link_status: row.parent_link_status as "none" | "pending" | "verified",
   };
-  if (previous.safety_accepted_at) return { cleanup: async () => {} };
+  // 'pending' is the only blocking value — 'none' (no parent required) and
+  // 'verified' both pass, so neither needs touching.
+  const needsParent = previous.parent_link_status === "pending";
+  if (previous.safety_accepted_at && !needsParent) return { cleanup: async () => {} };
 
   const { data: adminUser } = await admin.auth.getUser();
   const { error } = await admin
     .from("athletes")
     .update({
-      safety_accepted_at: new Date().toISOString(),
-      safety_accepted_by: adminUser?.user?.id ?? null,
+      safety_accepted_at: previous.safety_accepted_at ?? new Date().toISOString(),
+      safety_accepted_by: previous.safety_accepted_by ?? adminUser?.user?.id ?? null,
+      ...(needsParent ? { parent_link_status: "verified" as const } : {}),
     })
     .eq("id", row.id);
   if (error) return null;

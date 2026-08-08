@@ -49,8 +49,13 @@ async function acceptTerms(page: Page) {
  * that resolves reads "absent" for a button that is merely late. */
 async function openInvitationsPage(page: Page) {
   await page.goto("/captain/invitations", { waitUntil: "domcontentloaded" });
-  await expect(page.getByText("Shareable link")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("Pending invitations")).toBeVisible({ timeout: 20_000 });
+  // exact: true on both — the empty-state copy is "No pending invitations.",
+  // which contains the card title as a substring, so a loose match resolves
+  // to two elements and fails strict mode instead of waiting.
+  await expect(page.getByText("Shareable link", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Pending invitations", { exact: true })).toBeVisible({
+    timeout: 20_000,
+  });
 }
 
 test.describe("Captain: shareable invite link", () => {
