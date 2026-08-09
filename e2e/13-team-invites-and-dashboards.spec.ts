@@ -69,6 +69,17 @@ test.describe("Captain: shareable invite link", () => {
     // link" when the team has none, "Regenerate" when a previous run left one
     // behind. Regenerating resets use_count to zero so this run's redemption
     // is unambiguous.
+    const code = page.locator("main code");
+    // Whatever link the team already had, BEFORE regenerating. Regeneration
+    // revokes it server-side (public.create_team_invite_link keeps one active
+    // link per team), and the <code> element goes on showing that dead URL
+    // until React re-renders — so toBeVisible() is satisfied by the stale
+    // element and textContent() captures a token that no longer resolves.
+    // preview_team_invite_token() filters on revoked_at is null, so /register
+    // then renders no invite banner at all. This is why the test passed on a
+    // clean database (the Create branch) and failed on every re-run after.
+    const previous = (await code.count()) ? ((await code.textContent()) ?? "").trim() : "";
+
     const createBtn = page.getByRole("button", { name: /create invite link/i });
     if (await createBtn.count()) {
       await createBtn.click();
@@ -76,8 +87,10 @@ test.describe("Captain: shareable invite link", () => {
       await page.getByRole("button", { name: "Regenerate", exact: true }).click();
     }
 
-    const code = page.locator("main code");
     await expect(code).toBeVisible({ timeout: 15_000 });
+    // The new link has actually landed in the DOM, not merely "a link is
+    // showing". Skipped when there was nothing there to begin with.
+    if (previous) await expect(code).not.toHaveText(previous, { timeout: 15_000 });
     const inviteUrl = (await code.textContent())?.trim();
     expect(inviteUrl).toMatch(/\/register\?invite=/);
 

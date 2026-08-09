@@ -191,10 +191,26 @@ export default function CaptainInvitationsPage() {
                 {linkUrl ? (
                   <>
                     <div className="flex flex-wrap items-center gap-2">
-                      <code className="min-w-0 flex-1 truncate rounded-lg border-2 border-border-strong bg-muted/40 px-2.5 py-2 text-xs">
+                      {/* Dimmed and uncopyable while a regenerate is in
+                          flight: create_team_invite_link revokes the previous
+                          link the moment it issues the new one, so what is on
+                          screen during that round-trip is already dead. A
+                          captain who copied it would send an invite that
+                          silently resolves to nothing. */}
+                      <code
+                        className={`min-w-0 flex-1 truncate rounded-lg border-2 border-border-strong bg-muted/40 px-2.5 py-2 text-xs ${
+                          linkBusy ? "opacity-50" : ""
+                        }`}
+                      >
                         {linkUrl}
                       </code>
-                      <Button type="button" size="sm" variant="outline" onClick={handleCopyLink}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={linkBusy}
+                        onClick={handleCopyLink}
+                      >
                         {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
                         {copied ? "Copied" : "Copy"}
                       </Button>
