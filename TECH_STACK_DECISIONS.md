@@ -1546,6 +1546,46 @@ Vitest **309/309**, tsc/eslint clean.
 
 ---
 
+## 15. Portal navigation — named dashboard links in the header and on Home
+
+Signed-in users now get direct links to every dashboard they can actually
+use, in the account menu and as the primary action on `/`.
+
+**Captaincy is `teams.captain_id`, not `can_captain_team()`.** The brief
+proposed gating the Captain Portal on `can_captain_team()`; that function's
+own comment in `schema.sql` says it answers a deliberately different
+question — *eligibility to found* a team, which is true for every Open-age
+athlete and every admin. Gating on it would have offered the portal to most
+of the roster and landed them on "No team currently lists you as its
+captain." The gate is actual captaincy.
+
+**Every link is capability-gated, not role-gated.** `useMyPortals()` resolves
+three facts: an own `athletes` row, a team pointing at you, and parent role
+or linked children. A link that leads to an empty gate is worse than no link,
+and role alone answers none of these — a captain carries the Athlete badge,
+and an athlete's dashboard is meaningless to an admin with no `athletes` row.
+
+**The generic "Role Dashboard" item is suppressed when a named portal covers
+the same href.** Otherwise a parent saw `/parent` twice under two labels.
+`ROLE_DASHBOARD_HREF` still carries admin → `/admin` and referee →
+`/referee`, which no named portal duplicates. `07-spectator` and
+`08-part5-checklist` were updated to navigate via the named item and were run
+to confirm it.
+
+**Third copy of `ROLE_DASHBOARD_HREF` found and removed.** `app/page.tsx`
+kept its own, listing only admin and referee — so every athlete and every
+parent reached the home page with no route to their own dashboard. §14
+consolidated two copies into `lib/role-dashboards.ts` and missed this one.
+The lesson holds: a constant duplicated across surfaces drifts silently, and
+the drift shows up as a missing link rather than an error.
+
+**`useMyPortals` is cached per user at module scope**, for the same reason
+`useCurrentUser` is (§14.1): `AppHeader` renders on every page and the home
+page calls it too, so a naive implementation would fire its three queries
+several times per navigation.
+
+---
+
 ## Permanent Operational Standing Rules
 
 These are not architectural notes — they are binding process rules for every

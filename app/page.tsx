@@ -9,22 +9,56 @@ import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
 import { MeetSummaryStats } from "@/components/home/meet-summary-stats";
 import { AppHeader } from "@/components/layout/app-header";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
-import type { UserRole } from "@/lib/supabase/types";
-
-/** Only roles with a dedicated deck portal get the Dashboard button. */
-const ROLE_DASHBOARD_HREF: Partial<Record<UserRole, string>> = {
-  admin: "/admin",
-  referee: "/referee",
-};
+import { ROLE_DASHBOARD_HREF } from "@/lib/role-dashboards";
+import { useMyPortals } from "@/hooks/use-my-portals";
 
 export default function HomePage() {
   const { outdoorMode } = useOutdoorMode();
   const { user } = useCurrentUser();
+  const { athleteId, captainsTeam, isParent } = useMyPortals();
   // The volumes fetch that used to live here existed only to build the
   // Leaderboards href. /leaderboards now resolves the right volume on the
   // server, so the home page no longer needs to know about meets at all.
 
-  const dashboardHref = ROLE_DASHBOARD_HREF[user?.role ?? "athlete"] ?? null;
+  // Every portal this account can actually reach, most personal first. The
+  // home page previously kept its OWN copy of ROLE_DASHBOARD_HREF listing
+  // only admin and referee, so a parent — and every athlete — landed here
+  // with no route to their own dashboard at all.
+  //
+  // There is no signed-out branch to handle: middleware.ts redirects guests
+  // to /login for every route including "/", so this page is only ever seen
+  // by an authenticated user. The primary actions are theirs by definition.
+  const roleDashboardHref = user ? (ROLE_DASHBOARD_HREF[user.role] ?? null) : null;
+  const portals: { href: string; label: string; description: string }[] = [];
+  if (athleteId) {
+    portals.push({
+      href: "/dashboard",
+      label: "Go to Dashboard",
+      description: "Your races, heat assignments, team standing and payments.",
+    });
+  }
+  if (captainsTeam) {
+    portals.push({
+      href: "/captain",
+      label: "Captain Portal",
+      description: "Roster, invitations, join requests and relay squads.",
+    });
+  }
+  if (isParent) {
+    portals.push({
+      href: "/parent",
+      label: "Parent Portal",
+      description: "Every linked child's races, results and payment status.",
+    });
+  }
+  // admin/referee decks, unless a named portal above already goes there.
+  if (roleDashboardHref && !portals.some((p) => p.href === roleDashboardHref)) {
+    portals.push({
+      href: roleDashboardHref,
+      label: `${ROLE_LABELS[user!.role]} Dashboard`,
+      description: "Your deck tools and management queues.",
+    });
+  }
 
   const navLinks = [
     {
@@ -89,6 +123,47 @@ export default function HomePage() {
           </div>
           <OutdoorModeToggle />
         </header>
+
+        {portals.length > 0 && (
+          <section aria-label="Your dashboards" className="grid gap-3 sm:grid-cols-2">
+            {portals.map((portal) => (
+              <Link key={portal.href} href={portal.href} className="block min-h-[48px]">
+                <Card
+                  className={cn(
+                    "h-full transition-all hover:-translate-y-1 hover:shadow-brutal-lg active:translate-y-0 active:shadow-brutal",
+                    outdoorMode && "border-yellow-300/60 bg-black",
+                  )}
+                >
+                  <CardContent className="flex items-center gap-3 py-4">
+                    <div
+                      className={cn(
+                        "flex size-11 shrink-0 items-center justify-center rounded-xl border-2 border-border-strong",
+                        outdoorMode
+                          ? "bg-yellow-300 text-black"
+                          : "bg-primary text-primary-foreground",
+                      )}
+                    >
+                      <LayoutDashboard className="size-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className={cn("font-bold tracking-tight", outdoorMode && "text-yellow-300")}>
+                        {portal.label}
+                      </p>
+                      <p
+                        className={cn(
+                          "text-xs",
+                          outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
+                        )}
+                      >
+                        {portal.description}
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            ))}
+          </section>
+        )}
 
         <MeetSummaryStats outdoorMode={outdoorMode} />
 
@@ -158,43 +233,6 @@ export default function HomePage() {
             );
           })}
         </section>
-
-        {dashboardHref && (
-          <section aria-label="Role dashboard">
-            <Link href={dashboardHref} className="block min-h-[48px]">
-              <Card
-                className={cn(
-                  "transition-all hover:-translate-y-1 hover:shadow-brutal-lg",
-                  outdoorMode && "border-yellow-300/60 bg-black",
-                )}
-              >
-                <CardContent className="flex items-center gap-3 py-4">
-                  <div
-                    className={cn(
-                      "flex size-11 shrink-0 items-center justify-center rounded-xl border-2 border-border-strong",
-                      outdoorMode ? "bg-yellow-300 text-black" : "bg-primary text-primary-foreground",
-                    )}
-                  >
-                    <LayoutDashboard className="size-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className={cn("font-bold tracking-tight", outdoorMode && "text-yellow-300")}>
-                      {ROLE_LABELS[user!.role]} Dashboard
-                    </p>
-                    <p
-                      className={cn(
-                        "text-xs",
-                        outdoorMode ? "text-yellow-100/70" : "text-muted-foreground",
-                      )}
-                    >
-                      Your deck tools and management queues.
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-          </section>
-        )}
 
       </main>
     </div>

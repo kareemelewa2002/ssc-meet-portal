@@ -80,6 +80,10 @@ test.describe("Spectator, leaderboards & navigation", () => {
       who: string;
       roleLabel: string;
       dashboardHref: string | null;
+      /** A named portal item (Athlete Dashboard / Captain Portal / Parent
+       * Portal), shown only when the account can actually use it. */
+      portalLabel?: string;
+      portalHref?: string;
     }[] = [
       { credEmail: CREDENTIALS.admin, who: "Admin", roleLabel: "Admin", dashboardHref: "/admin" },
       // The 'coach' role is retired. A captain is an ATHLETE whose team
@@ -90,25 +94,32 @@ test.describe("Spectator, leaderboards & navigation", () => {
         who: "Team captain",
         roleLabel: "Athlete",
         dashboardHref: null,
+        portalLabel: "Captain Portal",
+        portalHref: "/captain",
       },
       {
         credEmail: CREDENTIALS.parent1,
         who: "Parent",
         roleLabel: "Parent",
-        // A parent now has a real dashboard (linked children + payment
-        // status) — see app/parent/page.tsx and ROLE_DASHBOARD_HREF in
-        // app/profile/page.tsx.
-        dashboardHref: "/parent",
+        // A parent reaches their dashboard through the NAMED "Parent Portal"
+        // item now, not the generic "Role Dashboard" one. The generic item is
+        // suppressed when a named portal already points at the same href, so
+        // the menu does not offer /parent twice under two labels.
+        dashboardHref: null,
+        portalLabel: "Parent Portal",
+        portalHref: "/parent",
       },
       {
         credEmail: CREDENTIALS.approvedOpen,
         who: "Unattached athlete",
         roleLabel: "Athlete",
         dashboardHref: null,
+        portalLabel: "Athlete Dashboard",
+        portalHref: "/dashboard",
       },
     ];
 
-    for (const { credEmail, who, roleLabel, dashboardHref } of roleChecks) {
+    for (const { credEmail, who, roleLabel, dashboardHref, portalLabel, portalHref } of roleChecks) {
       test(`${who} account: avatar opens the menu with name, ${roleLabel} badge, Profile/Settings/Sign Out (+ Role Dashboard if applicable)`, async ({ page }) => {
         const errors: string[] = [];
         page.on("pageerror", (e) => errors.push(e.message));
@@ -141,6 +152,14 @@ test.describe("Spectator, leaderboards & navigation", () => {
           expect(href).toBe(dashboardHref);
         } else {
           await expect(dashboardItem).toHaveCount(0);
+        }
+
+        if (portalLabel && portalHref) {
+          const portalItem = page.locator('[data-slot="dropdown-menu-item"]', {
+            hasText: portalLabel,
+          });
+          await expect(portalItem).toBeVisible({ timeout: 10_000 });
+          expect(await portalItem.first().getAttribute("href")).toBe(portalHref);
         }
 
         expect(errors.filter((e) => !/favicon/i.test(e))).toEqual([]);

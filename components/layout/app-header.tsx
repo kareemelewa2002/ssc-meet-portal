@@ -2,7 +2,18 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Home, LayoutDashboard, LogIn, LogOut, Settings, User } from "lucide-react";
+import {
+  ArrowLeft,
+  Home,
+  LayoutDashboard,
+  LogIn,
+  LogOut,
+  Settings,
+  ShieldCheck,
+  User,
+  Users,
+  Waves,
+} from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +31,7 @@ import { createClient } from "@/lib/supabase/client";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { ROLE_DASHBOARD_HREF } from "@/lib/role-dashboards";
+import { useMyPortals } from "@/hooks/use-my-portals";
 
 export interface AppHeaderProps {
   /** Page title shown centered in the bar. */
@@ -49,6 +61,20 @@ function initialsFor(fullName: string): string {
 export function AppHeader({ title, className }: AppHeaderProps) {
   const router = useRouter();
   const { user, loading } = useCurrentUser();
+  // Which portals actually lead somewhere for this account. Resolved once
+  // per user and shared, since this header renders on every page.
+  const { athleteId, captainsTeam, isParent } = useMyPortals();
+  // The generic "Role Dashboard" item predates the named portals below and
+  // still carries admin -> /admin and referee -> /referee. Where a named
+  // portal now points at the same place (a parent's /parent), showing both
+  // is just the same destination twice under two labels.
+  const namedPortalHrefs = [
+    athleteId ? "/dashboard" : null,
+    captainsTeam ? "/captain" : null,
+    isParent ? "/parent" : null,
+  ].filter(Boolean) as string[];
+  const roleDashboardHref = user ? (ROLE_DASHBOARD_HREF[user.role] ?? null) : null;
+  const showRoleDashboard = !!roleDashboardHref && !namedPortalHrefs.includes(roleDashboardHref);
 
   const handleSignOut = async () => {
     const supabase = createClient();
@@ -134,13 +160,32 @@ export function AppHeader({ title, className }: AppHeaderProps) {
                 <User className="size-4" />
                 Profile
               </DropdownMenuItem>
-              {ROLE_DASHBOARD_HREF[user.role] && (
-                <DropdownMenuItem
-                  className="min-h-[40px]"
-                  render={<Link href={ROLE_DASHBOARD_HREF[user.role]!} />}
-                >
+              {showRoleDashboard && (
+                <DropdownMenuItem className="min-h-[40px]" render={<Link href={roleDashboardHref!} />}>
                   <LayoutDashboard className="size-4" />
                   Role Dashboard
+                </DropdownMenuItem>
+              )}
+              {/* Named portals, shown only when the account can actually use
+                  them — an "Athlete Dashboard" link for someone with no
+                  athletes row, or a "Captain Portal" for someone who captains
+                  nothing, is a link to an empty gate. */}
+              {athleteId && (
+                <DropdownMenuItem className="min-h-[40px]" render={<Link href="/dashboard" />}>
+                  <Waves className="size-4" />
+                  Athlete Dashboard
+                </DropdownMenuItem>
+              )}
+              {captainsTeam && (
+                <DropdownMenuItem className="min-h-[40px]" render={<Link href="/captain" />}>
+                  <Users className="size-4" />
+                  Captain Portal
+                </DropdownMenuItem>
+              )}
+              {isParent && (
+                <DropdownMenuItem className="min-h-[40px]" render={<Link href="/parent" />}>
+                  <ShieldCheck className="size-4" />
+                  Parent Portal
                 </DropdownMenuItem>
               )}
               <DropdownMenuItem className="min-h-[40px]" render={<Link href="/settings" />}>

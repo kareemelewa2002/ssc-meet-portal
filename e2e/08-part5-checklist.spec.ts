@@ -123,15 +123,18 @@ test.describe("Part 5 checklist — Parent Flow", () => {
     await login(page, CREDENTIALS.parent1);
     // /parent (app/parent/page.tsx) is the parent's dedicated dashboard —
     // lists every linked child (fetchMyLinkedChildren) and links out to
-    // each child's real profile. Reached via the AppHeader's Role
-    // Dashboard link, proving both the menu wiring and the linkage.
+    // each child's real profile. Reached via the AppHeader's Parent Portal
+    // link, proving both the menu wiring and the linkage.
     const trigger = page.locator('header button:has([data-slot="avatar"])').first();
     await expect(trigger).toBeVisible({ timeout: 15_000 });
     await trigger.click();
     await expect(page.getByText("Parent", { exact: true })).toBeVisible({ timeout: 10_000 });
-    const dashboardItem = page.locator('[data-slot="dropdown-menu-item"]', { hasText: "Role Dashboard" });
-    await expect(dashboardItem).toBeVisible({ timeout: 10_000 });
-    await dashboardItem.click();
+    // "Parent Portal", not the generic "Role Dashboard": the generic item is
+    // suppressed once a named portal points at the same href, so /parent is
+    // not offered twice under two labels.
+    const portalItem = page.locator('[data-slot="dropdown-menu-item"]', { hasText: "Parent Portal" });
+    await expect(portalItem).toBeVisible({ timeout: 10_000 });
+    await portalItem.click();
     await page.waitForURL("**/parent");
 
     // parent1 has 4 linked children (e2e/helpers.ts) — each a real,
