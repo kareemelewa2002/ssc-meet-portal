@@ -166,7 +166,17 @@ test.describe("Part 5 checklist — Team Captain Flow", () => {
     await expect(page.locator("main").getByText("Captain Dashboard").first()).toBeVisible();
     await expect(page.getByText("Riptide Swim Club").first()).toBeVisible();
 
+    // The roster lives on /captain/roster now — the dashboard used to render
+    // <TeamRoster /> inline as well, which put the same roster on screen
+    // twice. Following the link keeps this test on the roster it is named
+    // for: the first /athletes/ link on /captain is now the captain's OWN
+    // profile, so clicking that would still go green while proving nothing
+    // about the team.
+    await page.getByRole("link", { name: /Roster & Contacts/i }).click();
+    await page.waitForURL("**/captain/roster");
+
     const firstSwimmer = page.locator('main a[href^="/athletes/"]').first();
+    await expect(firstSwimmer).toBeVisible({ timeout: 20_000 });
     requireFixture((await firstSwimmer.count()) > 0, "roster rows for Riptide Swim Club");
     await firstSwimmer.click();
     await page.waitForURL("**/athletes/**");

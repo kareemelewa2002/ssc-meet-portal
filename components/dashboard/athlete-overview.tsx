@@ -33,8 +33,12 @@ import { PRICING_TIER_LABELS } from "@/lib/meet-settings";
  * Before this, none of that was reachable from the captain's own dashboard;
  * they had to know to go somewhere else for the half of the meet that is
  * about them rather than their team.
+ *
+ * `hideTeamLink` exists because the captain dashboard reaches the same roster
+ * by its own route, and offering both side by side is the same destination
+ * under two labels.
  */
-export function AthleteOverview() {
+export function AthleteOverview({ hideTeamLink }: { hideTeamLink?: boolean } = {}) {
   const { user, loading: userLoading } = useCurrentUser();
 
   const [myAthleteId, setMyAthleteId] = useState<string | null>(null);
@@ -124,7 +128,11 @@ export function AthleteOverview() {
         <SkeletonRow />
       ) : (
         <>
-          {onTeam && (
+          {/* Suppressed on /captain: /dashboard/team is documented as "the
+              athlete-facing mirror of /captain/roster — same roster +
+              contact-info data", so on the captain dashboard this is a third
+              route to a roster that page already links to. */}
+          {onTeam && !hideTeamLink && (
             <Button
               variant="outline"
               nativeButton={false}

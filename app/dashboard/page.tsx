@@ -63,7 +63,7 @@ export default function DashboardPage() {
           render={<Link href="/dashboard/teams" />}
         >
           <Users className="size-4" />
-          My Teams
+          Team History
         </Button>
       </header>
 

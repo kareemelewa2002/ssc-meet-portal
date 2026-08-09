@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Mail, Users } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
-import { TeamRoster } from "@/components/dashboard/team-roster";
+import { TeamJoinRequests } from "@/components/teams/team-join-requests";
 import { RelayBuilder } from "@/components/captain/relay-builder";
 import { RelayPayments } from "@/components/captain/relay-payments";
 import { SkeletonRow } from "@/components/ui/skeleton";
@@ -46,6 +46,16 @@ export default function CaptainPage() {
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
         <header className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Captain Dashboard</h1>
+          {/* Which team this dashboard is ABOUT. It used to be visible only
+              as a side effect of the inline <TeamRoster /> card; removing
+              that duplicate roster took the team's name off the page
+              entirely, leaving a captain no on-screen confirmation of which
+              roster they were acting on. RelayPayments does render team
+              names, but only behind a teams.length > 1 picker — and a
+              captain captains exactly one team, so it never showed. */}
+          {teams && teams.length > 0 && (
+            <p className="text-base font-bold">{teams.map((t) => t.name).join(" · ")}</p>
+          )}
           <p className="text-sm text-muted-foreground">
             Your own races and payments, plus your team&rsquo;s roster, invitations and relay
             squads. Tap any swimmer for their full PB ledger.
@@ -83,14 +93,24 @@ export default function CaptainPage() {
                 <span className="text-sm font-bold">Invite Athletes</span>
               </Link>
             </div>
+            {/* Join requests only, not the whole <TeamRoster />. That
+                component IS /captain/roster (linked directly above), so
+                rendering it here too put the same roster on screen twice —
+                once inline and once a tap away. The approve/reject queue is
+                the part that genuinely belongs on the dashboard. */}
+            {teams.map((team) => (
+              <TeamJoinRequests key={team.id} teamId={team.id} />
+            ))}
             {/* A captain competes too — captaincy is teams.captain_id, not a
                 role — so their own entries, heat assignments and entry fees
                 belong here rather than only on /dashboard. Same component
-                the athlete dashboard renders, not a second copy. */}
-            <AthleteOverview />
+                the athlete dashboard renders, not a second copy.
+                hideTeamLink: its /dashboard/team button is the athlete-facing
+                mirror of /captain/roster, already linked at the top of this
+                page. */}
+            <AthleteOverview hideTeamLink />
             <RelayBuilder teams={teams} />
             <RelayPayments teams={teams} />
-            <TeamRoster />
           </>
         )}
       </main>
