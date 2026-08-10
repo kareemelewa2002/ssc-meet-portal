@@ -7,11 +7,16 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 
 const SEED_PASSWORD = "Password123!";
+/** The standardized convenience logins (seed-demo.sql §5b) use a simpler
+ * password than the historical @ssc-demo.test fixtures. */
+const SIMPLE_PASSWORD = "password123";
 
 interface CredentialEntry {
   label: string;
   email: string;
   note?: string;
+  /** Defaults to SEED_PASSWORD when omitted. */
+  password?: string;
 }
 
 interface CredentialGroup {
@@ -21,6 +26,35 @@ interface CredentialGroup {
 
 /** Mirrors supabase/seed-demo.sql exactly — update both together. */
 const CREDENTIAL_GROUPS: CredentialGroup[] = [
+  {
+    // First on purpose: these are the ones to reach for when signing in by
+    // hand. The @ssc-demo.test roster below is what the e2e suite pins, and
+    // is kept for the specific gate-testing accounts it contains.
+    group: `Quick logins (password: ${SIMPLE_PASSWORD})`,
+    entries: [
+      { label: "Admin", email: "admin@ssc.com", password: SIMPLE_PASSWORD },
+      { label: "Referee", email: "referee@ssc.com", password: SIMPLE_PASSWORD },
+      {
+        label: "Team captain",
+        email: "captain@ssc.com",
+        note: "captains SSC Demo Club",
+        password: SIMPLE_PASSWORD,
+      },
+      { label: "Athlete (Open)", email: "athlete@ssc.com", password: SIMPLE_PASSWORD },
+      {
+        label: "Parent (1 child)",
+        email: "parent@ssc.com",
+        note: "child-u14@ssc.com",
+        password: SIMPLE_PASSWORD,
+      },
+      {
+        label: "Parent (3 children — U14/U17/Open)",
+        email: "parent-multi@ssc.com",
+        note: "child-multi-*@ssc.com",
+        password: SIMPLE_PASSWORD,
+      },
+    ],
+  },
   {
     group: "Superadmin / Meet Director",
     entries: [{ label: "Admin", email: "elewakareem2002@gmail.com" }],
@@ -115,13 +149,16 @@ export function SeedCredentialsHelper({
                     key={entry.email}
                     type="button"
                     className="flex min-h-[48px] w-full items-center justify-between gap-2 rounded-lg border p-2.5 text-left text-sm transition-colors hover:bg-muted/60"
-                    onClick={() => onUseCredentials(entry.email, SEED_PASSWORD)}
+                    onClick={() => onUseCredentials(entry.email, entry.password ?? SEED_PASSWORD)}
                   >
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{entry.label}</span>
                       <span className="block truncate font-mono text-xs text-muted-foreground">
                         {entry.email}
                         {entry.note && <span className="text-muted-foreground/70"> {entry.note}</span>}
+                        {entry.password && entry.password !== SEED_PASSWORD && (
+                          <span className="text-muted-foreground/70"> · {entry.password}</span>
+                        )}
                       </span>
                     </span>
                     <Badge variant="outline" className="shrink-0 text-[10px]">Use</Badge>

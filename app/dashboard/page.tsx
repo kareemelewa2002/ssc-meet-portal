@@ -1,17 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { SkinsQualificationModal } from "@/components/dashboard/skins-qualification-modal";
+import { SkeletonRow } from "@/components/ui/skeleton";
+import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { AppHeader } from "@/components/layout/app-header";
 import { AthleteOverview } from "@/components/dashboard/athlete-overview";
 import { useSkinsQualifiers } from "@/hooks/use-skins-qualifiers";
-import type { SkinsCandidate } from "@/lib/skins-qualification";
 import { formatTimeMs } from "@/lib/format";
 import type { AgeGroup } from "@/lib/supabase/types";
 
@@ -21,27 +19,9 @@ const CATEGORY_LABELS: Record<AgeGroup, string> = {
   Open: "Open",
 };
 
-/** Demo invitation used when Supabase is not configured / RPC returns empty. */
-const DEMO_INVITE: SkinsCandidate = {
-  athleteId: "demo-athlete",
-  athleteName: "Leo Fontaine",
-  teamName: "Tidal Wave",
-  category: "Open",
-  gender: "male",
-  sourceRank: 4,
-  bestTimeMs: 28500,
-  response: "pending",
-};
-
 export default function DashboardPage() {
   const skinsEventId = process.env.NEXT_PUBLIC_SKINS_EVENT_ID ?? null;
-  const { boards, candidates, loading, error, respond } = useSkinsQualifiers(skinsEventId);
-  const [modalOpen, setModalOpen] = useState(false);
-
-  const myInvite = useMemo(() => {
-    const pending = candidates.find((c) => c.response === "pending");
-    return pending ?? candidates[0] ?? DEMO_INVITE;
-  }, [candidates]);
+  const { boards, loading, error } = useSkinsQualifiers(skinsEventId);
 
 
   return (
@@ -52,8 +32,8 @@ export default function DashboardPage() {
         <div className="space-y-1">
           <h1 className="text-2xl font-bold tracking-tight">Athlete Dashboard</h1>
           <p className="text-sm text-muted-foreground">
-            Your team, races, heat assignments and payments — plus Skins, which is assigned from
-            official meet results rather than via event registration.
+            Your team, races, heat assignments and payments. Skins slots are assigned from
+            official meet results, and accepted or declined in person at the venue.
           </p>
         </div>
         <Button
@@ -71,67 +51,19 @@ export default function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Session 3 Skins invite</CardTitle>
-          <CardDescription>
-            Accept to confirm your heat-sheet slot, or decline to roll the invitation to the next
-            fastest swimmer in your category.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {loading && <p className="text-sm text-muted-foreground">Loading qualifiers…</p>}
-          {error && (
-            <p className="text-sm text-muted-foreground">
-              Live qualifiers unavailable ({error}). Showing demo invite for UI review.
-            </p>
-          )}
-
-          <div className="rounded-lg border p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <p className="font-semibold">{myInvite.athleteName}</p>
-                {myInvite.teamName && (
-                  <p className="text-sm text-muted-foreground">{myInvite.teamName}</p>
-                )}
-              </div>
-              <Badge variant="secondary">{CATEGORY_LABELS[myInvite.category]}</Badge>
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Rank #{myInvite.sourceRank} · {(myInvite.bestTimeMs / 1000).toFixed(2)}s ·{" "}
-              {myInvite.response}
-            </p>
-          </div>
-
-          <Button
-            type="button"
-            className="min-h-[48px] w-full sm:w-auto"
-            onClick={() => setModalOpen(true)}
-          >
-            Accept or decline Skins slot
-          </Button>
-
-          <SkinsQualificationModal
-            invitation={myInvite}
-            open={modalOpen}
-            onOpenChange={setModalOpen}
-            onRespond={async (athleteId, category, response) => {
-              if (!skinsEventId || myInvite.athleteId === "demo-athlete") {
-                // Local demo path — mutate is handled by closing after "success".
-                return;
-              }
-              await respond(athleteId, category, response);
-            }}
-          />
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
           <CardTitle>Qualifier boards</CardTitle>
           <CardDescription>
             Active slots after decline / rollover — up to 6 per category, and men and women fill
-            their own separately.
+            their own separately. Slots are accepted or declined in person at the venue.
           </CardDescription>
         </CardHeader>
+        <CardContent className="space-y-3">
+          {/* The invite card used to carry these; it is gone, so the boards
+              own their own loading and error states now rather than failing
+              silently to an empty grid. */}
+          <DataErrorBanner error={error} subject="Skins qualifiers" />
+          {loading && <SkeletonRow />}
+        </CardContent>
         <CardContent className="grid gap-3 sm:grid-cols-3">
           {boards.map((board) => (
             <div key={`${board.category}-${board.gender}`} className="rounded-lg border p-3">

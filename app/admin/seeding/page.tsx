@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { SkinsQualifiers } from "@/components/admin/skins-qualifiers";
 import { AppHeader } from "@/components/layout/app-header";
 import { formatTimeMs, heatTitle } from "@/lib/format";
 import { fetchActiveVolume, fetchSessionsForVolume } from "@/lib/volumes";
@@ -192,6 +193,10 @@ export default function AdminSeedingPage() {
           Seed Entire Session
         </Button>
       </div>
+
+      {/* Session 3 is the Skins session — its slots are ranked, not seeded
+          from entries, so the withdraw/reinstate control belongs with it. */}
+      {sessionNumber === 3 && <SkinsQualifiers />}
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading events…</p>

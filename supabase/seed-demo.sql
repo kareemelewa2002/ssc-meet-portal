@@ -47,7 +47,10 @@ create or replace function public._seed_get_or_create_user(
   p_email text,
   p_full_name text,
   p_role text,
-  p_phone text default null
+  p_phone text default null,
+  -- The @ssc.com convenience accounts (section 5b) use a simpler password;
+  -- everything else keeps the historical demo one.
+  p_password text default 'Password123!'
 ) returns uuid
 language plpgsql
 as $fn$
@@ -73,7 +76,7 @@ begin
       'authenticated',
       'authenticated',
       v_email,
-      crypt('Password123!', gen_salt('bf')),
+      crypt(p_password, gen_salt('bf')),
       now(),
       '{"provider":"email","providers":["email"]}'::jsonb,
       jsonb_strip_nulls(jsonb_build_object(
@@ -85,10 +88,10 @@ begin
       now(),
       '', '', '', ''
     );
-  elsif v_email like '%@ssc-demo.test' then
+  elsif v_email like '%@ssc-demo.test' or v_email like '%@ssc.com' then
     -- Re-runs: keep demo passwords aligned with SEED_CREDENTIALS.md.
     update auth.users
-    set encrypted_password = crypt('Password123!', gen_salt('bf')),
+    set encrypted_password = crypt(p_password, gen_salt('bf')),
         email_confirmed_at = coalesce(email_confirmed_at, now()),
         updated_at = now()
     where id = v_id;
@@ -699,6 +702,128 @@ begin
           approved_by_admin = true,
           parent_link_status = 'none';
   end;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 5b. Standardized convenience accounts — one memorable login per role.
+--
+-- ADDITIVE ON PURPOSE. These sit alongside the @ssc-demo.test fixtures above
+-- rather than replacing them: e2e/helpers.ts pins those emails, several specs
+-- assert on their exact names and counts (parent1 has four children, Selim
+-- Fahmy is the only unattached athlete), and swapping the roster out would
+-- have rewritten thirteen spec files for a convenience change. These exist so
+-- a human can sign in quickly; the suite keeps its own fixtures.
+--
+-- app_settings.superadmin_email is deliberately NOT repointed at
+-- admin@ssc.com. It names a real person's address, it is what self-bootstraps
+-- the very first admin on a fresh database, and on the production project it
+-- is the account that would lose admin if it moved. admin@ssc.com is made an
+-- admin the same way every other seeded official is: a direct role update,
+-- authenticated as the superadmin from section 1.
+--
+-- Every account here uses the password 'password123'.
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  v_team uuid;
+  v_admin uuid;
+  v_referee uuid;
+  v_captain uuid;
+  v_parent uuid;
+  v_parent_multi uuid;
+  v_user uuid;
+  v_age integer;
+  rec record;
+begin
+  -- Officials -------------------------------------------------------------
+  v_admin := public._seed_get_or_create_user(
+    'admin@ssc.com', 'SSC Admin', 'admin', '+20-100-000-0001', 'password123');
+  v_referee := public._seed_get_or_create_user(
+    'referee@ssc.com', 'SSC Referee', 'referee', '+20-100-000-0002', 'password123');
+
+  -- handle_new_auth_user() clamps any requested role to public_signup_role,
+  -- so 'admin'/'referee' in the metadata is a request, not a grant. This
+  -- session is authenticated as the superadmin (section 1), which is what
+  -- lets enforce_role_change_trigger accept these.
+  update public.users set role = 'admin' where id = v_admin and role <> 'admin';
+  update public.users set role = 'referee' where id = v_referee and role <> 'referee';
+
+  -- Parents ---------------------------------------------------------------
+  v_parent := public._seed_get_or_create_user(
+    'parent@ssc.com', 'Sam Parent', 'parent', '+20-100-000-0003', 'password123');
+  v_parent_multi := public._seed_get_or_create_user(
+    'parent-multi@ssc.com', 'Alex Parent', 'parent', '+20-100-000-0004', 'password123');
+  update public.users set role = 'parent' where id = v_parent and role <> 'parent';
+  update public.users set role = 'parent' where id = v_parent_multi and role <> 'parent';
+
+  -- A team for the standardized captain. Its own team, not one of the three
+  -- demo clubs: those already have captains, and a captain captains exactly
+  -- one team, so reassigning one would unseat a fixture the specs rely on.
+  insert into public.teams (name, abbreviation, approved_by_admin)
+  values ('SSC Demo Club', 'SDC', true)
+  on conflict (name) do update set approved_by_admin = true
+  returning id into v_team;
+  if v_team is null then
+    select id into v_team from public.teams where name = 'SSC Demo Club';
+  end if;
+
+  -- Athletes, one per active age group, plus the captain ------------------
+  -- Ages are derived the same way the app derives them
+  -- (age_turning_this_year + age_group_for_age), so these land in U14 / U17 /
+  -- Open by the birth-year rule rather than by a hardcoded label that would
+  -- drift as years pass.
+  for rec in
+    select * from (values
+      ('captain@ssc.com',      'Casey Captain',  date '2001-04-12', 'female', v_team, null::uuid),
+      ('athlete@ssc.com',      'Robin Athlete',  date '2004-09-03', 'male',   v_team, null::uuid),
+      -- parent@ssc.com: exactly one child.
+      ('child-u14@ssc.com',    'Sam Junior',     date '2013-03-18', 'male',   v_team, v_parent),
+      -- parent-multi@ssc.com: three children, one in each age group.
+      ('child-multi-u14@ssc.com',  'Alex Junior',   date '2013-08-02', 'female', v_team, v_parent_multi),
+      ('child-multi-u17@ssc.com',  'Alex Middle',   date '2010-05-21', 'male',   v_team, v_parent_multi),
+      ('child-multi-open@ssc.com', 'Alex Eldest',   date '2004-11-09', 'female', v_team, v_parent_multi)
+    ) as t(email, full_name, dob, gender, team_id, parent_id)
+  loop
+    v_user := public._seed_get_or_create_user(
+      rec.email, rec.full_name, 'athlete', null, 'password123');
+    v_age := public.age_turning_this_year(rec.dob, current_date);
+
+    insert into public.athletes (
+      user_id, team_id, parent_id, date_of_birth, age, age_group, gender,
+      height_cm, weight_kg, specialty_events, parent_link_status,
+      pending_parent_email, approved_by_admin
+    ) values (
+      v_user, rec.team_id, rec.parent_id, rec.dob, greatest(v_age, 13),
+      public.age_group_for_age(greatest(v_age, 13)), rec.gender::public.gender,
+      165, 60, array['Freestyle'],
+      case when rec.parent_id is not null then 'verified' else 'none' end::public.parent_link_status,
+      null, true
+    )
+    on conflict (user_id) do update
+      set team_id = excluded.team_id,
+          parent_id = excluded.parent_id,
+          date_of_birth = excluded.date_of_birth,
+          age = excluded.age,
+          age_group = excluded.age_group,
+          gender = excluded.gender,
+          parent_link_status = excluded.parent_link_status;
+
+    -- Safety acknowledgement on file for the under-15s, so the standardized
+    -- accounts can actually enter a meet without a separate parent step.
+    if rec.parent_id is not null then
+      update public.athletes
+      set safety_accepted_at = coalesce(safety_accepted_at, now()),
+          safety_accepted_by = rec.parent_id
+      where user_id = v_user;
+    end if;
+
+    if rec.email = 'captain@ssc.com' then
+      v_captain := v_user;
+    end if;
+  end loop;
+
+  -- Captaincy is the relationship, not a role.
+  update public.teams set captain_id = v_captain where id = v_team;
 end $$;
 
 -- ---------------------------------------------------------------------------

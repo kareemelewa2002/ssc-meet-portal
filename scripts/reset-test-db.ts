@@ -112,6 +112,40 @@ function apply(label: string, file: string) {
   console.log("\x1b[32mok\x1b[0m");
 }
 
+/**
+ * Deletes the throwaway accounts the e2e suite creates and never cleans up.
+ *
+ * 02-registration signs up two accounts per run and 13-team-invites one more,
+ * all with unique timestamped emails. Nothing removes them: schema.sql and
+ * seed-demo.sql are idempotent UPSERTS — they rebuild their own fixtures and
+ * never delete a row they did not create — so "reset the database" left every
+ * previous run's signups in place. They had reached 52 accounts against 48
+ * real fixtures, quietly inflating athlete counts and the admin dashboard's
+ * "Registered Athletes" tile.
+ *
+ * Scoped to the two patterns the specs generate, never a blanket delete, and
+ * only reachable here: this script already refuses to run against anything
+ * that does not look like a local/test database.
+ */
+function purgeE2eResidue() {
+  process.stdout.write("Purging e2e signup residue… ");
+  const sql = `
+    delete from auth.users
+    where email like 'e2e.%'
+       or email like 'invitee-%'
+       or email like 'e2e.invitee.%';
+  `;
+  const result = spawnSync("psql", [dbUrl!, "-v", "ON_ERROR_STOP=1", "-q", "-c", sql], {
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    console.log("\x1b[33mskipped\x1b[0m");
+    console.log(`  ${(result.stderr || "").trim()}`);
+    return;
+  }
+  console.log("\x1b[32mok\x1b[0m");
+}
+
 const host = (() => {
   try {
     return new URL(dbUrl).host;
@@ -126,5 +160,54 @@ console.log(`\n\x1b[1mResetting test database\x1b[0m → ${host}\n`);
 // current shape (the 'usher' outage came from exactly this drift).
 apply("schema.sql", SCHEMA);
 apply("seed-demo.sql", SEED);
+purgeE2eResidue();
 
 console.log("\n\x1b[32m\x1b[1m✓ test database reset\x1b[0m — fixtures match supabase/seed-demo.sql\n");
+
+/**
+ * The standardized convenience logins (supabase/seed-demo.sql §5b), printed
+ * so nobody has to open the seed file to find out how to sign in.
+ *
+ * These sit ALONGSIDE the @ssc-demo.test fixtures the e2e suite pins — those
+ * keep their own password, which is why it is spelled out per row rather than
+ * announced once for everything.
+ */
+const ACCOUNTS: [role: string, email: string, note: string][] = [
+  ["Admin", "admin@ssc.com", "full admin"],
+  ["Referee", "referee@ssc.com", "referee deck"],
+  ["Captain", "captain@ssc.com", "captains SSC Demo Club"],
+  ["Athlete", "athlete@ssc.com", "Open age group"],
+  ["Parent", "parent@ssc.com", "1 child (U14)"],
+  ["Parent (multi)", "parent-multi@ssc.com", "3 children: U14, U17, Open"],
+  ["Athlete (U14)", "child-u14@ssc.com", "child of parent@ssc.com"],
+  ["Athlete (U14)", "child-multi-u14@ssc.com", "child of parent-multi@ssc.com"],
+  ["Athlete (U17)", "child-multi-u17@ssc.com", "child of parent-multi@ssc.com"],
+  ["Athlete (Open)", "child-multi-open@ssc.com", "child of parent-multi@ssc.com"],
+];
+
+const PASSWORD = "password123";
+const w = (rows: string[]) => Math.max(...rows.map((r) => r.length));
+const roleW = w(ACCOUNTS.map((a) => a[0]).concat("ROLE"));
+const mailW = w(ACCOUNTS.map((a) => a[1]).concat("EMAIL"));
+const passW = Math.max(PASSWORD.length, "PASSWORD".length);
+
+const line = (l: string, m: string, r: string) =>
+  `${l}${"─".repeat(roleW + 2)}${m}${"─".repeat(mailW + 2)}${m}${"─".repeat(passW + 2)}${m}${"─".repeat(30)}${r}`;
+
+console.log("\x1b[1mStandardized test logins\x1b[0m");
+console.log(line("┌", "┬", "┐"));
+console.log(
+  `│ \x1b[1m${"ROLE".padEnd(roleW)}\x1b[0m │ \x1b[1m${"EMAIL".padEnd(mailW)}\x1b[0m │ ` +
+    `\x1b[1m${"PASSWORD".padEnd(passW)}\x1b[0m │ \x1b[1m${"NOTE".padEnd(28)}\x1b[0m │`,
+);
+console.log(line("├", "┼", "┤"));
+for (const [role, email, note] of ACCOUNTS) {
+  console.log(
+    `│ ${role.padEnd(roleW)} │ ${email.padEnd(mailW)} │ ${PASSWORD.padEnd(passW)} │ ${note.padEnd(28)} │`,
+  );
+}
+console.log(line("└", "┴", "┘"));
+console.log(
+  "\n\x1b[2mThe e2e fixtures (@ssc-demo.test, password Password123!) are unchanged —\n" +
+    "see supabase/SEED_CREDENTIALS.md.\x1b[0m\n",
+);

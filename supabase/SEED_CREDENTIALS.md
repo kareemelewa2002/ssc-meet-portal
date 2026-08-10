@@ -17,6 +17,34 @@ If every demo login fails with a generic sign-in error, the project was likely
 seeded before `auth.identities` rows were created. Run
 `supabase/fix-demo-auth-identities.sql` in the Supabase SQL Editor, then retry.
 
+## Quick logins — password `password123`
+
+Standardized, memorable accounts for signing in by hand. Added by
+`supabase/seed-demo.sql` §5b **alongside** the `@ssc-demo.test` roster below,
+not in place of it: `e2e/helpers.ts` pins those emails and several specs
+assert on their exact names and counts, so replacing them would have rewritten
+thirteen spec files for a convenience change.
+
+| Role | Email | Notes |
+| --- | --- | --- |
+| Admin | `admin@ssc.com` | Full admin. |
+| Referee | `referee@ssc.com` | Referee deck. |
+| Team captain | `captain@ssc.com` | Open-age athlete, captains **SSC Demo Club**. |
+| Athlete | `athlete@ssc.com` | Open age group, on SSC Demo Club. |
+| Parent (1 child) | `parent@ssc.com` | Linked to `child-u14@ssc.com`. |
+| Parent (3 children) | `parent-multi@ssc.com` | Linked to `child-multi-u14@ssc.com` (U14), `child-multi-u17@ssc.com` (U17), `child-multi-open@ssc.com` (Open). |
+
+The four child accounts sign in with `password123` too.
+
+`app_settings.superadmin_email` is deliberately **not** repointed at
+`admin@ssc.com`. It names a real address, it is what self-bootstraps the first
+admin on a fresh database, and on the production project it is the account
+that would lose admin if it moved. `admin@ssc.com` is promoted the same way
+every other seeded official is — a direct role update, authenticated as the
+superadmin.
+
+`npm run db:reset:test` prints this table on completion.
+
 ## Roles and captaincy
 
 `public.user_role` is locked to exactly **four** roles: **Admin, Referee,

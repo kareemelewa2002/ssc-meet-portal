@@ -6314,15 +6314,13 @@ create policy "athlete_view_own_skins_qualification"
   on public.skins_qualifications
   for select using (public.owns_athlete(athlete_id));
 
--- Athletes (or their under-15 parent) may accept / decline their own slot.
+-- Athletes can SEE their slot but no longer respond to it online. Skins
+-- invitations are accepted or declined in person at the venue, and an admin
+-- records the outcome (components/admin/skins-qualifiers.tsx) — so the
+-- athlete-facing write is gone rather than merely hidden. Removing the UI
+-- alone would have left the capability reachable through PostgREST, which is
+-- not the same thing as removing it.
 drop policy if exists "athlete_respond_own_skins_qualification" on public.skins_qualifications;
-create policy "athlete_respond_own_skins_qualification"
-  on public.skins_qualifications
-  for update using (public.owns_athlete(athlete_id))
-  with check (
-    public.owns_athlete(athlete_id)
-    and response in ('accepted', 'declined')
-  );
 
 drop policy if exists "public_view_active_skins_qualifications" on public.skins_qualifications;
 create policy "public_view_active_skins_qualifications"
