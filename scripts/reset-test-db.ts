@@ -200,10 +200,11 @@ const ACCOUNTS: [role: string, email: string, note: string][] = [
   ["Referee", "referee@ssc.com", "referee deck"],
   ["Captain", "captain@ssc.com", "captains SSC Demo Club"],
   ["Athlete U14", "athlete-u14@ssc.com", "child of parent@ssc.com"],
+  ["Athlete U14 (2nd)", "athlete-u14b@ssc.com", "child of parent-multi@ssc.com"],
   ["Athlete U17", "athlete-u17@ssc.com", "child of parent-multi@ssc.com"],
   ["Athlete Open", "athlete-open@ssc.com", "child of parent-multi@ssc.com"],
   ["Parent", "parent@ssc.com", "1 child: U14"],
-  ["Parent (multi)", "parent-multi@ssc.com", "2 children: U17, Open"],
+  ["Parent (multi)", "parent-multi@ssc.com", "3 children: U14, U17, Open"],
 ];
 
 const PASSWORD = "password123";

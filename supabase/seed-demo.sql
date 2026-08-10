@@ -786,9 +786,12 @@ begin
       ('captain@ssc.com',      'SSC Captain',      make_date(v_year - 22, 4, 12),  'female', v_team, null::uuid),
       -- parent@ssc.com: exactly one child.
       ('athlete-u14@ssc.com',  'SSC Athlete U14',  make_date(v_year - 13, 3, 18),  'male',   v_team, v_parent),
-      -- parent-multi@ssc.com: two children, in different age groups.
-      ('athlete-u17@ssc.com',  'SSC Athlete U17',  make_date(v_year - 16, 5, 21),  'male',   v_team, v_parent_multi),
-      ('athlete-open@ssc.com', 'SSC Athlete Open', make_date(v_year - 22, 11, 9),  'female', v_team, v_parent_multi)
+      -- parent-multi@ssc.com: three children spanning all three bands. A
+      -- multi-child parent needs a U14 among them — the under-15 gates
+      -- (parent linkage, parent-accepted safety) exist only for that band.
+      ('athlete-u14b@ssc.com', 'SSC Athlete U14 II', make_date(v_year - 14, 7, 4),   'female', v_team, v_parent_multi),
+      ('athlete-u17@ssc.com',  'SSC Athlete U17',    make_date(v_year - 16, 5, 21),  'male',   v_team, v_parent_multi),
+      ('athlete-open@ssc.com', 'SSC Athlete Open',   make_date(v_year - 22, 11, 9),  'female', v_team, v_parent_multi)
     ) as t(email, full_name, dob, gender, team_id, parent_id)
   loop
     v_user := public._seed_get_or_create_user(
@@ -815,14 +818,16 @@ begin
           gender = excluded.gender,
           parent_link_status = excluded.parent_link_status;
 
-    -- Safety acknowledgement on file for the under-15s, so the standardized
-    -- accounts can actually enter a meet without a separate parent step.
-    if rec.parent_id is not null then
-      update public.athletes
-      set safety_accepted_at = coalesce(safety_accepted_at, now()),
-          safety_accepted_by = rec.parent_id
-      where user_id = v_user;
-    end if;
+    -- Safety acknowledgement on file for EVERY standardized athlete, not
+    -- only the under-15s: canSubmitEntries() blocks entry on a null
+    -- safety_accepted_at regardless of age group, so without this the
+    -- captain and the older swimmers could sign in and then be refused at
+    -- registration. Under-15s are attributed to their parent, which is the
+    -- route their band actually requires.
+    update public.athletes
+    set safety_accepted_at = coalesce(safety_accepted_at, now()),
+        safety_accepted_by = coalesce(safety_accepted_by, rec.parent_id, v_user)
+    where user_id = v_user;
 
     if rec.email = 'captain@ssc.com' then
       v_captain := v_user;

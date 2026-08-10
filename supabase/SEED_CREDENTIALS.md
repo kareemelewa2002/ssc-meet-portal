@@ -19,8 +19,16 @@ seeded before `auth.identities` rows were created. Run
 
 ## Quick logins — password `password123`
 
-Eight accounts, one per role and age group, offered as one-tap buttons on
-`/login`. Added **alongside** the `@ssc-demo.test` roster below, not in place
+One account per role and age group, offered as one-tap buttons on `/login`.
+The multi-child parent is linked to a swimmer in **all three** bands, because
+the under-15 gates (parent linkage, parent-accepted safety acknowledgement)
+only exist for U14 — a multi-child parent without one cannot exercise the
+case their dashboard is really for.
+
+Every demo athlete has a safety acknowledgement on file. `canSubmitEntries()`
+blocks entry on a null `safety_accepted_at` for *every* age group, not just
+under-15s, so without it these accounts could sign in and then be refused at
+registration. Added **alongside** the `@ssc-demo.test` roster below, not in place
 of it: `e2e/helpers.ts` pins those emails and several specs assert on their
 exact names and counts, so replacing them would have rewritten thirteen spec
 files for a convenience change.
@@ -31,10 +39,11 @@ files for a convenience change.
 | Referee | `referee@ssc.com` | Heat cards and time entry. |
 | Team captain | `captain@ssc.com` | Open age; captains a team. |
 | Athlete — U14 | `athlete-u14@ssc.com` | Parent-linked, safety accepted. |
+| Athlete — U14 (2nd) | `athlete-u14b@ssc.com` | The multi-child parent's U14. |
 | Athlete — U17 | `athlete-u17@ssc.com` | |
 | Athlete — Open | `athlete-open@ssc.com` | 18+, may found a team. |
 | Parent (1 child) | `parent@ssc.com` | Linked to the U14 swimmer. |
-| Parent (2 children) | `parent-multi@ssc.com` | Linked to the U17 and Open swimmers. |
+| Parent (3 children) | `parent-multi@ssc.com` | Linked to the second U14, the U17 and the Open swimmer — one in every band. |
 
 Birthdays are computed as an offset from the current year, not hardcoded —
 age groups follow the birth-year rule, so a fixed date would drift out of its
@@ -47,7 +56,7 @@ band as years pass.
 | Local / test | `supabase/seed-demo.sql` §5b, applied by `npm run db:reset:test` (which also prints this table). |
 | Live / production | `supabase/seed-production-demo-auth.sql` — accounts only. It creates no teams, entries or heats, and never runs `seed-demo.sql`, which deletes and rebuilds meet data. |
 
-Both create the **same eight emails**, so the `/login` panel is correct on
+Both create the **same set of emails**, so the `/login` panel is correct on
 either.
 
 `app_settings.superadmin_email` is deliberately **not** repointed at

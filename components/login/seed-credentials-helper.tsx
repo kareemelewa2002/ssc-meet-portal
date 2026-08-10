@@ -42,8 +42,12 @@ const QUICK_LOGINS: QuickLogin[] = [
   { label: "Athlete — U14", email: "athlete-u14@ssc.com", note: "14 & under, parent-linked" },
   { label: "Athlete — U17", email: "athlete-u17@ssc.com", note: "17 & under" },
   { label: "Athlete — Open", email: "athlete-open@ssc.com", note: "18+, may found a team" },
-  { label: "Parent — one child", email: "parent@ssc.com", note: "the U14 swimmer" },
-  { label: "Parent — several children", email: "parent-multi@ssc.com", note: "the U17 and Open swimmers" },
+  { label: "Parent — one child", email: "parent@ssc.com", note: "one U14 swimmer" },
+  {
+    label: "Parent — several children",
+    email: "parent-multi@ssc.com",
+    note: "U14, U17 and Open swimmers",
+  },
 ];
 
 export function SeedCredentialsHelper({
@@ -90,8 +94,8 @@ export function SeedCredentialsHelper({
             One account per role and age group. Tap a row to fill the form above. Seeded locally
             by <code className="text-xs">supabase/seed-demo.sql</code>; on a live database run{" "}
             <code className="text-xs">supabase/seed-production-demo-auth.sql</code>, which creates
-            the same eight accounts and nothing else. Until one of those has been applied, these
-            will be rejected.
+            the same accounts and nothing else. Until one of those has been applied, these will be
+            rejected.
           </CardDescription>
 
           <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/40 p-3">
@@ -132,6 +136,12 @@ export function SeedCredentialsHelper({
               </button>
             ))}
           </div>
+
+          <p className="text-xs text-muted-foreground">
+            The multi-child parent also has a second U14 swimmer,{" "}
+            <code className="text-xs">athlete-u14b@ssc.com</code>, so that dashboard spans all
+            three age groups. It signs in with the same password.
+          </p>
 
           <p className="text-xs text-muted-foreground">
             The full @ssc-demo.test fixture roster — including the accounts that deliberately fail

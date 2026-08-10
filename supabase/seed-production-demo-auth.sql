@@ -130,6 +130,7 @@ begin
       ('referee@ssc.com',      'SSC Referee',      'referee', null::date,             null::text),
       ('captain@ssc.com',      'SSC Captain',      'athlete', make_date(v_year - 22, 4, 12),  'female'),
       ('athlete-u14@ssc.com',  'SSC Athlete U14',  'athlete', make_date(v_year - 13, 3, 18),  'male'),
+      ('athlete-u14b@ssc.com', 'SSC Athlete U14 II','athlete', make_date(v_year - 14, 7, 4),   'female'),
       ('athlete-u17@ssc.com',  'SSC Athlete U17',  'athlete', make_date(v_year - 16, 5, 21),  'male'),
       ('athlete-open@ssc.com', 'SSC Athlete Open', 'athlete', make_date(v_year - 22, 11, 9),  'female'),
       ('parent@ssc.com',       'SSC Parent',       'parent',  null::date,             null::text),
@@ -204,6 +205,17 @@ begin
             age = excluded.age,
             age_group = excluded.age_group,
             gender = excluded.gender;
+
+      -- canSubmitEntries() (lib/register.ts) blocks entry when
+      -- safety_accepted_at is null — for EVERY athlete, not only under-15s.
+      -- Without this the captain, U17 and Open demo accounts could sign in
+      -- and then be refused at registration, which is not much of a demo.
+      -- The U14s are re-stamped as parent-accepted further down, which is
+      -- the route their age group actually requires.
+      update public.athletes
+      set safety_accepted_at = coalesce(safety_accepted_at, now()),
+          safety_accepted_by = coalesce(safety_accepted_by, v_id)
+      where user_id = v_id;
     end if;
   end loop;
 
@@ -253,12 +265,20 @@ begin
   from public.users u
   where u.id = a.user_id and u.email = 'athlete-u14@ssc.com';
 
-  -- parent-multi@ssc.com -> the U17 and Open swimmers.
+  -- parent-multi@ssc.com -> a U14, a U17 and an Open swimmer. Spanning all
+  -- three bands matters: the under-15 gates (parent linkage, parent-accepted
+  -- safety) only exist for U14, so a multi-child parent without one cannot
+  -- exercise the case their dashboard is really for.
   update public.athletes a
   set parent_id = v_parent_multi,
-      parent_link_status = 'verified'
+      parent_link_status = 'verified',
+      safety_accepted_by = case
+        when a.age_group = 'U14' then v_parent_multi
+        else a.safety_accepted_by
+      end
   from public.users u
-  where u.id = a.user_id and u.email in ('athlete-u17@ssc.com', 'athlete-open@ssc.com');
+  where u.id = a.user_id
+    and u.email in ('athlete-u14b@ssc.com', 'athlete-u17@ssc.com', 'athlete-open@ssc.com');
 end $$;
 
 commit;
