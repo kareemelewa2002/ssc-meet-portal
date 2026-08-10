@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Loader2, Users } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { PaymentStatusBadge } from "@/components/ui/payment-status-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
@@ -131,21 +131,31 @@ export function RelayPayments({ teams }: { teams: { id: string; name: string }[]
               >
                 <div className="min-w-0">
                   <p className="font-medium">
-                    {squad.eventName} — Squad {squad.squadLetter}
+                    {squad.eventName} — {squad.ageGroup} Squad {squad.squadLetter}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {squad.legsFilled}/4 swimmers assigned
                   </p>
+                  {/* Settlement detail, once settled: what was actually
+                      collected, by whom, and when. paidAmountEgp is the
+                      figure taken at the desk, not a re-quote — the relay
+                      price is not tiered and can move. */}
+                  {squad.status === "confirmed" && (
+                    <p className="text-xs text-muted-foreground">
+                      {squad.paidAmountEgp != null ? formatEgp(squad.paidAmountEgp) : "Paid"}
+                      {squad.collectedByName ? ` · collected by ${squad.collectedByName}` : ""}
+                      {squad.paidAt
+                        ? ` · ${new Date(squad.paidAt).toLocaleDateString()}`
+                        : ""}
+                    </p>
+                  )}
                 </div>
 
                 {squad.status === "confirmed" ? (
-                  <Badge variant="outline" className="gap-1.5">
-                    Paid — {squad.paidAmountEgp != null ? formatEgp(squad.paidAmountEgp) : ""}
-                    {squad.collectedByName ? ` (by ${squad.collectedByName})` : ""}
-                  </Badge>
+                  <PaymentStatusBadge state="paid" label="Paid" />
                 ) : squad.status === "hold_expired" ? (
                   <div className="flex items-center gap-2">
-                    <Badge variant="destructive">Slot released — unpaid too long</Badge>
+                    <PaymentStatusBadge state="unpaid" label="Slot released — unpaid too long" />
                     <Button
                       type="button"
                       size="sm"
@@ -160,11 +170,14 @@ export function RelayPayments({ teams }: { teams: { id: string; name: string }[]
                     </Button>
                   </div>
                 ) : (
-                  <Badge variant="outline" className="gap-1.5">
-                    {squad.currentQuoteEgp != null
-                      ? `${formatEgp(squad.currentQuoteEgp)} due — pay at the desk`
-                      : "Price unavailable"}
-                  </Badge>
+                  <PaymentStatusBadge
+                    state="pending"
+                    label={
+                      squad.currentQuoteEgp != null
+                        ? `${formatEgp(squad.currentQuoteEgp)} due — pay at the desk`
+                        : "Price unavailable"
+                    }
+                  />
                 )}
               </li>
             ))}

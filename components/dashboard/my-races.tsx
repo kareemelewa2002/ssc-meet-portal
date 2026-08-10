@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { CalendarDays, Waves } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import {
+  PaymentStatusBadge,
+  paymentStateForEntry,
+} from "@/components/ui/payment-status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
@@ -102,13 +106,11 @@ export function MyRaces({
                 ) : (
                   <Badge variant="outline">Heat not yet published</Badge>
                 )}
-                <Badge variant={entry.status === "confirmed" ? "default" : "outline"}>
-                  {entry.status === "confirmed"
-                    ? "Paid"
-                    : entry.status === "hold_expired"
-                      ? "Hold expired"
-                      : "Payment pending"}
-                </Badge>
+                {/* Per race, from entries.status — which IS the per-entry
+                    payment truth: confirming a cash collection is what flips
+                    an entry to confirmed. entry_payments cannot answer this
+                    per race, being one row per (athlete, volume). */}
+                <PaymentStatusBadge {...paymentStateForEntry(entry.status)} />
               </div>
             </div>
           ))

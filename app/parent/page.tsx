@@ -6,7 +6,6 @@ import { CreditCard, Trophy } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
 import { SafetyAcceptances } from "@/components/parent/safety-acceptances";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
@@ -16,7 +15,9 @@ import { MyRaces } from "@/components/dashboard/my-races";
 import { fetchActiveVolume } from "@/lib/volumes";
 import { useCurrentUser } from "@/hooks/use-current-user";
 import { fetchMyEntryPaymentStatus, type AthletePaymentStatus } from "@/lib/payments";
-import { formatEgp } from "@/lib/pricing";
+import { formatEgp, priceLineKindLabel } from "@/lib/pricing";
+import { PRICING_TIER_LABELS } from "@/lib/meet-settings";
+import { PaymentStatusBadge } from "@/components/ui/payment-status-badge";
 import type { AgeGroup } from "@/lib/supabase/types";
 
 /**
@@ -129,20 +130,55 @@ export default function ParentDashboardPage() {
                     <div className="space-y-2">
                       <p className="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
                         <CreditCard className="size-3.5" />
-                        Payment status
+                        Payment &amp; package
                       </p>
                       {childPayments.map((p) => (
-                        <div
-                          key={p.meetVolumeId}
-                          className="flex items-center justify-between gap-2 rounded-lg border p-2.5"
-                        >
-                          <p className="text-sm font-semibold">{p.volumeName}</p>
-                          <div className="text-right">
-                            <p className="font-mono text-sm font-bold">{formatEgp(p.totalEgp)}</p>
-                            <Badge variant={p.confirmed ? "default" : "outline"}>
-                              {p.confirmed ? "Confirmed" : "Pending"}
-                            </Badge>
+                        <div key={p.meetVolumeId} className="space-y-2 rounded-lg border p-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold">{p.volumeName}</p>
+                              {p.tier && (
+                                <p className="text-xs text-muted-foreground">
+                                  {PRICING_TIER_LABELS[p.tier]} rate
+                                </p>
+                              )}
+                            </div>
+                            <div className="space-y-1 text-right">
+                              <p className="font-mono text-sm font-bold">{formatEgp(p.totalEgp)}</p>
+                              <PaymentStatusBadge
+                                state={p.confirmed ? "paid" : "pending"}
+                                label={p.confirmed ? "Paid" : "Pending — cash at desk"}
+                              />
+                            </div>
                           </div>
+
+                          {/* What the money is FOR. Only available while
+                              still pending: entry_payments keeps the settled
+                              total, not a line-item breakdown, so once paid
+                              there is no itemization left to show. */}
+                          {!p.confirmed && p.lines && p.lines.length > 0 && (
+                            <ul className="space-y-0.5 border-t pt-2">
+                              {p.lines.map((line, i) => (
+                                <li
+                                  key={`${line.kind}-${line.entryId ?? i}`}
+                                  className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+                                >
+                                  <span className="truncate">
+                                    {priceLineKindLabel(line.kind)} — {line.label}
+                                  </span>
+                                  <span className="font-mono shrink-0">
+                                    {formatEgp(line.amountEgp)}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+
+                          {p.confirmed && p.collectedByName && (
+                            <p className="border-t pt-2 text-xs text-muted-foreground">
+                              Collected by {p.collectedByName}
+                            </p>
+                          )}
                         </div>
                       ))}
                     </div>

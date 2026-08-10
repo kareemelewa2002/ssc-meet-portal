@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CreditCard, Trophy, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { PaymentStatusBadge } from "@/components/ui/payment-status-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { MyRaces } from "@/components/dashboard/my-races";
@@ -219,11 +219,18 @@ export function AthleteOverview({ hideTeamLink }: { hideTeamLink?: boolean } = {
                     <p className="text-xs text-muted-foreground">{PRICING_TIER_LABELS[p.tier]} rate</p>
                   )}
                 </div>
-                <div className="text-right">
+                <div className="space-y-1 text-right">
                   <p className="font-mono text-sm font-bold">{formatEgp(p.totalEgp)}</p>
-                  <Badge variant={p.confirmed ? "default" : "outline"}>
-                    {p.confirmed ? "Confirmed" : "Pending — pay on deck"}
-                  </Badge>
+                  <PaymentStatusBadge
+                    state={p.confirmed ? "paid" : "pending"}
+                    label={p.confirmed ? "Paid" : "Pending — cash at desk"}
+                  />
+                  {/* Who took the money, once it has been taken. */}
+                  {p.confirmed && p.collectedByName && (
+                    <p className="text-xs text-muted-foreground">
+                      Collected by {p.collectedByName}
+                    </p>
+                  )}
                 </div>
               </div>
             ))}

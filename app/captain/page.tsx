@@ -109,8 +109,11 @@ export default function CaptainPage() {
                 mirror of /captain/roster, already linked at the top of this
                 page. */}
             <AthleteOverview hideTeamLink />
-            <RelayBuilder teams={teams} />
+            {/* Payments above the builder: what a captain owes, and who
+                collected it, is the thing they come here to check before the
+                meet — building a squad is a once-per-cycle task. */}
             <RelayPayments teams={teams} />
+            <RelayBuilder teams={teams} />
           </>
         )}
       </main>
