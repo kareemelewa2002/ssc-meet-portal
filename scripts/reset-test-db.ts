@@ -128,12 +128,24 @@ function apply(label: string, file: string) {
  * that does not look like a local/test database.
  */
 function purgeE2eResidue() {
-  process.stdout.write("Purging e2e signup residue… ");
+  process.stdout.write("Purging non-pre-meet residue… ");
   const sql = `
     delete from auth.users
     where email like 'e2e.%'
        or email like 'invitee-%'
        or email like 'e2e.invitee.%';
+
+    -- Settled payments for a meet that has not happened yet.
+    --
+    -- seed-demo.sql deletes and rebuilds every entry as pending_payment, but
+    -- it does not touch the payment tables — so a previously-confirmed
+    -- collection survived the reset and left those swimmers reading "Paid"
+    -- on their own dashboard while the very same entries sat in the admin's
+    -- cash queue awaiting collection. Money recorded against a meet nobody
+    -- has swum is not a pre-meet state.
+    delete from public.entry_payment_items;
+    delete from public.entry_payments;
+    delete from public.relay_squad_payments;
   `;
   const result = spawnSync("psql", [dbUrl!, "-v", "ON_ERROR_STOP=1", "-q", "-c", sql], {
     encoding: "utf8",
