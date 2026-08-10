@@ -133,7 +133,18 @@ function purgeE2eResidue() {
     delete from auth.users
     where email like 'e2e.%'
        or email like 'invitee-%'
-       or email like 'e2e.invitee.%';
+       or email like 'e2e.invitee.%'
+       -- Superseded quick-login names. seed-demo.sql §5b was realigned to the
+       -- athlete-u14/u17/open@ssc.com set that
+       -- supabase/seed-production-demo-auth.sql also creates, so one /login
+       -- panel is correct on both. An UPSERT seed never deletes what it no
+       -- longer creates, so without this the old accounts linger and show up
+       -- in the app while being absent from the quick-login list.
+       or email in (
+            'athlete@ssc.com', 'child-u14@ssc.com',
+            'child-multi-u14@ssc.com', 'child-multi-u17@ssc.com',
+            'child-multi-open@ssc.com'
+          );
 
     -- Settled payments for a meet that has not happened yet.
     --
@@ -188,13 +199,11 @@ const ACCOUNTS: [role: string, email: string, note: string][] = [
   ["Admin", "admin@ssc.com", "full admin"],
   ["Referee", "referee@ssc.com", "referee deck"],
   ["Captain", "captain@ssc.com", "captains SSC Demo Club"],
-  ["Athlete", "athlete@ssc.com", "Open age group"],
-  ["Parent", "parent@ssc.com", "1 child (U14)"],
-  ["Parent (multi)", "parent-multi@ssc.com", "3 children: U14, U17, Open"],
-  ["Athlete (U14)", "child-u14@ssc.com", "child of parent@ssc.com"],
-  ["Athlete (U14)", "child-multi-u14@ssc.com", "child of parent-multi@ssc.com"],
-  ["Athlete (U17)", "child-multi-u17@ssc.com", "child of parent-multi@ssc.com"],
-  ["Athlete (Open)", "child-multi-open@ssc.com", "child of parent-multi@ssc.com"],
+  ["Athlete U14", "athlete-u14@ssc.com", "child of parent@ssc.com"],
+  ["Athlete U17", "athlete-u17@ssc.com", "child of parent-multi@ssc.com"],
+  ["Athlete Open", "athlete-open@ssc.com", "child of parent-multi@ssc.com"],
+  ["Parent", "parent@ssc.com", "1 child: U14"],
+  ["Parent (multi)", "parent-multi@ssc.com", "2 children: U17, Open"],
 ];
 
 const PASSWORD = "password123";

@@ -35,10 +35,15 @@ interface QuickLogin {
 const QUICK_LOGINS: QuickLogin[] = [
   { label: "Admin", email: "admin@ssc.com", note: "cash desk, seeding, approvals" },
   { label: "Referee", email: "referee@ssc.com", note: "heat cards & time entry" },
-  { label: "Team captain", email: "captain@ssc.com", note: "captains SSC Demo Club" },
-  { label: "Athlete", email: "athlete@ssc.com", note: "Open age group" },
-  { label: "Parent — one child", email: "parent@ssc.com", note: "one U14 swimmer" },
-  { label: "Parent — several children", email: "parent-multi@ssc.com", note: "U14, U17 and Open" },
+  { label: "Team captain", email: "captain@ssc.com", note: "Open age, captains a team" },
+  // One per age group: the gates differ by band, so "an athlete" is not one
+  // thing to test. A U14 cannot enter without parent linkage and a safety
+  // acknowledgement; an Open swimmer can also found a team.
+  { label: "Athlete — U14", email: "athlete-u14@ssc.com", note: "14 & under, parent-linked" },
+  { label: "Athlete — U17", email: "athlete-u17@ssc.com", note: "17 & under" },
+  { label: "Athlete — Open", email: "athlete-open@ssc.com", note: "18+, may found a team" },
+  { label: "Parent — one child", email: "parent@ssc.com", note: "the U14 swimmer" },
+  { label: "Parent — several children", email: "parent-multi@ssc.com", note: "the U17 and Open swimmers" },
 ];
 
 export function SeedCredentialsHelper({
@@ -82,10 +87,11 @@ export function SeedCredentialsHelper({
       {expanded && (
         <CardContent className="space-y-4 pt-0">
           <CardDescription>
-            One account per role, seeded by{" "}
-            <code className="text-xs">supabase/seed-demo.sql</code>. Tap a row to fill the form
-            above. These exist on demo and test databases only — a production database that has
-            never had the demo seed applied will reject them.
+            One account per role and age group. Tap a row to fill the form above. Seeded locally
+            by <code className="text-xs">supabase/seed-demo.sql</code>; on a live database run{" "}
+            <code className="text-xs">supabase/seed-production-demo-auth.sql</code>, which creates
+            the same eight accounts and nothing else. Until one of those has been applied, these
+            will be rejected.
           </CardDescription>
 
           <div className="flex items-center justify-between gap-2 rounded-lg border bg-muted/40 p-3">

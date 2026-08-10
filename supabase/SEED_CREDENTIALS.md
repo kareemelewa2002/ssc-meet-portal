@@ -19,31 +19,42 @@ seeded before `auth.identities` rows were created. Run
 
 ## Quick logins — password `password123`
 
-Standardized, memorable accounts for signing in by hand. Added by
-`supabase/seed-demo.sql` §5b **alongside** the `@ssc-demo.test` roster below,
-not in place of it: `e2e/helpers.ts` pins those emails and several specs
-assert on their exact names and counts, so replacing them would have rewritten
-thirteen spec files for a convenience change.
+Eight accounts, one per role and age group, offered as one-tap buttons on
+`/login`. Added **alongside** the `@ssc-demo.test` roster below, not in place
+of it: `e2e/helpers.ts` pins those emails and several specs assert on their
+exact names and counts, so replacing them would have rewritten thirteen spec
+files for a convenience change.
 
 | Role | Email | Notes |
 | --- | --- | --- |
-| Admin | `admin@ssc.com` | Full admin. |
-| Referee | `referee@ssc.com` | Referee deck. |
-| Team captain | `captain@ssc.com` | Open-age athlete, captains **SSC Demo Club**. |
-| Athlete | `athlete@ssc.com` | Open age group, on SSC Demo Club. |
-| Parent (1 child) | `parent@ssc.com` | Linked to `child-u14@ssc.com`. |
-| Parent (3 children) | `parent-multi@ssc.com` | Linked to `child-multi-u14@ssc.com` (U14), `child-multi-u17@ssc.com` (U17), `child-multi-open@ssc.com` (Open). |
+| Admin | `admin@ssc.com` | Cash desk, seeding, approvals. |
+| Referee | `referee@ssc.com` | Heat cards and time entry. |
+| Team captain | `captain@ssc.com` | Open age; captains a team. |
+| Athlete — U14 | `athlete-u14@ssc.com` | Parent-linked, safety accepted. |
+| Athlete — U17 | `athlete-u17@ssc.com` | |
+| Athlete — Open | `athlete-open@ssc.com` | 18+, may found a team. |
+| Parent (1 child) | `parent@ssc.com` | Linked to the U14 swimmer. |
+| Parent (2 children) | `parent-multi@ssc.com` | Linked to the U17 and Open swimmers. |
 
-The four child accounts sign in with `password123` too.
+Birthdays are computed as an offset from the current year, not hardcoded —
+age groups follow the birth-year rule, so a fixed date would drift out of its
+band as years pass.
+
+**Where each one comes from**
+
+| Database | Script |
+| --- | --- |
+| Local / test | `supabase/seed-demo.sql` §5b, applied by `npm run db:reset:test` (which also prints this table). |
+| Live / production | `supabase/seed-production-demo-auth.sql` — accounts only. It creates no teams, entries or heats, and never runs `seed-demo.sql`, which deletes and rebuilds meet data. |
+
+Both create the **same eight emails**, so the `/login` panel is correct on
+either.
 
 `app_settings.superadmin_email` is deliberately **not** repointed at
-`admin@ssc.com`. It names a real address, it is what self-bootstraps the first
-admin on a fresh database, and on the production project it is the account
-that would lose admin if it moved. `admin@ssc.com` is promoted the same way
-every other seeded official is — a direct role update, authenticated as the
-superadmin.
-
-`npm run db:reset:test` prints this table on completion.
+`admin@ssc.com`. It names a real address, it self-bootstraps the first admin
+on a fresh database, and on production it is the account that would lose admin
+if it moved. The production script guarantees that account is an admin without
+touching its password or any of its auth records.
 
 ## Roles and captaincy
 

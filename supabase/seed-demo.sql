@@ -733,6 +733,7 @@ declare
   v_parent_multi uuid;
   v_user uuid;
   v_age integer;
+  v_year integer := extract(year from current_date)::int;
   rec record;
 begin
   -- Officials -------------------------------------------------------------
@@ -750,9 +751,9 @@ begin
 
   -- Parents ---------------------------------------------------------------
   v_parent := public._seed_get_or_create_user(
-    'parent@ssc.com', 'Sam Parent', 'parent', '+20-100-000-0003', 'password123');
+    'parent@ssc.com', 'SSC Parent', 'parent', '+20-100-000-0003', 'password123');
   v_parent_multi := public._seed_get_or_create_user(
-    'parent-multi@ssc.com', 'Alex Parent', 'parent', '+20-100-000-0004', 'password123');
+    'parent-multi@ssc.com', 'SSC Parent Multi', 'parent', '+20-100-000-0004', 'password123');
   update public.users set role = 'parent' where id = v_parent and role <> 'parent';
   update public.users set role = 'parent' where id = v_parent_multi and role <> 'parent';
 
@@ -774,14 +775,20 @@ begin
   -- drift as years pass.
   for rec in
     select * from (values
-      ('captain@ssc.com',      'Casey Captain',  date '2001-04-12', 'female', v_team, null::uuid),
-      ('athlete@ssc.com',      'Robin Athlete',  date '2004-09-03', 'male',   v_team, null::uuid),
+      -- Emails and age bands match supabase/seed-production-demo-auth.sql
+      -- exactly, so the /login quick-login list is correct on a local test
+      -- database AND on production. Two different sets would mean the panel
+      -- was wrong on one of them.
+      --
+      -- Ages are offsets from the current year, not fixed dates: age groups
+      -- come from the birth-year rule, so a hardcoded 2013 birthday silently
+      -- drifts out of U14 as years pass.
+      ('captain@ssc.com',      'SSC Captain',      make_date(v_year - 22, 4, 12),  'female', v_team, null::uuid),
       -- parent@ssc.com: exactly one child.
-      ('child-u14@ssc.com',    'Sam Junior',     date '2013-03-18', 'male',   v_team, v_parent),
-      -- parent-multi@ssc.com: three children, one in each age group.
-      ('child-multi-u14@ssc.com',  'Alex Junior',   date '2013-08-02', 'female', v_team, v_parent_multi),
-      ('child-multi-u17@ssc.com',  'Alex Middle',   date '2010-05-21', 'male',   v_team, v_parent_multi),
-      ('child-multi-open@ssc.com', 'Alex Eldest',   date '2004-11-09', 'female', v_team, v_parent_multi)
+      ('athlete-u14@ssc.com',  'SSC Athlete U14',  make_date(v_year - 13, 3, 18),  'male',   v_team, v_parent),
+      -- parent-multi@ssc.com: two children, in different age groups.
+      ('athlete-u17@ssc.com',  'SSC Athlete U17',  make_date(v_year - 16, 5, 21),  'male',   v_team, v_parent_multi),
+      ('athlete-open@ssc.com', 'SSC Athlete Open', make_date(v_year - 22, 11, 9),  'female', v_team, v_parent_multi)
     ) as t(email, full_name, dob, gender, team_id, parent_id)
   loop
     v_user := public._seed_get_or_create_user(
