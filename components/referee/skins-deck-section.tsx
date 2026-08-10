@@ -10,8 +10,15 @@ import { useSkinsQualifiers } from "@/hooks/use-skins-qualifiers";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
 import { materialiseSkinsHeat } from "@/lib/skins-qualification";
 import { fetchSkinsRounds, skinsRoundTitle, type SkinsRoundView } from "@/lib/skins-rounds";
-import { openingLanes, planNextStep, roundLabel, type SkinsRound } from "@/lib/skins-lanes";
+import {
+  centredLanes,
+  openingLanes,
+  planNextStep,
+  roundLabel,
+  type SkinsRound,
+} from "@/lib/skins-lanes";
 import { LANES_PER_HEAT } from "@/lib/seeding";
+import { formatTimeMs } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
@@ -69,6 +76,9 @@ export function SkinsDeckSection({
 
   const seedOpeningRounds = useCallback(async () => {
     for (const board of boards.filter((b) => b.active.length > 0)) {
+      // A tie on the last qualifying place must be raced off before the
+      // Round of 6 field is locked — otherwise rank order invents a sixth.
+      if (board.swimOff) continue;
       const key = `${board.category}-${board.gender}`;
       const exists = rounds.some(
         (r) => r.category === board.category && r.gender === board.gender && r.round === 6 && !r.swimOff,
@@ -141,6 +151,30 @@ export function SkinsDeckSection({
     [eventId, reloadRounds],
   );
 
+  const createQualifyingSwimOff = useCallback(
+    async (category: AgeGroup, gender: Gender, athleteIds: string[]) => {
+      const key = `${category}-${gender}`;
+      setBusyBoard(key);
+      try {
+        const res = await materialiseSkinsHeat(
+          eventId,
+          category,
+          gender,
+          athleteIds,
+          centredLanes(athleteIds.length),
+          6,
+          true,
+        );
+        if (res.error) setRoundsError(res.error);
+        await reloadRounds();
+        await refresh();
+      } finally {
+        setBusyBoard(null);
+      }
+    },
+    [eventId, reloadRounds, refresh],
+  );
+
   if (loading && rounds.length === 0) {
     return <p className="text-sm text-muted-foreground">Loading the Skins bracket…</p>;
   }
@@ -172,17 +206,50 @@ export function SkinsDeckSection({
         const allBoardRounds = rounds.filter(
           (r) => r.category === board.category && r.gender === board.gender,
         );
-        if (boardRounds.length === 0) return null;
+        const hasQualifyingSwimOff = board.swimOff != null;
+        const hasMainRound = allBoardRounds.some((r) => !r.swimOff);
+        // Qualification swim-off boards may have no rounds yet — still show
+        // the alert so the referee can create the heat from the deck.
+        if (boardRounds.length === 0 && !hasQualifyingSwimOff) return null;
 
         const mains = allBoardRounds.filter((r) => !r.swimOff).map((r) => r.round);
         const currentRound: SkinsRound = mains.length > 0 ? (Math.min(...mains) as SkinsRound) : 6;
-        const step = planNextStep(allBoardRounds, currentRound);
+        const step = hasMainRound ? planNextStep(allBoardRounds, currentRound) : { kind: "idle" as const };
 
         return (
           <div key={key} className="space-y-2">
             <p className={cn("text-sm font-bold", outdoorMode && "text-yellow-100/80")}>
               {AGE_GROUP_LABELS[board.category]} {board.gender === "male" ? "Men" : "Women"}
             </p>
+
+            {hasQualifyingSwimOff && board.swimOff && !hasMainRound && (
+              <div className="space-y-2 rounded-md border-2 border-border-strong bg-neon-orange/15 px-3 py-2 text-sm">
+                <p className="font-bold">Swim-Off Required</p>
+                <p>
+                  {board.swimOff.athletes.map((a) => a.athleteName).join(" and ")} are level on{" "}
+                  {formatTimeMs(board.swimOff.contestedTimeMs)}, contesting{" "}
+                  {board.swimOff.slotsRemaining === 1
+                    ? "the last qualifying slot"
+                    : `${board.swimOff.slotsRemaining} qualifying slots`}
+                  . Create the swim-off heat, then enter places here.
+                </p>
+                <Button
+                  type="button"
+                  className="min-h-[48px] gap-2"
+                  disabled={busyBoard === key}
+                  onClick={() =>
+                    void createQualifyingSwimOff(
+                      board.category,
+                      board.gender,
+                      board.swimOff!.athletes.map((a) => a.athleteId),
+                    )
+                  }
+                >
+                  {busyBoard === key ? <Loader2 className="size-4 animate-spin" /> : <ChevronRight className="size-4" />}
+                  Create Swim-Off Heat
+                </Button>
+              </div>
+            )}
 
             {boardRounds.map((view) => (
               <SkinsRoundCard
@@ -209,7 +276,7 @@ export function SkinsDeckSection({
                   onClick={() => void advance(board.category, board.gender, currentRound, allBoardRounds)}
                 >
                   {busyBoard === key ? <Loader2 className="size-4 animate-spin" /> : <ChevronRight className="size-4" />}
-                  Set up the swim-off
+                  Create Swim-Off Heat
                 </Button>
               </div>
             )}

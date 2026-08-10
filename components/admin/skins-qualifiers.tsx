@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, RotateCcw, UserMinus } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Check, Loader2, RotateCcw, Swords, UserCheck, UserMinus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,10 +11,11 @@ import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import { useToast } from "@/hooks/use-toast";
 import { useSkinsQualifiers } from "@/hooks/use-skins-qualifiers";
-import { resolveSkinsEventId } from "@/lib/skins-qualification";
+import { materialiseSkinsHeat, resolveSkinsEventId } from "@/lib/skins-qualification";
+import { centredLanes } from "@/lib/skins-lanes";
 import { formatTimeMs } from "@/lib/format";
 import { getErrorMessage } from "@/lib/utils";
-import type { AgeGroup } from "@/lib/supabase/types";
+import type { AgeGroup, Gender } from "@/lib/supabase/types";
 
 const CATEGORY_LABELS: Record<AgeGroup, string> = {
   U14: "14 & Under",
@@ -21,28 +23,28 @@ const CATEGORY_LABELS: Record<AgeGroup, string> = {
   Open: "Open",
 };
 
+function responseLabel(response: "pending" | "accepted" | "declined"): string {
+  if (response === "accepted") return "Present";
+  if (response === "declined") return "Withdrawn";
+  return "Awaiting roll-call";
+}
+
 /**
  * Admin control over who actually swims Skins.
  *
- * Skins invitations are settled IN PERSON at the venue now — there is no
- * athlete-facing accept/decline any more (the dashboard card and its modal
- * were removed, and the athlete_respond_own_skins_qualification RLS policy
- * with them). So a swimmer who turns their slot down on the day has to be
- * withdrawn by whoever is running the desk, which is what this is for.
- *
- * Withdrawing writes response = 'declined', which is exactly what the
- * athlete-initiated path used to write — so the existing rollover applies
- * untouched and the next-ranked swimmer moves into the freed slot. It is not
- * a delete: the qualification row is the record that this athlete DID rank
- * into a slot, and deleting it would lose that and let the rank recompute
- * them straight back in.
+ * Skins invitations are settled IN PERSON at the venue — there is no
+ * athlete-facing accept/decline any more. Withdraw a swimmer who turns the
+ * slot down and the next-ranked qualifier is promoted automatically.
+ * Mark Present to lock the field for the opening round.
  */
 export function SkinsQualifiers({ className }: { className?: string }) {
   const toast = useToast();
+  const router = useRouter();
   const [eventId, setEventId] = useState<string | null>(null);
   const [resolving, setResolving] = useState(true);
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [creatingSwimOff, setCreatingSwimOff] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,10 +73,10 @@ export function SkinsQualifiers({ className }: { className?: string }) {
     try {
       await respond(athleteId, category, next);
       toast.success(
-        next === "declined" ? "Swimmer withdrawn" : "Swimmer reinstated",
+        next === "declined" ? "Swimmer withdrawn" : "Marked present",
         next === "declined"
           ? `${athleteName} is out of the ${CATEGORY_LABELS[category]} board — the next ranked swimmer moves up.`
-          : `${athleteName} is back on the ${CATEGORY_LABELS[category]} board.`,
+          : `${athleteName} is confirmed present for ${CATEGORY_LABELS[category]} Skins.`,
       );
     } catch (err) {
       toast.error("Couldn't update the slot", getErrorMessage(err, "Unknown error"));
@@ -83,20 +85,104 @@ export function SkinsQualifiers({ className }: { className?: string }) {
     }
   }
 
+  async function createQualifyingSwimOff(
+    category: AgeGroup,
+    gender: Gender,
+    athleteIds: string[],
+  ) {
+    if (!eventId) return;
+    const key = `${category}-${gender}`;
+    setCreatingSwimOff(key);
+    try {
+      const lanes = centredLanes(athleteIds.length);
+      const res = await materialiseSkinsHeat(
+        eventId,
+        category,
+        gender,
+        athleteIds,
+        lanes,
+        6,
+        true,
+      );
+      if (res.error) {
+        toast.error("Couldn't create the swim-off", res.error);
+        return;
+      }
+      toast.success(
+        "Swim-off heat ready",
+        "Opening the referee deck for time entry.",
+      );
+      router.push("/referee");
+    } catch (err) {
+      toast.error("Couldn't create the swim-off", getErrorMessage(err, "Unknown error"));
+    } finally {
+      setCreatingSwimOff(null);
+    }
+  }
+
   const withdrawn = candidates.filter((c) => c.response === "declined");
+  const boardsNeedingSwimOff = boards.filter((b) => b.swimOff != null);
 
   return (
     <Card className={className}>
       <CardHeader>
         <CardTitle>Skins qualification slots</CardTitle>
         <CardDescription>
-          Slots are ranked from published results. Invitations are accepted or declined in person
-          at the venue — withdraw a swimmer here if they turn theirs down, and the next ranked
-          swimmer takes the slot automatically.
+          Top 6 fastest published times per board. Roll-call at the venue — mark Present or
+          Withdrawn; withdrawing promotes the next ranked qualifier automatically.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <DataErrorBanner error={resolveError ?? error} subject="Skins qualifiers" />
+
+        {boardsNeedingSwimOff.length > 0 && (
+          <div className="space-y-3">
+            {boardsNeedingSwimOff.map((board) => {
+              const swimOff = board.swimOff!;
+              const key = `${board.category}-${board.gender}`;
+              return (
+                <div
+                  key={key}
+                  className="space-y-2 rounded-lg border-2 border-border-strong bg-neon-orange/15 p-3"
+                >
+                  <p className="flex items-center gap-2 text-sm font-bold">
+                    <Swords className="size-4 shrink-0" />
+                    Swim-Off Required
+                  </p>
+                  <p className="text-sm">
+                    {CATEGORY_LABELS[board.category]} ·{" "}
+                    {board.gender === "male" ? "Men" : "Women"} —{" "}
+                    {swimOff.athletes.map((a) => a.athleteName).join(" and ")} are level on{" "}
+                    {formatTimeMs(swimOff.contestedTimeMs)}, contesting{" "}
+                    {swimOff.slotsRemaining === 1
+                      ? "the last qualifying slot"
+                      : `${swimOff.slotsRemaining} qualifying slots`}
+                    .
+                  </p>
+                  <Button
+                    type="button"
+                    className="min-h-[48px] gap-2"
+                    disabled={creatingSwimOff === key}
+                    onClick={() =>
+                      void createQualifyingSwimOff(
+                        board.category,
+                        board.gender,
+                        swimOff.athletes.map((a) => a.athleteId),
+                      )
+                    }
+                  >
+                    {creatingSwimOff === key ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Swords className="size-4" />
+                    )}
+                    Create Swim-Off Heat
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {resolving || loading ? (
           <div className="space-y-2">
@@ -124,6 +210,7 @@ export function SkinsQualifiers({ className }: { className?: string }) {
               ) : (
                 board.active.map((q) => {
                   const key = `${q.athleteId}-${q.category}`;
+                  const present = q.response === "accepted";
                   return (
                     <div
                       key={key}
@@ -138,8 +225,33 @@ export function SkinsQualifiers({ className }: { className?: string }) {
                           Ranked #{q.sourceRank} · {formatTimeMs(q.bestTimeMs)}
                         </p>
                       </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Badge variant="outline">{q.response}</Badge>
+                      <div className="flex shrink-0 flex-wrap items-center gap-2">
+                        <Badge variant="outline">{responseLabel(q.response)}</Badge>
+                        {!present && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="min-h-[44px] gap-1.5"
+                            disabled={busyKey === key}
+                            onClick={() =>
+                              void setResponse(q.athleteId, q.category, "accepted", q.athleteName)
+                            }
+                          >
+                            {busyKey === key ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <UserCheck className="size-3.5" />
+                            )}
+                            Present
+                          </Button>
+                        )}
+                        {present && (
+                          <span className="inline-flex items-center gap-1 text-xs text-neon-lime">
+                            <Check className="size-3.5" />
+                            Present
+                          </span>
+                        )}
                         <Button
                           type="button"
                           size="sm"
@@ -155,7 +267,7 @@ export function SkinsQualifiers({ className }: { className?: string }) {
                           ) : (
                             <UserMinus className="size-3.5" />
                           )}
-                          Withdraw
+                          Withdrawn
                         </Button>
                       </div>
                     </div>
@@ -166,13 +278,10 @@ export function SkinsQualifiers({ className }: { className?: string }) {
           ))
         )}
 
-        {/* Withdrawing is reversible — someone who declines and then changes
-            their mind before the round is built should not need a database
-            edit to get back in. */}
         {withdrawn.length > 0 && (
           <div className="space-y-2 border-t pt-3">
             <p className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-              Withdrawn
+              Withdrawn / Declined
             </p>
             {withdrawn.map((q) => {
               const key = `${q.athleteId}-${q.category}`;

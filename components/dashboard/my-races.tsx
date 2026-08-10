@@ -11,6 +11,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { formatTimeMs } from "@/lib/format";
+import {
+  heatAssignmentVisibility,
+  PENDING_SEEDING_LABEL,
+} from "@/lib/heat-assignment-visibility";
 import { fetchMyMeetEntries, type MyMeetEntry } from "@/lib/my-meet";
 
 /**
@@ -95,17 +99,34 @@ export function MyRaces({
                 </p>
               </div>
               <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-                {/* Heat and lane appear only on a PUBLISHED sheet. An
-                    unpublished seeding is a draft an admin may still change,
-                    and a swimmer who warmed up for lane 3 because a dashboard
-                    showed it early would be right to be annoyed. */}
-                {entry.heat?.published ? (
-                  <Badge variant="default">
-                    Heat {entry.heat.heatNumber} · Lane {entry.heat.laneNumber}
-                  </Badge>
-                ) : (
-                  <Badge variant="outline">Heat not yet published</Badge>
-                )}
+                {/* Heat · Lane only when payment is confirmed AND the sheet
+                    is published. Draft seeding is invisible by RLS too; the
+                    pending-seeding badge is the athlete-facing explanation
+                    when cash is settled but the admin has not published. */}
+                {(() => {
+                  const visibility = heatAssignmentVisibility(
+                    entry.status,
+                    entry.heat?.published ?? false,
+                    entry.heat != null,
+                  );
+                  if (visibility.kind === "assigned" && entry.heat) {
+                    return (
+                      <Badge variant="default">
+                        Heat {entry.heat.heatNumber} · Lane {entry.heat.laneNumber}
+                      </Badge>
+                    );
+                  }
+                  if (visibility.kind === "pending_seeding") {
+                    return (
+                      <Badge variant="outline" className="max-w-[16rem] whitespace-normal text-left">
+                        {PENDING_SEEDING_LABEL}
+                      </Badge>
+                    );
+                  }
+                  // pending_payment / unavailable: the payment badge below
+                  // already carries the desk-payment state.
+                  return null;
+                })()}
                 {/* Per race, from entries.status — which IS the per-entry
                     payment truth: confirming a cash collection is what flips
                     an entry to confirmed. entry_payments cannot answer this

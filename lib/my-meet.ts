@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/client";
 import { runQuery, type FetchResult } from "@/lib/fetch-policy";
+import { isHeatSheetVisible } from "@/lib/heat-assignment-visibility";
 import { firstOf } from "@/lib/live-heats";
 import type { EntryStatus, Gender, HeatGroup } from "@/lib/supabase/types";
 
@@ -126,7 +127,7 @@ export async function fetchMyMeetEntries(
                   laneNumber: lane.lane_number,
                   heatGroup: heatRow.heat_group,
                   gender: heatRow.gender,
-                  published: heatRow.status === "published",
+                  published: isHeatSheetVisible(heatRow.status),
                 }
               : null,
         });
