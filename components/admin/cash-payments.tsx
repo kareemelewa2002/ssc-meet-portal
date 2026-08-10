@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { AthleteLink } from "@/components/athletes/athlete-link";
 import {
   fetchPendingCashPayments,
+  fetchNonCollectableEntryCounts,
   confirmCashPayment,
   type PendingPaymentAthlete,
 } from "@/lib/admin-cash-payments";
@@ -39,6 +40,8 @@ export function CashPayments({ className }: { className?: string }) {
   // second press rather than a browser confirm() the app uses nowhere else.
   const [bulkArmed, setBulkArmed] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  /** Entries that exist but are not collectable — see the empty state below. */
+  const [otherStatusCounts, setOtherStatusCounts] = useState<Record<string, number>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,6 +60,7 @@ export function CashPayments({ className }: { className?: string }) {
       // Each swimmer is priced by the database, at the tier in force right
       // now — the price settles when they pay, not when they registered.
       setRows(await fetchPendingCashPayments(vol.data.id));
+      setOtherStatusCounts(await fetchNonCollectableEntryCounts());
     } catch (err) {
       setError(getErrorMessage(err, "Failed to load pending cash payments."));
     } finally {
@@ -217,7 +221,33 @@ export function CashPayments({ className }: { className?: string }) {
         )}
 
         {rows.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No cash payments pending.</p>
+          <div className="space-y-1.5 text-sm text-muted-foreground">
+            <p>No cash payments pending.</p>
+            {/* An empty desk has two very different causes, and saying which
+                one saves an afternoon. A production database was found with
+                all 141 of its entries in 'hold_expired' — the queue was
+                correctly empty, but the screen said only "no payments
+                pending", which reads as "nothing was ever registered". */}
+            {otherStatusCounts.confirmed > 0 && (
+              <p>
+                {otherStatusCounts.confirmed}{" "}
+                {otherStatusCounts.confirmed === 1 ? "entry has" : "entries have"} already been
+                paid and seeded.
+              </p>
+            )}
+            {otherStatusCounts.hold_expired > 0 && (
+              <p className="rounded-lg border-2 border-border-strong bg-neon-orange/15 p-2.5 text-foreground">
+                <span className="font-bold">
+                  {otherStatusCounts.hold_expired}{" "}
+                  {otherStatusCounts.hold_expired === 1 ? "entry" : "entries"} released an expired
+                  hold.
+                </span>{" "}
+                Their slots were given back, so they are not collectable here — a swimmer must
+                reclaim a slot, or an admin must roll the meet back to a pre-meet state
+                (supabase/reset-to-pre-meet.sql), before they reappear on the desk.
+              </p>
+            )}
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <Table>

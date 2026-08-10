@@ -286,3 +286,30 @@ export async function fetchPaymentHistory(
     return [];
   }
 }
+
+/**
+ * Entries that exist but cannot be collected against, by status.
+ *
+ * The cash desk lists only `pending_payment`, which is correct — a confirmed
+ * entry is already paid, and a `hold_expired` one gave its slot back, so
+ * taking money for it would be selling a place that may have gone to the
+ * waitlist. But "correctly empty" and "nothing registered" look identical on
+ * screen, and they are not the same problem. A production database was found
+ * with all 141 of its entries sitting in `hold_expired`: the desk was right
+ * to show nothing, and the screen gave no way to tell that from an empty
+ * meet.
+ */
+export async function fetchNonCollectableEntryCounts(): Promise<Record<string, number>> {
+  try {
+    const supabase = createClient();
+    const { data, error } = await supabase.from("entries").select("status").neq("status", "pending_payment");
+    if (error || !data) return {};
+    const counts: Record<string, number> = {};
+    for (const row of data as { status: string }[]) {
+      counts[row.status] = (counts[row.status] ?? 0) + 1;
+    }
+    return counts;
+  } catch {
+    return {};
+  }
+}
