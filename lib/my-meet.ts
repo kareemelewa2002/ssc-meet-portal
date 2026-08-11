@@ -28,6 +28,9 @@ export interface MyHeatAssignment {
   /** Heats are only visible once the sheet is published — an unpublished
    * seeding is a draft the swimmer must not plan their warm-up around. */
   published: boolean;
+  /** 'HH:MM:SS' from public.heat_projected_starts, or null when the session
+   * has no start time on file. APPROXIMATE — see that view's comment. */
+  projectedStart: string | null;
 }
 
 export interface MyMeetEntry {
@@ -128,9 +131,33 @@ export async function fetchMyMeetEntries(
                   heatGroup: heatRow.heat_group,
                   gender: heatRow.gender,
                   published: isHeatSheetVisible(heatRow.status),
+                  projectedStart: null,
                 }
               : null,
         });
+      }
+
+      // Projected starts in one extra round trip, for the heats this athlete
+      // actually has. Read from the view rather than summed here: the client
+      // cannot see draft heats, so arithmetic over what it CAN see lands too
+      // early (see public.heat_projected_starts).
+      const heatIds = mapped
+        .map((m) => m.heat?.heatId)
+        .filter((id): id is string => typeof id === "string");
+      if (heatIds.length > 0) {
+        const { data: starts } = await supabase
+          .from("heat_projected_starts")
+          .select("heat_id, projected_start")
+          .in("heat_id", heatIds);
+        const byHeat = new Map(
+          ((starts as { heat_id: string; projected_start: string }[] | null) ?? []).map((r) => [
+            r.heat_id,
+            r.projected_start,
+          ]),
+        );
+        for (const row of mapped) {
+          if (row.heat) row.heat.projectedStart = byHeat.get(row.heat.heatId) ?? null;
+        }
       }
 
       mapped.sort(

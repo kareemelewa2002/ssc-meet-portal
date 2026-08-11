@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  heatAssignmentVisibility,
-  isHeatSheetVisible,
-  PENDING_SEEDING_LABEL,
-} from "@/lib/heat-assignment-visibility";
+import { heatAssignmentVisibility, isHeatSheetVisible, PENDING_SEEDING_LABEL, formatTimeOfDay } from "@/lib/heat-assignment-visibility";
 
 describe("isHeatSheetVisible", () => {
   it("treats published and official as visible", () => {
@@ -46,5 +42,29 @@ describe("heatAssignmentVisibility", () => {
     expect(heatAssignmentVisibility("hold_expired", true, true)).toEqual({
       kind: "unavailable",
     });
+  });
+});
+
+describe("formatTimeOfDay", () => {
+  it("renders a Postgres time as HH:MM", () => {
+    expect(formatTimeOfDay("09:03:00")).toBe("09:03");
+    expect(formatTimeOfDay("17:42:00")).toBe("17:42");
+  });
+
+  it("zero-pads a single-digit hour", () => {
+    expect(formatTimeOfDay("9:03:00")).toBe("09:03");
+  });
+
+  it("accepts a value that already lacks seconds", () => {
+    expect(formatTimeOfDay("09:03")).toBe("09:03");
+  });
+
+  it("returns null for absent or unparseable values", () => {
+    expect(formatTimeOfDay(null)).toBeNull();
+    expect(formatTimeOfDay(undefined)).toBeNull();
+    expect(formatTimeOfDay("")).toBeNull();
+    expect(formatTimeOfDay("not a time")).toBeNull();
+    // 24:00 is not a wall-clock hour anyone should be shown.
+    expect(formatTimeOfDay("24:00:00")).toBeNull();
   });
 });

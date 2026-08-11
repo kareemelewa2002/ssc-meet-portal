@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { formatTimeMs } from "@/lib/format";
+import { formatTimeOfDay } from "@/lib/heat-assignment-visibility";
 import {
   heatAssignmentVisibility,
   PENDING_SEEDING_LABEL,
@@ -63,8 +64,8 @@ export function MyRaces({
           {title}
         </CardTitle>
         <CardDescription>
-          {volumeName ? `${volumeName} — ` : ""}every race entered, with heat and lane once the
-          sheet is published.
+          {volumeName ? `${volumeName} — ` : ""}every race entered, with heat, lane and an
+          approximate start once the sheet is published.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -113,6 +114,16 @@ export function MyRaces({
                     return (
                       <Badge variant="default">
                         Heat {entry.heat.heatNumber} · Lane {entry.heat.laneNumber}
+                        {/* "~" and not a bare time: this is session start plus
+                            turnaround, which assumes no breaks, scratches or
+                            delay. A swimmer who reads it as a promise and
+                            misses a call-room is worse off than one who was
+                            shown nothing. */}
+                        {entry.heat.projectedStart && (
+                          <span className="font-normal opacity-90">
+                            {" "}· ~{formatTimeOfDay(entry.heat.projectedStart)}
+                          </span>
+                        )}
                       </Badge>
                     );
                   }

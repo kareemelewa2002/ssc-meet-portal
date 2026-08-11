@@ -86,6 +86,19 @@ export type TeamRow = {
   updated_at: string;
 };
 
+/** public.heat_projected_starts — a VIEW. Projected wall-clock start per
+ * heat: session start + the turnaround of every preceding heat in that
+ * session. Computed with the view owner's privileges so DRAFT heats still
+ * count toward the ordinal — a client summing only the heats it can read
+ * (heats' policy is status = 'published') reports a start that is too early.
+ * Approximate by nature: assumes no breaks, scratches or delay. */
+export type HeatProjectedStartRow = {
+  heat_id: string;
+  session_id: string;
+  /** 'HH:MM:SS' */
+  projected_start: string;
+};
+
 /** public.event_results — overall standings across every heat of an event.
  * Includes DQ and NS rows: they carry is_ranked = false and a null place, so
  * a disqualified swimmer shows at the bottom of the standing rather than
@@ -655,6 +668,7 @@ export type Database = {
       team_memberships: Table<TeamMembershipRow>;
       team_invite_links: Table<TeamInviteLinkRow>;
       event_results: Table<EventResultRow>;
+      heat_projected_starts: Table<HeatProjectedStartRow>;
       relay_squads: Table<RelaySquadRow>;
       relay_legs: Table<RelayLegRow>;
       relay_squad_payments: Table<RelaySquadPaymentRow>;

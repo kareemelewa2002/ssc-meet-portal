@@ -45,3 +45,20 @@ export function heatAssignmentVisibility(
   }
   return { kind: "pending_seeding" };
 }
+
+/**
+ * 'HH:MM:SS' (or 'HH:MM') from public.heat_projected_starts -> 'HH:MM'.
+ *
+ * Deliberately not Date-based: the value is a wall-clock time of day at the
+ * pool, with no date and no zone. Parsing it through Date would attach the
+ * VIEWER's timezone and shift a 09:00 heat for anyone reading the page from
+ * another country — which parents travelling to a meet actually do.
+ */
+export function formatTimeOfDay(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const match = /^(\d{1,2}):(\d{2})/.exec(value.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  if (!Number.isInteger(hours) || hours < 0 || hours > 23) return null;
+  return `${String(hours).padStart(2, "0")}:${match[2]}`;
+}
