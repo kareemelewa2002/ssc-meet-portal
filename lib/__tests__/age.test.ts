@@ -7,6 +7,8 @@ import {
   ageTurningThisYear,
   calculateAge,
   describeAgeAtSwim,
+  eligibleAgeGroupsFor,
+  isAgeEligibleFor,
   isEligibleForSignup,
   requiresParentLink,
 } from "@/lib/age";
@@ -122,5 +124,31 @@ describe("requiresParentLink", () => {
 describe("describeAgeAtSwim", () => {
   it("formats the historical-age display string", () => {
     expect(describeAgeAtSwim(14, "SSC Vol. 1")).toBe("Swum at age 14 in SSC Vol. 1");
+  });
+});
+
+describe("relay / board age eligibility", () => {
+  it("opens an Open squad to every age group", () => {
+    // "Open" means open to everyone, which is exactly how public.event_results
+    // already ranks. Relays used to demand an exact match, so a U14 could hold
+    // a place on the Open board yet be refused an Open relay.
+    expect(eligibleAgeGroupsFor("Open")).toEqual(["U14", "U17", "Open"]);
+    expect(isAgeEligibleFor("Open", "U14")).toBe(true);
+    expect(isAgeEligibleFor("Open", "U17")).toBe(true);
+    expect(isAgeEligibleFor("Open", "Open")).toBe(true);
+  });
+
+  it("lets a 17 & Under squad draw on 14 & Under too", () => {
+    expect(eligibleAgeGroupsFor("U17")).toEqual(["U14", "U17"]);
+    expect(isAgeEligibleFor("U17", "U14")).toBe(true);
+    expect(isAgeEligibleFor("U17", "U17")).toBe(true);
+  });
+
+  it("never lets an older swimmer into a younger squad", () => {
+    // The whole point of the age bands — cumulative upward, never downward.
+    expect(isAgeEligibleFor("U14", "U17")).toBe(false);
+    expect(isAgeEligibleFor("U14", "Open")).toBe(false);
+    expect(isAgeEligibleFor("U17", "Open")).toBe(false);
+    expect(eligibleAgeGroupsFor("U14")).toEqual(["U14"]);
   });
 });

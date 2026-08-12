@@ -82,3 +82,35 @@ export function requiresParentLink(dateOfBirth: string | Date, referenceDate: st
 export function describeAgeAtSwim(ageAtSwim: number, volumeName: string): string {
   return `Swum at age ${ageAtSwim} in ${volumeName}`;
 }
+
+/**
+ * Which age groups may swim in a squad or board of `boardAgeGroup`.
+ *
+ * Boards in this app are CUMULATIVE — "this age and younger", with Open
+ * meaning open to everyone. public.event_results has always ranked results
+ * that way (a 14 & Under swimmer appears in the 14 & Under, 17 & Under and
+ * Open standings), but relay squads used to demand an exact match, so a U14
+ * swimmer could be ranked on the Open board yet not be allowed to swim an
+ * Open relay. The word "Open" meant two different things depending on which
+ * screen you were on.
+ *
+ * Mirrors public.relay_age_eligible() in supabase/schema.sql. Keep the two in
+ * step: the SQL copy is the enforcement, this one drives the picker so a
+ * captain is never offered a swimmer the database will reject.
+ */
+export function eligibleAgeGroupsFor(boardAgeGroup: AgeGroup): AgeGroup[] {
+  switch (boardAgeGroup) {
+    case "Open":
+      return ["U14", "U17", "Open"];
+    case "U17":
+      return ["U14", "U17"];
+    case "U14":
+    default:
+      return ["U14"];
+  }
+}
+
+/** Whether `athleteAgeGroup` may compete in a `boardAgeGroup` squad or board. */
+export function isAgeEligibleFor(boardAgeGroup: AgeGroup, athleteAgeGroup: AgeGroup): boolean {
+  return eligibleAgeGroupsFor(boardAgeGroup).includes(athleteAgeGroup);
+}

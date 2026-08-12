@@ -141,7 +141,25 @@ begin
       ('athlete-u17@ssc.com',  'SSC Athlete U17',  'athlete', make_date(v_year - 16, 5, 21),  'male'),
       ('athlete-open@ssc.com', 'SSC Athlete Open', 'athlete', make_date(v_year - 22, 11, 9),  'female'),
       ('parent@ssc.com',       'SSC Parent',       'parent',  null::date,             null::text),
-      ('parent-multi@ssc.com', 'SSC Parent Multi', 'parent',  null::date,             null::text)
+      ('parent-multi@ssc.com', 'SSC Parent Multi', 'parent',  null::date,             null::text),
+      -- Roster filler for SSC Demo Squad. The five accounts above give the
+      -- squad 2 U14 (1 of each gender), 1 U17 male and 2 Open females, which
+      -- cannot fill a single relay: every mixed event needs exactly 2 male and
+      -- 2 female (public.relay_gender_requirement), so the relay builder had
+      -- nothing to demonstrate. These seven bring each band to 2 male +
+      -- 2 female:
+      --     U14  += 1 male, 1 female
+      --     U17  += 1 male, 2 female
+      --     Open += 2 male
+      -- They share password123 with every other demo account, so any of them
+      -- can be signed in as if a captain needs to see a swimmer's own view.
+      ('squad-u14m@ssc.com',   'Youssef Kamal',    'athlete', make_date(v_year - 13, 2, 9),   'male'),
+      ('squad-u14f@ssc.com',   'Malak Nabil',      'athlete', make_date(v_year - 14, 8, 23),  'female'),
+      ('squad-u17m@ssc.com',   'Omar Farouk',      'athlete', make_date(v_year - 16, 1, 30),  'male'),
+      ('squad-u17f1@ssc.com',  'Nour Adel',        'athlete', make_date(v_year - 15, 6, 12),  'female'),
+      ('squad-u17f2@ssc.com',  'Habiba Sherif',    'athlete', make_date(v_year - 17, 10, 5),  'female'),
+      ('squad-openm1@ssc.com', 'Karim Mostafa',    'athlete', make_date(v_year - 20, 3, 27),  'male'),
+      ('squad-openm2@ssc.com', 'Ziad Tarek',       'athlete', make_date(v_year - 24, 12, 1),  'male')
     ) as t(email, full_name, role, dob, gender)
   loop
     select id into v_id from auth.users where lower(email) = rec.email;
@@ -340,7 +358,11 @@ begin
     where u.id = a.user_id
       and u.email in (
         'athlete-u14@ssc.com', 'athlete-u14b@ssc.com',
-        'athlete-u17@ssc.com', 'athlete-open@ssc.com'
+        'athlete-u17@ssc.com', 'athlete-open@ssc.com',
+        -- The relay filler, so the squad can actually field a relay.
+        'squad-u14m@ssc.com', 'squad-u14f@ssc.com',
+        'squad-u17m@ssc.com', 'squad-u17f1@ssc.com', 'squad-u17f2@ssc.com',
+        'squad-openm1@ssc.com', 'squad-openm2@ssc.com'
       )
       and a.team_id is distinct from v_team;
   end if;

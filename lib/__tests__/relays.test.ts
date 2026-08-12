@@ -118,10 +118,34 @@ describe("validateSquad", () => {
     expect(res.errors.join(" ")).toMatch(/cannot swim two legs/);
   });
 
-  it("rejects a swimmer from another age group", () => {
+  it("accepts a younger swimmer in an older squad", () => {
+    // Age eligibility is CUMULATIVE — Open means open to everyone, the same
+    // rule public.event_results uses to rank a U14 swimmer on the Open board.
+    // This previously required an exact match, so a swimmer could hold a place
+    // on the Open standing and still be refused an Open relay.
     const mixedAges = [...roster, swimmer("y1", "female", { ageGroup: "U14" })];
-    const res = validateSquad({ eventName: mixed, ageGroup: "Open", legs: ["m1", "m2", "f1", "y1"] }, mixedAges);
-    expect(res.errors.join(" ")).toMatch(/must be in this squad's age group/);
+    const res = validateSquad(
+      { eventName: mixed, ageGroup: "Open", legs: ["m1", "m2", "f1", "y1"] },
+      mixedAges,
+    );
+    expect(res.errors.join(" ")).not.toMatch(/too old/);
+    expect(res.ok).toBe(true);
+  });
+
+  it("still refuses an older swimmer in a younger squad", () => {
+    // Cumulative upward only. Letting an Open swimmer into a 14 & Under squad
+    // would defeat the entire purpose of the age bands.
+    const mixedAges = [
+      swimmer("k1", "male", { ageGroup: "U14" }),
+      swimmer("k2", "male", { ageGroup: "U14" }),
+      swimmer("k3", "female", { ageGroup: "U14" }),
+      swimmer("o1", "female", { ageGroup: "Open" }),
+    ];
+    const res = validateSquad(
+      { eventName: mixed, ageGroup: "U14", legs: ["k1", "k2", "k3", "o1"] },
+      mixedAges,
+    );
+    expect(res.errors.join(" ")).toMatch(/too old/);
   });
 
   it("rejects a swimmer with no individual entry in the meet", () => {

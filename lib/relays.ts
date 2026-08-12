@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/client";
 import { resolveUserId } from "@/lib/auth-user";
 import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
+import { isAgeEligibleFor } from "@/lib/age";
 import type { AgeGroup, EntryStatus, Gender } from "@/lib/supabase/types";
 
 export const RELAY_LEGS = 4;
@@ -116,12 +117,15 @@ export function validateSquad(
 
   const picked = chosen.map((id) => byId.get(id)).filter((c): c is RelayCandidate => !!c);
 
-  const wrongAge = picked.filter((c) => c.ageGroup !== draft.ageGroup);
+  // Cumulative, not an exact match: an Open squad may be built from any age,
+  // a 17 & Under squad from U17 and U14. Mirrors public.relay_age_eligible(),
+  // which is what actually enforces it — see lib/age.ts.
+  const wrongAge = picked.filter((c) => !isAgeEligibleFor(draft.ageGroup, c.ageGroup));
   if (wrongAge.length > 0) {
     errors.push(
-      `All four swimmers must be in this squad's age group. ${wrongAge
+      `Swimmers must be in this squad's age group or younger. ${wrongAge
         .map((c) => c.fullName)
-        .join(", ")} ${wrongAge.length === 1 ? "is" : "are"} not.`,
+        .join(", ")} ${wrongAge.length === 1 ? "is" : "are"} too old.`,
     );
   }
 

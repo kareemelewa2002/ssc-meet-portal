@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { fetchVolumeByNumber } from "@/lib/volumes";
 import { fetchMeetSettings, type MeetSettings } from "@/lib/meet-settings";
 import { AGE_GROUP_LABELS } from "@/lib/athletes";
+import { isAgeEligibleFor } from "@/lib/age";
 import {
   RELAY_LEGS,
   createRelaySquad,
@@ -117,16 +118,25 @@ export function RelayBuilder({ teams }: { teams: { id: string; name: string }[] 
   const validation = useMemo(() => validateSquad(draft, candidates), [draft, candidates]);
   const need = event ? genderRequirement(event.name) : { male: 2, female: 2 };
 
-  // Selectable for a given leg: on the team, in the squad's age group, not
-  // already committed to this relay, and not already on another leg here.
+  // Selectable for a given leg: on the team, eligible for the squad's age
+  // group, not already committed to this relay, and not already on another
+  // leg here.
+  //
+  // Age eligibility is cumulative rather than an exact match — an Open squad
+  // draws from every age, a 17 & Under squad from U17 and U14 — matching
+  // public.relay_age_eligible(), which is what the database enforces. Keeping
+  // the picker to an exact match would simply hide swimmers the captain is
+  // entitled to select.
   const optionsForLeg = (legIndex: number) =>
     candidates
-      .filter((c) => c.ageGroup === ageGroup)
+      .filter((c) => isAgeEligibleFor(ageGroup, c.ageGroup))
       .filter((c) => c.takenBySquad === null)
       .filter((c) => !legs.some((id, i) => id === c.athleteId && i !== legIndex))
       .map((c) => ({
         value: c.athleteId,
-        label: `${c.fullName} · ${c.gender === "male" ? "M" : "F"}${
+        // The age group is shown because a squad can now mix them, so "which
+        // band is this swimmer" stops being implied by the squad selector.
+        label: `${c.fullName} · ${c.gender === "male" ? "M" : "F"} · ${AGE_GROUP_LABELS[c.ageGroup]}${
           c.enteredInMeet ? "" : " · not entered"
         }`,
       }));

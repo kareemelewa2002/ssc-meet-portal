@@ -5479,6 +5479,41 @@ comment on function public.relay_leg_stroke(text, integer) is
 -- How many swimmers of each gender an event requires. Read from the event
 -- NAME because that is where the programme states it: "(Male)", "(Female)",
 -- "(Mixed)". Every mixed relay is exactly 2 + 2.
+-- ---------------------------------------------------------------------------
+-- Which age groups may swim in a squad of a given age group.
+--
+-- CUMULATIVE, like every other board in this schema: "this age and younger",
+-- with Open meaning open to everyone. public.event_results has always ranked
+-- results this way — a 14 & Under swimmer is ranked in 14 & Under, in
+-- 17 & Under AND in Open — but relay squads used to require an exact match on
+-- age_group. A U14 swimmer could therefore hold a place on the Open board and
+-- still be refused an Open relay, which made "Open" mean two different things
+-- in one product.
+--
+-- Mirrors eligibleAgeGroupsFor() in lib/age.ts, which drives the captain's
+-- picker. This copy is the enforcement.
+-- ---------------------------------------------------------------------------
+create or replace function public.relay_age_eligible(
+  p_squad_age public.age_group,
+  p_athlete_age public.age_group
+)
+returns boolean
+language sql
+immutable
+as $$
+  select case p_squad_age
+    when 'Open' then true
+    when 'U17'  then p_athlete_age in ('U14', 'U17')
+    else p_athlete_age = 'U14'
+  end;
+$$;
+
+comment on function public.relay_age_eligible(public.age_group, public.age_group) is
+  'Whether a swimmer of one age group may swim in a squad of another. '
+  'Cumulative: Open accepts every age, 17 & Under accepts 14 & Under too, '
+  '14 & Under accepts only itself — the same "this age and younger" rule '
+  'public.event_results uses for standings.';
+
 create or replace function public.relay_gender_requirement(p_event_name text)
 returns table (male_count integer, female_count integer)
 language sql
@@ -5546,7 +5581,7 @@ begin
     count(*) filter (where a.gender = 'male'),
     count(*) filter (where a.gender = 'female'),
     count(*) filter (where a.team_id is distinct from v_squad.team_id),
-    count(*) filter (where a.age_group <> v_squad.age_group)
+    count(*) filter (where not public.relay_age_eligible(v_squad.age_group, a.age_group))
   into v_male, v_female, v_wrong_team, v_wrong_age
   from public.relay_legs rl
   join public.athletes a on a.id = rl.athlete_id
@@ -5557,7 +5592,9 @@ begin
   end if;
 
   if v_wrong_age > 0 then
-    raise exception 'All four swimmers must be in the squad''s age group (% are not).', v_wrong_age;
+    raise exception
+      '% swimmer(s) are too old for a % squad. Squads are open to their own age group and younger.',
+      v_wrong_age, v_squad.age_group;
   end if;
 
   select male_count, female_count into v_need_male, v_need_female
