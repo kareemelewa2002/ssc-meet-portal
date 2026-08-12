@@ -115,6 +115,8 @@ export type EventResultRow = {
    * no session that was ever swum. */
   session_number: number;
   event_order: number;
+  /** True for a relay standing, where the competitor is a squad. */
+  is_relay: boolean;
   meet_volume_id: string;
   /** Time-drop points for this swim. A property of the swim rather than of a
    * board, so the same value appears on every board row for that swim. */
@@ -127,8 +129,13 @@ export type EventResultRow = {
   own_age_group: AgeGroup;
   /** True when this row is a younger swimmer ranked in the Open standings. */
   is_open_entry: boolean;
-  gender: Gender;
-  athlete_id: string;
+  /** Null for a MIXED relay, which has no single gender. Single-sex relays
+   * take the heat's gender; individuals always have their own. */
+  gender: Gender | null;
+  /** Null on a relay row — the competitor is the squad, not one swimmer.
+   * Fall back to athlete_name, which is the squad label ("Riptide A"). */
+  athlete_id: string | null;
+  relay_squad_id: string | null;
   athlete_name: string;
   team_name: string | null;
   /** Restarts per (age group, gender) — identifies a heat only together with

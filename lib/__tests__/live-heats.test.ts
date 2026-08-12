@@ -255,3 +255,73 @@ describe("transformLiveEvents", () => {
     expect(lane.result?.officialTimeMs).toBeNull();
   });
 });
+
+describe("transformLiveEvents — relay lanes", () => {
+  const relayEvent = () => [
+    {
+      id: "ev-relay",
+      name: "4x50m Freestyle Relay (Mixed)",
+      stroke: "Freestyle Relay",
+      distance_m: 200,
+      is_skins: false,
+      heats: [
+        {
+          id: "h-relay",
+          heat_number: 1,
+          heat_group: "U17_OPEN" as const,
+          // A mixed relay genuinely has no gender.
+          gender: null,
+          status: "published" as const,
+          heat_lanes: [
+            {
+              lane_number: 4,
+              entries: null,
+              relay_squads: {
+                id: "sq-1",
+                age_group: "Open" as const,
+                squad_letter: "A",
+                teams: { name: "Riptide" },
+                relay_legs: [
+                  { leg_number: 2, athletes: { id: "a2", users: { full_name: "Bea" } } },
+                  { leg_number: 1, athletes: { id: "a1", users: { full_name: "Ali" } } },
+                  { leg_number: 4, athletes: { id: "a4", users: { full_name: "Dia" } } },
+                  { leg_number: 3, athletes: { id: "a3", users: { full_name: "Cem" } } },
+                ],
+              },
+              results: null,
+            },
+          ],
+        },
+      ],
+    },
+  ];
+
+  it("keeps a relay lane instead of dropping it", () => {
+    // The transform used to `return null` for any lane without an entry and
+    // an athlete, which silently discarded every relay lane — the reason a
+    // seeded relay still appeared on no heat sheet.
+    const [event] = transformLiveEvents(relayEvent());
+    expect(event.heats[0].lanes).toHaveLength(1);
+  });
+
+  it("labels the lane with the squad, not a swimmer", () => {
+    const lane = transformLiveEvents(relayEvent())[0].heats[0].lanes[0];
+    expect(lane.athleteName).toBe("Riptide A");
+    expect(lane.teamName).toBe("Riptide");
+    // Null so consumers link to no profile: the competitor is the squad.
+    expect(lane.athleteId).toBeNull();
+  });
+
+  it("lists the four swimmers in leg order regardless of row order", () => {
+    const lane = transformLiveEvents(relayEvent())[0].heats[0].lanes[0];
+    expect(lane.relayLegs?.map((l) => l.fullName)).toEqual(["Ali", "Bea", "Cem", "Dia"]);
+  });
+
+  it("takes gender from the heat, so a mixed squad is null", () => {
+    const lane = transformLiveEvents(relayEvent())[0].heats[0].lanes[0];
+    expect(lane.gender).toBeNull();
+    expect(lane.ageGroup).toBe("Open");
+    // No per-squad entry exists, so there is no seed time to show.
+    expect(lane.seedTimeMs).toBeNull();
+  });
+});

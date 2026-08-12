@@ -38,3 +38,49 @@ export async function uploadAvatar(file: File): Promise<UploadAvatarResult> {
   const { data } = supabase.storage.from(AVATAR_BUCKET).getPublicUrl(path);
   return { url: data.publicUrl };
 }
+
+const TEAM_LOGO_BUCKET = "team-logos";
+const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2MB
+
+export interface UploadTeamLogoResult {
+  url: string | null;
+  error?: string;
+}
+
+/**
+ * Uploads a team logo PNG to the public `team-logos` bucket.
+ *
+ * PNG ONLY, and checked on the MIME type rather than the file extension: a
+ * renamed .png is still whatever it actually is, and the extension is the one
+ * thing a user can change trivially. PNG specifically because a crest needs
+ * transparency — a JPEG logo arrives with a white box baked around it, which
+ * looks broken everywhere the logo sits on a coloured surface.
+ *
+ * Keyed by team id and stamped with the upload time, so a captain replacing a
+ * logo does not have to wait for a CDN cache to expire before seeing it —
+ * `upsert` on a fixed key would keep serving the old image from cache.
+ */
+export async function uploadTeamLogo(
+  teamId: string,
+  file: File,
+): Promise<UploadTeamLogoResult> {
+  if (file.type !== "image/png") {
+    return { url: null, error: "Team logos must be a PNG file." };
+  }
+  if (file.size > MAX_LOGO_BYTES) {
+    return { url: null, error: "Logo must be smaller than 2MB." };
+  }
+
+  const supabase = createClient();
+  const path = `${teamId}/${Date.now()}.png`;
+
+  const { error } = await supabase.storage.from(TEAM_LOGO_BUCKET).upload(path, file, {
+    cacheControl: "3600",
+    upsert: false,
+    contentType: "image/png",
+  });
+  if (error) return { url: null, error: error.message };
+
+  const { data } = supabase.storage.from(TEAM_LOGO_BUCKET).getPublicUrl(path);
+  return { url: data.publicUrl };
+}

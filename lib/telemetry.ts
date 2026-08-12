@@ -185,6 +185,12 @@ export function buildEventStandings(
   const rows: TelemetryStanding[] = [];
   for (const heat of event.heats) {
     for (const lane of heat.lanes) {
+      // Telemetry is a per-swimmer analysis screen — WA points, seed deltas,
+      // personal bests. A relay lane has no athlete and no seed time, so
+      // every column it would fill is undefined. It is skipped here rather
+      // than rendered as a row of blanks; relay standings live on the results
+      // view, which understands squads.
+      if (lane.athleteId == null || lane.gender == null) continue;
       const valid = lane.result?.outcome === "valid" ? lane.result.officialTimeMs : null;
       rows.push({
         athleteId: lane.athleteId,

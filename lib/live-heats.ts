@@ -51,9 +51,29 @@ export interface RawResult {
   status: PublishStatus;
 }
 
+export interface RawRelayLeg {
+  leg_number: number;
+  athletes:
+    | { id: string; users: { full_name: string } | { full_name: string }[] | null }
+    | { id: string; users: { full_name: string } | { full_name: string }[] | null }[]
+    | null;
+}
+
+export interface RawRelaySquad {
+  id: string;
+  age_group: AgeGroup;
+  squad_letter: string;
+  teams: { name: string } | { name: string }[] | null;
+  relay_legs: RawRelayLeg[] | null;
+}
+
 export interface RawHeatLane {
   lane_number: number;
   entries: RawEntry | RawEntry[] | null;
+  /** Set instead of `entries` on a relay lane — the two are mutually
+   * exclusive (heat_lanes_one_occupant). Optional so a caller building a
+   * fixture for an individual heat need not spell out an absent relay. */
+  relay_squads?: RawRelaySquad | RawRelaySquad[] | null;
   results: RawResult | RawResult[] | null;
 }
 
@@ -97,12 +117,25 @@ export interface LiveResultView {
   status: PublishStatus;
 }
 
+export interface RelayLegView {
+  legNumber: number;
+  athleteId: string;
+  fullName: string;
+}
+
 export interface LiveLaneView {
   laneNumber: number;
-  athleteId: string;
+  /** Null on a RELAY lane: the competitor is a squad, not one swimmer, and
+   * athleteName carries the squad label ("Riptide A") instead. Consumers must
+   * treat this as optional — components/referee/heat-result-entry.tsx already
+   * did, which is what lets a referee time a relay with no changes there. */
+  athleteId: string | null;
+  /** The four swimmers, in leg order. Absent on an individual lane. */
+  relayLegs?: RelayLegView[] | null;
   athleteName: string;
   teamName: string | null;
-  gender: Gender;
+  /** Null for a MIXED relay squad, which has no single gender. */
+  gender: Gender | null;
   ageGroup: AgeGroup;
   seedTimeMs: number | null;
   isNt: boolean;
@@ -165,10 +198,57 @@ export function transformLiveEvents(raw: RawEvent[]): LiveEventView[] {
           .map((lane): LiveLaneView | null => {
             const entry = firstOf(lane.entries);
             const athlete = entry ? firstOf(entry.athletes) : null;
+            const squad = firstOf(lane.relay_squads);
+            const rawResult = firstOf(lane.results);
+
+            // A relay lane. Handled BEFORE the individual path because it has
+            // no entry and no athlete — the previous `if (!entry || !athlete)
+            // return null` silently dropped every relay lane, which is why a
+            // relay appeared on no heat sheet even once seeded.
+            if (squad) {
+              const squadTeam = firstOf(squad.teams);
+              const result = rawResult?.status === "published" ? rawResult : null;
+              return {
+                laneNumber: lane.lane_number,
+                awaitingApproval: rawResult != null && rawResult.status !== "published",
+                athleteId: null,
+                relayLegs: (squad.relay_legs ?? [])
+                  .map((leg) => {
+                    const legAthlete = firstOf(leg.athletes);
+                    if (!legAthlete) return null;
+                    return {
+                      legNumber: leg.leg_number,
+                      athleteId: legAthlete.id,
+                      fullName: firstOf(legAthlete.users)?.full_name ?? "Unknown swimmer",
+                    };
+                  })
+                  .filter((leg): leg is RelayLegView => leg !== null)
+                  .sort((a, b) => a.legNumber - b.legNumber),
+                athleteName: `${squadTeam?.name ?? "Team"} ${squad.squad_letter}`,
+                teamName: squadTeam?.name ?? null,
+                // A squad has no single gender; the heat carries it for
+                // single-sex relays and is null for a mixed one.
+                gender: heat.gender ?? null,
+                ageGroup: squad.age_group,
+                // Relays are not seeded from a seed time — there is no
+                // per-squad entry to carry one.
+                seedTimeMs: null,
+                isNt: false,
+                result: result
+                  ? {
+                      outcome: result.result_outcome,
+                      officialTimeMs: result.official_time_ms,
+                      finishPlace: result.finish_place,
+                      dqCode: result.dq_code,
+                      status: result.status,
+                    }
+                  : null,
+              };
+            }
+
             if (!entry || !athlete) return null;
             const user = firstOf(athlete.users);
             const team = firstOf(athlete.teams);
-            const rawResult = firstOf(lane.results);
             // A DRAFT result is a referee's working entry, not a result. RLS
             // hides drafts from spectators, but admins and referees CAN read
             // them — so without this check their view of the heat sheet showed
@@ -360,6 +440,11 @@ const LIVE_EVENT_SELECT = `
         id, seed_time_ms, is_nt,
         athletes ( id, gender, age_group, users!athletes_user_id_fkey ( full_name ), teams ( name ) )
       ),
+      relay_squads (
+        id, age_group, squad_letter,
+        teams ( name ),
+        relay_legs ( leg_number, athletes ( id, users!athletes_user_id_fkey ( full_name ) ) )
+      ),
       results ( result_outcome, official_time_ms, finish_place, dq_code, status )
     )
   )
@@ -442,8 +527,13 @@ export interface EventResultView {
    * on eventName is alphabetical and interleaves the session nonsensically. */
   sessionNumber: number;
   eventOrder: number;
-  gender: Gender;
-  athleteId: string;
+  /** A relay standing: the competitor is a squad, so athleteId is null and
+   * athleteName is the squad label ("Riptide A"). */
+  isRelay: boolean;
+  /** Null for a MIXED relay, which has no single gender. */
+  gender: Gender | null;
+  athleteId: string | null;
+  relaySquadId: string | null;
   athleteName: string;
   teamName: string | null;
   heatNumber: number;
@@ -483,8 +573,10 @@ export async function fetchEventResultsForSession(
       session_id: string;
       session_number: number;
       event_order: number;
-      gender: Gender;
-      athlete_id: string;
+      is_relay: boolean;
+      gender: Gender | null;
+      athlete_id: string | null;
+      relay_squad_id: string | null;
       athlete_name: string;
       team_name: string | null;
       heat_number: number;
@@ -501,7 +593,7 @@ export async function fetchEventResultsForSession(
       return supabase
         .from("event_results")
         .select(
-          "event_id, event_name, age_group, own_age_group, is_open_entry, session_id, session_number, event_order, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, result_outcome, dq_code, wa_points, event_place",
+          "event_id, event_name, age_group, own_age_group, is_open_entry, session_id, session_number, event_order, is_relay, gender, athlete_id, relay_squad_id, athlete_name, team_name, heat_number, official_time_ms, result_outcome, dq_code, wa_points, event_place",
         )
         .eq("session_id", sessionId)
         // Race order, not alphabetical. Ordering by event_name put "100m
@@ -526,8 +618,10 @@ export async function fetchEventResultsForSession(
       sessionId: r.session_id ?? null,
       sessionNumber: r.session_number,
       eventOrder: r.event_order,
+      isRelay: r.is_relay,
       gender: r.gender,
       athleteId: r.athlete_id,
+      relaySquadId: r.relay_squad_id,
       athleteName: r.athlete_name,
       teamName: r.team_name,
       heatNumber: r.heat_number,

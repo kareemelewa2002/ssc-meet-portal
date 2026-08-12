@@ -139,6 +139,11 @@ export function TelemetryClient({ volId }: { volId: string }) {
 
   function openFromLane(lane: LiveLaneView) {
     if (!selectedEvent || !selectedHeat) return;
+    // The swimmer modal is built entirely around one athlete — career ledger,
+    // personal bests, age-group standing. A relay lane has no athlete, so
+    // there is nothing for it to show; the lane stays inert rather than
+    // opening a modal that would be blank.
+    if (lane.athleteId == null) return;
     setModalTarget({
       athleteId: lane.athleteId,
       athleteName: lane.athleteName,

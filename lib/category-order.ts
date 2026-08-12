@@ -82,13 +82,20 @@ export function compareByCategory<T extends CategorySortable & { heatNumber: num
  * categorySortOrder() here would have to invent a heat_group for a row that
  * has none, and would merge two boards that are deliberately distinct.
  */
-export function resultBoardSortOrder(row: { ageGroup: AgeGroup; gender: Gender }): number {
+export function resultBoardSortOrder(row: {
+  ageGroup: AgeGroup;
+  /** Null for a MIXED relay, which genuinely has no single gender. */
+  gender: Gender | null;
+}): number {
   const boards: AgeGroup[] = ["U14", "U17", "Open"];
   const board = boards.indexOf(row.ageGroup);
   // An unrecognised board sorts last rather than first: indexOf returns -1,
   // and a negative rank would float an unknown category above 14 & Under.
   const rank = board === -1 ? boards.length : board;
-  return rank * 2 + (row.gender === "female" ? 0 : 1);
+  // Three slots per age group, not two: women, men, then mixed. A mixed relay
+  // has no gender and would otherwise share a rank with the men's board.
+  const genderRank = row.gender === "female" ? 0 : row.gender === "male" ? 1 : 2;
+  return rank * 3 + genderRank;
 }
 
 export interface RunningOrderHeat extends CategorySortable {

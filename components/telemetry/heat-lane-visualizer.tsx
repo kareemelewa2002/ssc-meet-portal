@@ -37,7 +37,10 @@ export function HeatLaneVisualizer({
 
   useEffect(() => {
     let cancelled = false;
-    const athleteIds = heat.lanes.map((l) => l.athleteId);
+    // Relay lanes have no athlete and therefore no personal best to fetch.
+    const athleteIds = heat.lanes
+      .map((l) => l.athleteId)
+      .filter((id): id is string => id !== null);
     (async () => {
       const bests = await fetchPersonalBestsForEventShape(athleteIds, stroke, distanceM);
       if (!cancelled) setPersonalBests(bests);
@@ -87,9 +90,11 @@ export function HeatLaneVisualizer({
             }
             return (
               <LaneCard
-                key={lane.athleteId}
+                // A relay lane has no athleteId; lane number is unique within
+                // a heat and is the stable key for either kind.
+                key={`${lane.laneNumber}-${lane.athleteId ?? "relay"}`}
                 lane={lane}
-                personalBestMs={personalBests.get(lane.athleteId)}
+                personalBestMs={lane.athleteId ? personalBests.get(lane.athleteId) : undefined}
                 index={index}
                 onSelect={onSelectLane ? () => onSelectLane(lane) : undefined}
               />

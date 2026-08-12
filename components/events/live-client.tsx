@@ -75,11 +75,17 @@ function LaneRow({
             outdoorMode && "text-yellow-300",
           )}
         >
-          <AthleteLink
-            athleteId={lane.athleteId}
-            name={lane.athleteName}
-            className={outdoorMode ? "text-yellow-300" : undefined}
-          />
+          {/* A relay lane has no athlete to link to — athleteName is the
+              squad label, and the four swimmers are listed beneath. */}
+          {lane.athleteId == null ? (
+            <span className={outdoorMode ? "text-yellow-300" : undefined}>{lane.athleteName}</span>
+          ) : (
+            <AthleteLink
+              athleteId={lane.athleteId}
+              name={lane.athleteName}
+              className={outdoorMode ? "text-yellow-300" : undefined}
+            />
+          )}
         </p>
         {highlight && (
           <div className="mt-0.5">
@@ -102,9 +108,23 @@ function LaneRow({
             {AGE_GROUP_SHORT_LABELS[lane.ageGroup]}
           </Badge>
           <Badge variant="outline" className="h-5 px-1.5 text-[10px] capitalize">
-            {lane.gender}
+            {/* A mixed relay squad has no gender of its own. */}
+            {lane.gender ?? "Mixed"}
           </Badge>
         </div>
+        {/* The four swimmers of a relay, in leg order. Without these the lane
+            reads only as "Riptide A", which tells a spectator at the pool
+            nothing about who is actually in the water. */}
+        {lane.relayLegs && lane.relayLegs.length > 0 && (
+          <p
+            className={cn(
+              "mt-0.5 truncate text-xs",
+              outdoorMode ? "text-yellow-100/60" : "text-muted-foreground",
+            )}
+          >
+            {lane.relayLegs.map((leg) => leg.fullName).join(" · ")}
+          </p>
+        )}
       </div>
       <div className="shrink-0 text-right">
         <p
@@ -722,15 +742,31 @@ export function LiveEventsClient({
                             </Badge>
                           )}
                           <div className="min-w-0 flex-1">
-                            <AthleteLink
-                              athleteId={r.athleteId}
-                              name={r.athleteName}
-                              className={cn(
-                                "truncate",
-                                outdoorMode && "text-yellow-300",
-                                r.outcome === "dq" && "line-through",
-                              )}
-                            />
+                            {/* A relay row has no athlete to link to — the
+                                competitor is the squad, and athleteName is its
+                                label ("Riptide A"). Linking it to a profile
+                                would be linking to nobody. */}
+                            {r.athleteId == null ? (
+                              <span
+                                className={cn(
+                                  "truncate font-semibold",
+                                  outdoorMode && "text-yellow-300",
+                                  r.outcome === "dq" && "line-through",
+                                )}
+                              >
+                                {r.athleteName}
+                              </span>
+                            ) : (
+                              <AthleteLink
+                                athleteId={r.athleteId}
+                                name={r.athleteName}
+                                className={cn(
+                                  "truncate",
+                                  outdoorMode && "text-yellow-300",
+                                  r.outcome === "dq" && "line-through",
+                                )}
+                              />
+                            )}
                             <p
                               className={cn(
                                 "truncate text-xs",
