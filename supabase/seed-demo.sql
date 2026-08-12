@@ -959,7 +959,7 @@ on conflict (event_id, athlete_id) do nothing;
 -- are produced by the live workflow:
 --   approve a swimmer  -> generate_heats_on_confirm  -> heats + lanes
 --   referee times, admin publishes                   -> results
---   apply_result_points / event_results              -> standings
+--   event_results -> recompute_volume_leaderboard    -> standings
 -- (The teardown that guarantees this clean slate runs in 7a above, before the
 -- entries are written.)
 -- ---------------------------------------------------------------------------

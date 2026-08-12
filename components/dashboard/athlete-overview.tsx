@@ -18,7 +18,7 @@ import {
 } from "@/lib/team-invites";
 import { fetchMyEntryPaymentStatus, type AthletePaymentStatus } from "@/lib/payments";
 import { fetchActiveVolume } from "@/lib/volumes";
-import { formatEgp } from "@/lib/pricing";
+import { formatEgp, priceLineKindLabel } from "@/lib/pricing";
 import { PRICING_TIER_LABELS } from "@/lib/meet-settings";
 
 /**
@@ -209,29 +209,54 @@ export function AthleteOverview({ hideTeamLink }: { hideTeamLink?: boolean } = {
           </CardHeader>
           <CardContent className="space-y-2">
             {payments.map((p) => (
-              <div
-                key={p.meetVolumeId}
-                className="flex items-center justify-between gap-2 rounded-lg border p-3"
-              >
-                <div>
-                  <p className="text-sm font-semibold">{p.volumeName}</p>
-                  {p.tier && (
-                    <p className="text-xs text-muted-foreground">{PRICING_TIER_LABELS[p.tier]} rate</p>
-                  )}
+              <div key={p.meetVolumeId} className="space-y-2 rounded-lg border p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">{p.volumeName}</p>
+                    {p.tier && (
+                      <p className="text-xs text-muted-foreground">
+                        {PRICING_TIER_LABELS[p.tier]} rate
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-1 text-right">
+                    <p className="font-mono text-sm font-bold">{formatEgp(p.totalEgp)}</p>
+                    <PaymentStatusBadge
+                      state={p.confirmed ? "paid" : "pending"}
+                      label={p.confirmed ? "Paid" : "Pending — cash at desk"}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-1 text-right">
-                  <p className="font-mono text-sm font-bold">{formatEgp(p.totalEgp)}</p>
-                  <PaymentStatusBadge
-                    state={p.confirmed ? "paid" : "pending"}
-                    label={p.confirmed ? "Paid" : "Pending — cash at desk"}
-                  />
-                  {/* Who took the money, once it has been taken. */}
-                  {p.confirmed && p.collectedByName && (
-                    <p className="text-xs text-muted-foreground">
-                      Collected by {p.collectedByName}
-                    </p>
-                  )}
-                </div>
+
+                {/* What the money is for, in BOTH states — a live quote while
+                    pending, the receipt as written at the desk once paid.
+                    A swimmer who has already handed over cash is the one most
+                    likely to want to check what it covered. */}
+                {p.lines && p.lines.length > 0 && (
+                  <ul className="space-y-0.5 border-t pt-2">
+                    {p.lines.map((line, i) => (
+                      <li
+                        key={`${line.kind}-${line.entryId ?? i}`}
+                        className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+                      >
+                        <span className="truncate">
+                          {priceLineKindLabel(line.kind)} — {line.label}
+                        </span>
+                        <span className="shrink-0 font-mono">{formatEgp(line.amountEgp)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* Who took the money and when, once it has been taken. */}
+                {p.confirmed && (p.collectedByName || p.collectedAt) && (
+                  <p className="border-t pt-2 text-xs text-muted-foreground">
+                    {p.collectedByName ? `Collected by ${p.collectedByName}` : "Collected"}
+                    {/* collected_at is a timestamptz — a real instant — so the
+                        viewer's local zone is the right rendering. */}
+                    {p.collectedAt && ` · ${new Date(p.collectedAt).toLocaleDateString()}`}
+                  </p>
+                )}
               </div>
             ))}
           </CardContent>

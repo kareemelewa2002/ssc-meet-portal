@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { ArrowLeft, Printer, Radio } from "lucide-react";
+import { Printer, Radio } from "lucide-react";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,7 @@ import {
 } from "@/lib/live-heats";
 import { formatTimeMs, timeDropSeconds } from "@/lib/format";
 import { DQ_REASON_LABELS, compareResultStanding } from "@/lib/results";
-import { compareByCategory } from "@/lib/category-order";
+import { compareByCategory, resultBoardSortOrder } from "@/lib/category-order";
 import { formatWaPoints } from "@/lib/wa-points";
 import type { AgeGroup, Gender, MeetVolumeRow, SessionRow } from "@/lib/supabase/types";
 import { AthleteLink } from "@/components/athletes/athlete-link";
@@ -369,7 +369,6 @@ export function LiveEventsClient({
     };
   }, [currentSession, loadEvents]);
 
-
   const filteredEvents = useMemo(() => {
     return events
       .filter((ev) => !eventFilterId || ev.eventId === eventFilterId)
@@ -428,14 +427,27 @@ export function LiveEventsClient({
         .filter((r) => !eventNameFilter || r.eventName === eventNameFilter)
         .filter((r) => !genderFilter || r.gender === genderFilter)
         .filter((r) => !ageFilter || r.ageGroup === ageFilter)
-        // The view already orders places ascending with nulls last, but the
-        // rows are stitched together from several per-session fetches — so
-        // the standing is only guaranteed ordered once it is sorted here.
-        .sort((a, b) =>
-          compareResultStanding(
-            { outcome: a.outcome, place: a.eventPlace, officialTimeMs: a.officialTimeMs },
-            { outcome: b.outcome, place: b.eventPlace, officialTimeMs: b.officialTimeMs },
-          ),
+        // Race order first, standing second.
+        //
+        // These rows are grouped into per-event cards below using a reduce
+        // into a plain object, so the ORDER OF THE GROUPS is just the order
+        // each event's first row happens to appear in this array. Sorting by
+        // standing alone therefore ordered the cards by "which event held the
+        // best-placed swimmer", which is no order at all — the 50m Free card
+        // could sit above or below the 100m Back card depending on times.
+        // Sorting by (session, event_order) up front makes the groups come
+        // out in the order the races were actually swum, and the standing
+        // comparison then only ever decides order WITHIN a group, which is
+        // the only place it was meaningful.
+        .sort(
+          (a, b) =>
+            a.sessionNumber - b.sessionNumber ||
+            a.eventOrder - b.eventOrder ||
+            resultBoardSortOrder(a) - resultBoardSortOrder(b) ||
+            compareResultStanding(
+              { outcome: a.outcome, place: a.eventPlace, officialTimeMs: a.officialTimeMs },
+              { outcome: b.outcome, place: b.eventPlace, officialTimeMs: b.officialTimeMs },
+            ),
         ),
     [eventResults, eventFilterId, eventNameFilter, genderFilter, ageFilter],
   );
@@ -458,17 +470,11 @@ export function LiveEventsClient({
             poolside officials reach for when the venue's wifi is not
             trustworthy. The tables further down print as-is, with no
             print-specific markup of their own needed. */}
-        <div className="flex items-center justify-between gap-3" data-print-hide>
-          <Link
-            href="/"
-            className={cn(
-              "flex min-h-[48px] items-center gap-2 text-sm font-medium",
-              outdoorMode ? "text-yellow-300" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <ArrowLeft className="size-4" />
-            All Events
-          </Link>
+        {/* The "All Events" link that used to sit here went to "/" despite its
+            label, and duplicated AppHeader's back control — which now goes to
+            /meets, where the events actually are. justify-end because this row
+            has only its right-hand group left. */}
+        <div className="flex items-center justify-end gap-3" data-print-hide>
           <div className="flex items-center gap-2">
             {live && (
               <Badge

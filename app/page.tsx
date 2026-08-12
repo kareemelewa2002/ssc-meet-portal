@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { useOutdoorMode } from "@/components/providers/outdoor-mode-provider";
 import { OutdoorModeToggle } from "@/components/layout/outdoor-mode-toggle";
 import { MeetSummaryStats } from "@/components/home/meet-summary-stats";
+import { MeetRegistrationCta } from "@/components/home/meet-registration-cta";
 import { AppHeader } from "@/components/layout/app-header";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
 import { ROLE_DASHBOARD_HREF } from "@/lib/role-dashboards";
@@ -123,6 +124,12 @@ export default function HomePage() {
           </div>
           <OutdoorModeToggle />
         </header>
+
+        {/* Above the portal grid on purpose: entering the meet is deadline-
+            bound and the dashboards are not, so while it applies it is the
+            most urgent thing on the page. It removes itself once every
+            athlete on the account is entered. */}
+        <MeetRegistrationCta outdoorMode={outdoorMode} />
 
         {portals.length > 0 && (
           <section aria-label="Your dashboards" className="grid gap-3 sm:grid-cols-2">

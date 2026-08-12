@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Banknote, CheckCircle2, ListChecks, Loader2 } from "lucide-react";
+import { Banknote, CheckCircle2, ListChecks, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -468,8 +468,16 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
             " Pay cash at the meet desk on deck — the amount could not be loaded, so ask an admin to confirm it there."
           )}
         </p>
-        <Button className="min-h-[48px] w-full" nativeButton={false} render={<Link href="/" />}>
-          Back to home
+        {/* A forward action, not a back control: the swimmer has just entered
+            and the next thing they want is their own race list, not the
+            landing page. AppHeader still carries back for anyone who wants
+            it, so this stays the one primary CTA on the screen. */}
+        <Button
+          className="min-h-[48px] w-full"
+          nativeButton={false}
+          render={<Link href="/dashboard" />}
+        >
+          Go to my dashboard
         </Button>
       </main>
     );
@@ -477,11 +485,9 @@ export function EventRegistrationClient({ volId }: { volId: string }) {
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-3 pb-24 sm:p-6">
-      <Link href="/" className="flex min-h-[48px] items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="size-4" />
-        All Events
-      </Link>
-
+      {/* The "All Events" link that used to sit here went to "/" despite its
+          label, and duplicated the back control in AppHeader (mounted by
+          app/events/[volId]/layout.tsx), which now goes to /meets. */}
       <DataErrorBanner error={dataError} subject="the event schedule" />
       {/* No price, no entries. Registration is a commitment to pay a specific
           amount on deck, so a form that cannot state the amount must say so

@@ -152,11 +152,15 @@ export default function ParentDashboardPage() {
                             </div>
                           </div>
 
-                          {/* What the money is FOR. Only available while
-                              still pending: entry_payments keeps the settled
-                              total, not a line-item breakdown, so once paid
-                              there is no itemization left to show. */}
-                          {!p.confirmed && p.lines && p.lines.length > 0 && (
+                          {/* What the money is FOR — in both states. While
+                              pending these lines are a live quote; once paid
+                              they are the receipt as written at the desk
+                              (entry_payment_items). This used to be hidden
+                              behind !p.confirmed on the belief that paying
+                              discarded the breakdown, so the moment a parent
+                              handed over cash the record of what they had
+                              bought vanished. */}
+                          {p.lines && p.lines.length > 0 && (
                             <ul className="space-y-0.5 border-t pt-2">
                               {p.lines.map((line, i) => (
                                 <li
@@ -174,9 +178,14 @@ export default function ParentDashboardPage() {
                             </ul>
                           )}
 
-                          {p.confirmed && p.collectedByName && (
+                          {p.confirmed && (p.collectedByName || p.collectedAt) && (
                             <p className="border-t pt-2 text-xs text-muted-foreground">
-                              Collected by {p.collectedByName}
+                              {p.collectedByName ? `Collected by ${p.collectedByName}` : "Collected"}
+                              {/* collected_at is a timestamptz — a real
+                                  instant — so rendering it through Date in
+                                  the viewer's zone is correct here, unlike
+                                  the pool-side wall-clock times. */}
+                              {p.collectedAt && ` · ${new Date(p.collectedAt).toLocaleDateString()}`}
                             </p>
                           )}
                         </div>

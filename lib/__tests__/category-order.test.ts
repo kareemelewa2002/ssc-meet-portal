@@ -5,8 +5,9 @@ import {
   categorySortOrder,
   compareByCategory,
   compareInRunningOrder,
+  resultBoardSortOrder,
 } from "@/lib/category-order";
-import type { Gender, HeatGroup } from "@/lib/supabase/types";
+import type { AgeGroup, Gender, HeatGroup } from "@/lib/supabase/types";
 
 const heat = (heatGroup: HeatGroup, gender: Gender | null, heatNumber = 1) => ({
   heatGroup,
@@ -153,5 +154,50 @@ describe("compareInRunningOrder — session, then race, then category", () => {
     ];
     expect(() => rows.sort(compareInRunningOrder)).not.toThrow();
     expect(rows.sort(compareInRunningOrder)).toHaveLength(2);
+  });
+});
+
+describe("resultBoardSortOrder", () => {
+  const board = (ageGroup: AgeGroup, gender: Gender) => ({ ageGroup, gender });
+
+  it("lists a standing's boards youngest first, women before men", () => {
+    const rows = [
+      board("Open", "male"),
+      board("U14", "male"),
+      board("Open", "female"),
+      board("U17", "male"),
+      board("U14", "female"),
+      board("U17", "female"),
+    ];
+    expect(
+      rows
+        .sort((a, b) => resultBoardSortOrder(a) - resultBoardSortOrder(b))
+        .map((r) => `${r.ageGroup} ${r.gender}`),
+    ).toEqual([
+      "U14 female",
+      "U14 male",
+      "U17 female",
+      "U17 male",
+      "Open female",
+      "Open male",
+    ]);
+  });
+
+  it("keeps U17 and Open apart, unlike the heat_group buckets", () => {
+    // A heat folds these two together (U17_OPEN) because they swim the same
+    // water. A standing must not: they are separate boards with separate
+    // places and separate points.
+    expect(resultBoardSortOrder(board("U17", "female"))).not.toBe(
+      resultBoardSortOrder(board("Open", "female")),
+    );
+  });
+
+  it("sorts an unrecognised board last rather than ahead of 14 & Under", () => {
+    // indexOf returns -1 for anything unexpected; used raw it would produce a
+    // negative rank and float the unknown board to the top of the page.
+    const unknown = { ageGroup: "U11" as AgeGroup, gender: "female" as Gender };
+    expect(resultBoardSortOrder(unknown)).toBeGreaterThan(
+      resultBoardSortOrder(board("Open", "male")),
+    );
   });
 });

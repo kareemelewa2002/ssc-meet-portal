@@ -11,7 +11,25 @@ import { useToast } from "@/hooks/use-toast";
  * the athlete is free to apply elsewhere. Only ever fetches anything for the
  * signed-in captain of `teamId` (RLS: is_team_captain_of), so it's safe to
  * mount unconditionally on any team card/modal a captain might view. */
-export function TeamJoinRequests({ teamId, className }: { teamId: string; className?: string }) {
+export function TeamJoinRequests({
+  teamId,
+  className,
+  showEmptyState = false,
+}: {
+  teamId: string;
+  className?: string;
+  /**
+   * Render "no requests" rather than nothing at all.
+   *
+   * Opt-in, because the two behaviours are right in different places. Mounted
+   * inside a roster card or a team modal, an empty queue should stay silent —
+   * it is incidental there. On the captain dashboard it is one of the few
+   * captain-only surfaces on the page, and disappearing when empty left that
+   * dashboard looking like an athlete's: a captain with no pending requests
+   * saw their own races and little else, with no sign the queue existed.
+   */
+  showEmptyState?: boolean;
+}) {
   const toast = useToast();
   const [requests, setRequests] = useState<TeamJoinRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -57,7 +75,21 @@ export function TeamJoinRequests({ teamId, className }: { teamId: string; classN
     );
   }
 
-  if (requests.length === 0) return null;
+  if (requests.length === 0) {
+    if (!showEmptyState) return null;
+    return (
+      <div className={className}>
+        <p className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase text-muted-foreground">
+          <UserPlus className="size-3.5" />
+          Join Requests
+        </p>
+        <p className="rounded-lg border p-3 text-sm text-muted-foreground">
+          No swimmers are waiting to join this team. Requests appear here for you to accept or
+          reject, and accepting adds them straight to your roster.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className={className}>

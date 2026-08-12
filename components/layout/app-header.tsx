@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   ArrowLeft,
   Home,
@@ -31,6 +31,7 @@ import { createClient } from "@/lib/supabase/client";
 import { ROLE_LABELS, useCurrentUser } from "@/hooks/use-current-user";
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { ROLE_DASHBOARD_HREF } from "@/lib/role-dashboards";
+import { parentLabelFor, parentPathFor } from "@/lib/nav-hierarchy";
 import { useMyPortals } from "@/hooks/use-my-portals";
 
 export interface AppHeaderProps {
@@ -51,8 +52,14 @@ function initialsFor(fullName: string): string {
 
 /**
  * Standardized sticky top navigation rendered on every page: a "← Back"
- * button (browser history), a "Home" button (always to "/"), the current
- * page title, and a User Profile Menu (name, active Role badge, Sign Out).
+ * button (to the page ABOVE this one, not the previously-visited one), a
+ * "Home" button (always to "/"), the current page title, and a User Profile
+ * Menu (name, active Role badge, Sign Out).
+ *
+ * This is the app's ONLY back control — individual pages must not add their
+ * own. Several used to, which put two back affordances on one screen that
+ * did different things: the header popped history while the in-page link
+ * went to a fixed parent.
  * Guests can't actually reach any page this renders on except transiently —
  * middleware.ts redirects unauthenticated visitors to /login for every
  * route except /login and /register — but the "Sign in" fallback below
@@ -60,6 +67,11 @@ function initialsFor(fullName: string): string {
  */
 export function AppHeader({ title, className }: AppHeaderProps) {
   const router = useRouter();
+  const pathname = usePathname();
+  // Where "up" is from here. Null on the home page, which has nothing above
+  // it — the control is hidden rather than rendered as a no-op.
+  const backHref = parentPathFor(pathname);
+  const backLabel = parentLabelFor(backHref);
   const { user, loading } = useCurrentUser();
   // Which portals actually lead somewhere for this account. Resolved once
   // per user and shared, since this header renders on every page.
@@ -91,26 +103,36 @@ export function AppHeader({ title, className }: AppHeaderProps) {
       )}
     >
       <div className="flex shrink-0 items-center gap-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="size-10 min-h-[44px] min-w-[44px]"
-          aria-label="Back"
-          onClick={() => router.back()}
-        >
-          <ArrowLeft className="size-5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-10 min-h-[44px] min-w-[44px]"
-          aria-label="Home"
-          nativeButton={false}
-          render={<Link href="/" />}
-        >
-          <Home className="size-5" />
-        </Button>
+        {backHref && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-10 min-h-[44px] min-w-[44px]"
+            // Names the destination rather than saying just "Back", so a
+            // screen reader announces where the control actually goes.
+            aria-label={`Back to ${backLabel}`}
+            nativeButton={false}
+            render={<Link href={backHref} />}
+          >
+            <ArrowLeft className="size-5" />
+          </Button>
+        )}
+        {/* Only where it is a DIFFERENT destination from Back. On a
+            top-level page Back already goes to "/", so rendering Home beside
+            it put two adjacent controls with the same target; on "/" itself
+            it pointed at the page already being viewed. */}
+        {backHref && backHref !== "/" && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-10 min-h-[44px] min-w-[44px]"
+            aria-label="Home"
+            nativeButton={false}
+            render={<Link href="/" />}
+          >
+            <Home className="size-5" />
+          </Button>
+        )}
       </div>
 
       {title && (

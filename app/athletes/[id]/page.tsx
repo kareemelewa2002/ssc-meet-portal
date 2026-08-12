@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, Medal, Search, Trophy } from "lucide-react";
+import { Medal, Search, Trophy } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -69,9 +68,7 @@ export default function AthleteProfilePage() {
       <div className="min-h-screen">
         <AppHeader title="Athlete Profile" />
         <main className="mx-auto max-w-4xl space-y-4 p-6">
-          <Link href="/athletes" className="inline-flex min-h-[48px] items-center text-sm text-muted-foreground hover:text-foreground">
-            <ArrowLeft className="mr-1 size-4" /> All athletes
-          </Link>
+          {/* Back to /athletes is AppHeader's job — see lib/nav-hierarchy.ts. */}
           <DataErrorBanner error={dataError} subject="this athlete profile" />
           {!dataError && <p className="font-medium">Athlete not found.</p>}
         </main>
@@ -90,13 +87,7 @@ export default function AthleteProfilePage() {
     <div className="min-h-screen">
       <AppHeader title={profile.fullName} />
       <main className="mx-auto flex w-full max-w-4xl flex-col gap-4 p-3 pb-24 sm:p-6">
-      <Link
-        href="/athletes"
-        className="inline-flex min-h-[48px] items-center text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeft className="mr-1 size-4" /> All athletes
-      </Link>
-
+      {/* Back to /athletes is AppHeader's job — see lib/nav-hierarchy.ts. */}
       <Card>
         <CardContent className="flex flex-col gap-4 py-6 sm:flex-row sm:items-center">
           <Avatar className="size-24">

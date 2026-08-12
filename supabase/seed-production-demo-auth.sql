@@ -8,8 +8,13 @@
 -- ----------------
 -- supabase/seed-demo.sql cannot be run on production — it DELETES AND REBUILDS
 -- every entry, heat and result belonging to a demo athlete. This script only
--- adds accounts. It creates no teams, no entries, no heats, and touches no
--- existing athlete.
+-- ADDS. It creates no entries, no heats and no results, and touches no
+-- existing athlete, team or user other than the ones it creates itself.
+--
+-- The one team it does create is 'SSC Demo Squad', captained by
+-- captain@ssc.com. That is deliberately a NEW team rather than an existing
+-- one: captaincy is public.teams.captain_id, so adopting a real team would
+-- demote whoever actually captains it.
 --
 -- WHAT IT DELIBERATELY DOES NOT DO
 -- --------------------------------
@@ -122,6 +127,8 @@ declare
   v_age integer;
   v_parent uuid;
   v_parent_multi uuid;
+  v_captain uuid;
+  v_team uuid;
   v_year integer := extract(year from current_date)::int;
 begin
   for rec in
@@ -279,6 +286,64 @@ begin
   from public.users u
   where u.id = a.user_id
     and u.email in ('athlete-u14b@ssc.com', 'athlete-u17@ssc.com', 'athlete-open@ssc.com');
+
+  -- -------------------------------------------------------------------------
+  -- Captaincy for captain@ssc.com.
+  --
+  -- WITHOUT THIS THE CAPTAIN ACCOUNT IS NOT A CAPTAIN. Captaincy in this
+  -- schema is a relationship — public.teams.captain_id — not a role, and
+  -- nothing above sets it. The account signed in fine and looked correct in
+  -- every listing, but:
+  --
+  --   * useMyPortals() found no captained team, so neither the header nor the
+  --     home page ever offered a "Captain Portal" link, and
+  --   * /captain itself, if reached by typing the URL, showed "No team
+  --     currently lists you as its captain".
+  --
+  -- The visible symptom was a captain account that only ever had an athlete
+  -- dashboard.
+  --
+  -- A DEDICATED TEAM, NOT AN EXISTING ONE. This runs on production, where
+  -- real teams have real captains. Pointing captain_id at whichever team came
+  -- back first would silently demote a real person from their own team, so
+  -- this creates a team that belongs to the demo accounts and touches no
+  -- other row.
+  -- -------------------------------------------------------------------------
+  select id into v_captain from public.users where email = 'captain@ssc.com';
+
+  if v_captain is not null then
+    -- approved_by_admin is set on INSERT, where no trigger guards it.
+    -- enforce_team_approval_change() only fires on UPDATE, and only when the
+    -- value actually changes — so the conflict branch deliberately leaves it
+    -- alone rather than needing the trigger disabled.
+    insert into public.teams (name, abbreviation, captain_id, approved_by_admin)
+    values ('SSC Demo Squad', 'DEMO', v_captain, true)
+    on conflict (name) do update set captain_id = excluded.captain_id
+    returning id into v_team;
+
+    if v_team is null then
+      select id into v_team from public.teams where name = 'SSC Demo Squad';
+    end if;
+
+    -- A captain competes too, so put them on their own roster: /captain
+    -- renders their entries and fees alongside the team's.
+    update public.athletes set team_id = v_team where user_id = v_captain;
+
+    -- The demo swimmers join the squad, so Roster & Contacts, the relay
+    -- builder and the join-request queue all have something real to show. A
+    -- captain dashboard whose every panel is empty is indistinguishable from
+    -- a broken one. Scoped to accounts this script created — no existing
+    -- athlete is moved off their own team.
+    update public.athletes a
+    set team_id = v_team
+    from public.users u
+    where u.id = a.user_id
+      and u.email in (
+        'athlete-u14@ssc.com', 'athlete-u14b@ssc.com',
+        'athlete-u17@ssc.com', 'athlete-open@ssc.com'
+      )
+      and a.team_id is distinct from v_team;
+  end if;
 end $$;
 
 commit;
@@ -290,11 +355,16 @@ select
   u.email,
   u.role                                   as app_role,
   coalesce(a.age_group::text, '—')         as age_group,
+  coalesce(t.name, '—')                    as team,
+  -- The column that decides whether /captain works at all.
+  (ct.id is not null)                      as captains_a_team,
   coalesce(p.email, '—')                   as parent,
   (i.id is not null)                       as has_identity,
   (au.encrypted_password = crypt('password123', au.encrypted_password)) as password_ok
 from public.users u
 left join public.athletes a on a.user_id = u.id
+left join public.teams t on t.id = a.team_id
+left join public.teams ct on ct.captain_id = u.id
 left join public.users p on p.id = a.parent_id
 left join auth.users au on au.id = u.id
 left join auth.identities i on i.user_id = u.id and i.provider = 'email'

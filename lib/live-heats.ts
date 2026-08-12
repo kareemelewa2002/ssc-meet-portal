@@ -437,6 +437,11 @@ export interface EventResultView {
   ownAgeGroup: AgeGroup;
   isOpenEntry: boolean;
   sessionId: string | null;
+  /** Running order of the meet. Standings are grouped per event for display,
+   * and those groups must appear in the order the races were swum — sorting
+   * on eventName is alphabetical and interleaves the session nonsensically. */
+  sessionNumber: number;
+  eventOrder: number;
   gender: Gender;
   athleteId: string;
   athleteName: string;
@@ -476,6 +481,8 @@ export async function fetchEventResultsForSession(
       own_age_group: AgeGroup;
       is_open_entry: boolean;
       session_id: string;
+      session_number: number;
+      event_order: number;
       gender: Gender;
       athlete_id: string;
       athlete_name: string;
@@ -494,10 +501,15 @@ export async function fetchEventResultsForSession(
       return supabase
         .from("event_results")
         .select(
-          "event_id, event_name, age_group, own_age_group, is_open_entry, session_id, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, result_outcome, dq_code, wa_points, event_place",
+          "event_id, event_name, age_group, own_age_group, is_open_entry, session_id, session_number, event_order, gender, athlete_id, athlete_name, team_name, heat_number, official_time_ms, result_outcome, dq_code, wa_points, event_place",
         )
         .eq("session_id", sessionId)
-        .order("event_name", { ascending: true })
+        // Race order, not alphabetical. Ordering by event_name put "100m
+        // Freestyle" ahead of "50m Butterfly" and listed the session in an
+        // order it was never swum in — a spectator scrolling for the race
+        // that just finished had to hunt for it. Everything here is one
+        // session, so event_order alone is the running order.
+        .order("event_order", { ascending: true })
         .order("event_place", { ascending: true, nullsFirst: false });
     },
     { empty: [] },
@@ -512,6 +524,8 @@ export async function fetchEventResultsForSession(
       ownAgeGroup: r.own_age_group,
       isOpenEntry: r.is_open_entry,
       sessionId: r.session_id ?? null,
+      sessionNumber: r.session_number,
+      eventOrder: r.event_order,
       gender: r.gender,
       athleteId: r.athlete_id,
       athleteName: r.athlete_name,

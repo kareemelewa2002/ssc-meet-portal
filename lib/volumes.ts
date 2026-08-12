@@ -4,7 +4,19 @@ import { ok, runQuery, type FetchResult } from "@/lib/fetch-policy";
 import type { Database, MeetVolumeRow } from "@/lib/supabase/types";
 import type { SessionRow } from "@/lib/supabase/types";
 
-/** Mirrors the real supabase/schema.sql seed data, used when Supabase isn't reachable. */
+/**
+ * Used when Supabase isn't reachable, so nothing here passes through RLS.
+ *
+ * That is exactly why it lists ONLY the volume that is meant to be public.
+ * It used to carry a planned, non-public "SSC Vol. 2" as well, mirroring the
+ * schema seed — but every other path hides that row behind
+ * public.volume_is_public(), and this constant is the one path that cannot.
+ * A dropped connection would therefore surface an unannounced future meet to
+ * whoever happened to be looking, which is the single thing the is_public
+ * flag exists to prevent.
+ *
+ * A hidden volume is not "missing" from this list; it is correctly absent.
+ */
 export const DEMO_VOLUMES: MeetVolumeRow[] = [
   {
     id: "demo-vol-1",
@@ -13,16 +25,6 @@ export const DEMO_VOLUMES: MeetVolumeRow[] = [
     meet_date: "2026-10-02",
     status: "scheduled",
     is_public: true,
-    created_at: "",
-    updated_at: "",
-  },
-  {
-    id: "demo-vol-2",
-    volume_number: 2,
-    name: "SSC Vol. 2",
-    meet_date: null,
-    status: "planned",
-    is_public: false,
     created_at: "",
     updated_at: "",
   },

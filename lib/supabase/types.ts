@@ -109,7 +109,16 @@ export type EventResultRow = {
   stroke: string;
   distance_m: number;
   session_id: string;
+  /** Running order within the meet. Sort standings by
+   * (session_number, event_order) — sorting by event_name is alphabetical,
+   * which puts "100m Free" ahead of "50m Fly" and produces an order matching
+   * no session that was ever swum. */
+  session_number: number;
+  event_order: number;
   meet_volume_id: string;
+  /** Time-drop points for this swim. A property of the swim rather than of a
+   * board, so the same value appears on every board row for that swim. */
+  improvement_points: number;
   /** The board this row belongs to. Not mutually exclusive: "Open" means
    * open to all ages, so a U14 swimmer appears in both U14 and Open. */
   age_group: AgeGroup;

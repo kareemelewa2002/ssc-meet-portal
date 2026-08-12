@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Clock, Info, MapPin } from "lucide-react";
+import { Clock, Info, MapPin } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,17 +43,10 @@ export function ScheduleClient({ volId }: { volId: string }) {
   return (
     <div className={cn("min-h-screen", outdoorMode ? "bg-black text-yellow-300" : "bg-background")}>
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4 sm:p-6">
-        <div className="flex items-center justify-between gap-3">
-          <Link
-            href="/"
-            className={cn(
-              "flex min-h-[48px] items-center gap-2 text-sm font-medium",
-              outdoorMode ? "text-yellow-300" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <ArrowLeft className="size-4" />
-            All Events
-          </Link>
+        {/* The "All Events" link that used to sit here went to "/" despite its
+            label, and duplicated the back control in AppHeader (mounted by
+            app/events/[volId]/layout.tsx), which now goes to /meets. */}
+        <div className="flex items-center justify-end gap-3">
           <OutdoorModeToggle />
         </div>
 

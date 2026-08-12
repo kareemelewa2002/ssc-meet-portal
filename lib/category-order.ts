@@ -1,4 +1,4 @@
-import type { Gender, HeatGroup } from "@/lib/supabase/types";
+import type { AgeGroup, Gender, HeatGroup } from "@/lib/supabase/types";
 
 /**
  * The order the deck calls the boards of one event.
@@ -69,6 +69,26 @@ export function compareByCategory<T extends CategorySortable & { heatNumber: num
   b: T,
 ): number {
   return categorySortOrder(a) - categorySortOrder(b) || a.heatNumber - b.heatNumber;
+}
+
+/**
+ * The order a published STANDING lists its boards: youngest first, women
+ * before men.
+ *
+ * Six buckets, not the four above. A heat carries heat_group, which folds
+ * 17 & Under together with Open because they swim the same water — but a
+ * standing carries age_group, and U17 and Open are genuinely separate boards
+ * there, each with its own places and its own points. Reusing
+ * categorySortOrder() here would have to invent a heat_group for a row that
+ * has none, and would merge two boards that are deliberately distinct.
+ */
+export function resultBoardSortOrder(row: { ageGroup: AgeGroup; gender: Gender }): number {
+  const boards: AgeGroup[] = ["U14", "U17", "Open"];
+  const board = boards.indexOf(row.ageGroup);
+  // An unrecognised board sorts last rather than first: indexOf returns -1,
+  // and a negative rank would float an unknown category above 14 & Under.
+  const rank = board === -1 ? boards.length : board;
+  return rank * 2 + (row.gender === "female" ? 0 : 1);
 }
 
 export interface RunningOrderHeat extends CategorySortable {

@@ -27,9 +27,20 @@ export interface AthletePaymentStatus {
   confirmed: boolean;
   totalEgp: number;
   tier: PricingTier | null;
-  /** Only meaningful when NOT confirmed — the itemized quote for whatever is
-   * still pending_payment. null once confirmed, since entry_payments does
-   * not retain a line-item breakdown, only the settled total. */
+  /** The breakdown behind totalEgp, in both states — but from two different
+   * sources, and the difference matters.
+   *
+   * While pending it is a live QUOTE, recomputed from the current tier: what
+   * this athlete would pay if they paid now.
+   *
+   * Once confirmed it is the RECEIPT, read back from entry_payment_items as
+   * written at the desk. It is never re-quoted, so it keeps saying what was
+   * actually charged after the tier moves on — re-quoting a settled payment
+   * would show a swimmer who paid the early-bird rate the standard rate they
+   * never paid.
+   *
+   * Null only when a payment genuinely has no stored items (a record written
+   * before itemisation, or a header whose item write failed). */
   lines: PriceLine[] | null;
   collectedAt: string | null;
   /** Full name of the admin who took the payment, or null before/if unknown
@@ -49,12 +60,19 @@ interface EntryVolumeRow {
 }
 
 type RawCollectorEmbed = { full_name: string };
+type RawPaymentItem = {
+  kind: PriceLine["kind"];
+  label: string;
+  amount_egp: number;
+  entry_id: string | null;
+};
 interface PaymentRow {
   meet_volume_id: string;
   amount_egp: number;
   tier: PricingTier;
   collected_at: string;
   collected_by: RawCollectorEmbed | RawCollectorEmbed[] | null;
+  entry_payment_items: RawPaymentItem[] | null;
 }
 
 /** Every meet volume this athlete has entries in, individual-entry payment
@@ -93,7 +111,14 @@ export async function fetchMyEntryPaymentStatus(
     async () => {
       const { data, error } = await supabase
         .from("entry_payments")
-        .select("meet_volume_id, amount_egp, tier, collected_at, collected_by ( full_name )")
+        // entry_payment_items is the receipt as taken at the desk. It has
+        // always been written (see confirmCashPayment) and has always been
+        // readable by the athlete and their parent
+        // (own_or_admin_view_entry_payment_items) — this view simply never
+        // asked for it, so paying made the breakdown disappear.
+        .select(
+          "meet_volume_id, amount_egp, tier, collected_at, collected_by ( full_name ), entry_payment_items ( kind, label, amount_egp, entry_id )",
+        )
         .eq("athlete_id", athleteId);
       return { data: data as unknown as PaymentRow[] | null, error };
     },
@@ -109,6 +134,7 @@ export async function fetchMyEntryPaymentStatus(
     const payment = paymentByVolume.get(volume.id);
     if (payment) {
       const collector = firstOf(payment.collected_by);
+      const items = payment.entry_payment_items ?? [];
       statuses.push({
         meetVolumeId: volume.id,
         volumeName: volume.name,
@@ -116,7 +142,18 @@ export async function fetchMyEntryPaymentStatus(
         confirmed: true,
         totalEgp: payment.amount_egp,
         tier: payment.tier,
-        lines: null,
+        // The tier stamped on each line is the payment's own settled tier,
+        // not today's — these lines are a historical record, and re-deriving
+        // the tier would rewrite what someone was charged.
+        lines: items.length
+          ? items.map((item) => ({
+              kind: item.kind,
+              label: item.label,
+              entryId: item.entry_id,
+              amountEgp: item.amount_egp,
+              tier: payment.tier,
+            }))
+          : null,
         collectedAt: payment.collected_at,
         collectedByName: collector?.full_name ?? null,
       });

@@ -151,7 +151,7 @@ const APPROVED_TRIGGERS: TriggerSpec[] = [
   { schema: "public", table: "results", trigger: "enforce_result_publish_trigger" },
   { schema: "public", table: "results", trigger: "enforce_result_scoring_trigger" },
   { schema: "public", table: "results", trigger: "recompute_heat_finish_places_trigger" },
-  { schema: "public", table: "results", trigger: "results_apply_points" },
+  { schema: "public", table: "results", trigger: "results_recompute_leaderboard_trigger" },
   { schema: "public", table: "results", trigger: "results_set_updated_at" },
   { schema: "public", table: "skins_qualifications", trigger: "enforce_skins_qualification_columns_trigger" },
   { schema: "public", table: "skins_qualifications", trigger: "skins_qualifications_set_updated_at" },

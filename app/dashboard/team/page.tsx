@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Loader2, Mail, Phone, Users } from "lucide-react";
+import { Loader2, Mail, Phone, Users } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -72,13 +71,7 @@ export default function DashboardTeamPage() {
     <div className="min-h-screen">
       <AppHeader title="My Team" />
       <main className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3 pb-24 sm:p-6">
-        <Link
-          href="/dashboard"
-          className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="size-4" />
-          Dashboard
-        </Link>
+        {/* Back to /dashboard is AppHeader's job — see lib/nav-hierarchy.ts. */}
 
         <DataErrorBanner error={dataError} subject="your team" />
 

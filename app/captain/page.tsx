@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Mail, Users } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
 import { TeamJoinRequests } from "@/components/teams/team-join-requests";
+import { TeamAnnouncements } from "@/components/teams/team-announcements";
 import { RelayBuilder } from "@/components/captain/relay-builder";
 import { RelayPayments } from "@/components/captain/relay-payments";
 import { SkeletonRow } from "@/components/ui/skeleton";
@@ -99,7 +100,10 @@ export default function CaptainPage() {
                 once inline and once a tap away. The approve/reject queue is
                 the part that genuinely belongs on the dashboard. */}
             {teams.map((team) => (
-              <TeamJoinRequests key={team.id} teamId={team.id} />
+              // showEmptyState: this is a captain-only surface, and rendering
+              // nothing when the queue is empty was a large part of why this
+              // page could look like an ordinary athlete dashboard.
+              <TeamJoinRequests key={team.id} teamId={team.id} showEmptyState />
             ))}
             {/* A captain competes too — captaincy is teams.captain_id, not a
                 role — so their own entries, heat assignments and entry fees
@@ -114,6 +118,21 @@ export default function CaptainPage() {
                 meet — building a squad is a once-per-cycle task. */}
             <RelayPayments teams={teams} />
             <RelayBuilder teams={teams} />
+            {/* Posting to the team was a captain capability
+                (captain_manages_announcements) with a working UI that was
+                reachable only from /teams — open the team list, find your own
+                team, open its roster dialog, scroll. A captain had no reason
+                to look there for it. isCaptain is unconditionally true here:
+                this branch only renders for teams that list this user as
+                captain, which is the same test the RLS policy applies. */}
+            {teams.map((team) => (
+              <TeamAnnouncements
+                key={team.id}
+                teamId={team.id}
+                isCaptain
+                authorId={user?.id ?? null}
+              />
+            ))}
           </>
         )}
       </main>

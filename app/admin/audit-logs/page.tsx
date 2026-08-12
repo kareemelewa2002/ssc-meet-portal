@@ -1,8 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
+import { ChevronDown, ChevronRight, ShieldCheck } from "lucide-react";
 import { AppHeader } from "@/components/layout/app-header";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -97,13 +96,7 @@ export default function AdminAuditLogsPage() {
     <div className="min-h-screen">
       <AppHeader title="Admin Audit Log" />
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-4 p-3 pb-24 sm:p-6">
-        <Link
-          href="/admin"
-          className="inline-flex min-h-[48px] items-center text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="mr-1 size-4" /> Command Center
-        </Link>
-
+        {/* Back to /admin is AppHeader's job — see lib/nav-hierarchy.ts. */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

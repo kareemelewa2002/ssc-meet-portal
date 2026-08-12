@@ -3298,93 +3298,136 @@ $$;
 -- 5. LEADERBOARD MAINTENANCE
 -- =============================================================================
 
--- Upserts leaderboard rows for the athlete tied to a newly-published result.
--- Always upserts into the athlete's native age_group category; additionally
--- upserts into 'Open' when the athlete's native category isn't already
--- 'Open' — this is what makes the Open leaderboard a combined ranking of
--- every age group per the Results Filter rules.
-create or replace function public.apply_result_points()
+-- Points awarded to 1st place. One definition, called by both the heat-place
+-- computation and the leaderboard build, so the two can never drift apart.
+create or replace function public.max_placement_points()
+returns numeric
+language sql
+immutable
+as $$ select 6::numeric $$;
+
+comment on function public.max_placement_points() is
+  'Placement points awarded for 1st; each subsequent place scores one less, '
+  'to a floor of zero. Places beyond this therefore score nothing.';
+
+-- ---------------------------------------------------------------------------
+-- Rebuilds one volume's leaderboard from the published event standings.
+--
+-- Placement points come from the swimmer's place in the EVENT standing FOR
+-- EACH BOARD SEPARATELY — public.event_results already ranks every swim once
+-- per board it belongs to, so a 14 & Under swimmer is ranked against the
+-- 14 & Under field on that board and against the whole field on Open, and
+-- earns each board's points independently. Ranking 1st in 14 & Under and
+-- 2nd overall scores 1st-place points on the 14 & Under board and
+-- 2nd-place points on Open.
+--
+-- This replaces an incremental trigger that read results.placement_points —
+-- a rank WITHIN A SINGLE HEAT — and credited that same figure to both the
+-- native age group and Open. Because heats are seeded by age group, winning
+-- a 14 & Under heat banked full Open points without the swimmer ever having
+-- been ranked against the Open field, so the Open board could be won by
+-- winning age-group races. It also handed 6 points to EVERY heat winner in a
+-- multi-heat event, making three or four "winners" of one race.
+--
+-- It is a full rebuild rather than a delta because a place is relative: one
+-- swimmer's published result reorders everyone behind them, so there is no
+-- per-row increment that could be correct. Delete-then-insert over a single
+-- volume is cheap (a meet is a few hundred swims), and it means a corrected
+-- or retracted time leaves no residue — the previous incremental scheme
+-- could only reverse a result by replaying its exact stored points.
+--
+-- Improvement points are a property of the SWIM, not of a board, so the
+-- same value is credited on every board that swim appears on. That matches
+-- what the incremental trigger did.
+-- ---------------------------------------------------------------------------
+create or replace function public.recompute_volume_leaderboard(p_meet_volume_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_meet_volume_id is null then
+    return;
+  end if;
+
+  delete from public.leaderboards where meet_volume_id = p_meet_volume_id;
+
+  insert into public.leaderboards (
+    meet_volume_id, athlete_id, category, placement_points, improvement_points
+  )
+  select
+    p_meet_volume_id,
+    er.athlete_id,
+    er.age_group,
+    -- event_place is NULL for DQ and NS, which score nothing. greatest(...,0)
+    -- floors places past the points-paying depth at zero rather than letting
+    -- them go negative.
+    coalesce(sum(
+      greatest(0, public.max_placement_points() + 1 - er.event_place)
+    ) filter (where er.event_place is not null), 0),
+    coalesce(sum(er.improvement_points), 0)
+  from public.event_results er
+  where er.meet_volume_id = p_meet_volume_id
+  group by er.athlete_id, er.age_group;
+end;
+$$;
+
+comment on function public.recompute_volume_leaderboard(uuid) is
+  'Rebuilds public.leaderboards for one volume from public.event_results. '
+  'Placement points come from each board''s own event standing, so a swimmer '
+  'earns 14 & Under points for their 14 & Under place and Open points for '
+  'their place against the whole field. Full rebuild by design: a place is '
+  'relative, so no per-result increment can be correct.';
+
+-- Rebuilds the volume a written result belongs to. Fires on DELETE as well
+-- as INSERT/UPDATE: a retracted result must stop scoring, and since the
+-- board is rebuilt from what remains, that happens by construction.
+create or replace function public.results_recompute_leaderboard()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
-  v_athlete_id uuid;
-  v_age_group public.age_group;
   v_meet_volume_id uuid;
-  old_placement numeric(6, 2) := 0;
-  old_improvement numeric(6, 2) := 0;
-  was_published boolean := false;
-  delta_placement numeric(6, 2);
-  delta_improvement numeric(6, 2);
+  v_heat_lane_id uuid;
 begin
-  -- OLD is only assigned on UPDATE — never dereference it on INSERT.
-  if TG_OP = 'UPDATE' then
-    if old.status = 'published' then
-      was_published := true;
-      old_placement := old.placement_points;
-      old_improvement := old.improvement_points;
-    end if;
-  end if;
-
-  if new.status <> 'published' then
-    if not was_published then
-      return new;
-    end if;
-    -- result was un-published after having been counted — reverse it.
-    delta_placement := -old_placement;
-    delta_improvement := -old_improvement;
+  -- NEW is unassigned on DELETE and OLD on INSERT — dereferencing the wrong
+  -- one raises "record is not assigned yet", so branch on TG_OP explicitly.
+  if TG_OP = 'DELETE' then
+    v_heat_lane_id := old.heat_lane_id;
   else
-    delta_placement := new.placement_points - old_placement;
-    delta_improvement := new.improvement_points - old_improvement;
+    v_heat_lane_id := new.heat_lane_id;
   end if;
 
-  if delta_placement = 0 and delta_improvement = 0 then
-    return new;
-  end if;
-
-  -- coalesce is a defensive fallback for rows written before
-  -- age_group_at_entry existed; new entries always have it stamped by
-  -- set_entry_age_group_trigger.
-  select a.id, coalesce(e.age_group_at_entry, a.age_group), s.meet_volume_id
-    into v_athlete_id, v_age_group, v_meet_volume_id
+  select s.meet_volume_id
+    into v_meet_volume_id
   from public.heat_lanes hl
-  join public.entries e on e.id = hl.entry_id
-  join public.athletes a on a.id = e.athlete_id
-  join public.events ev on ev.id = e.event_id
+  join public.heats h    on h.id = hl.heat_id
+  join public.events ev  on ev.id = h.event_id
   join public.sessions s on s.id = ev.session_id
-  where hl.id = new.heat_lane_id;
+  where hl.id = v_heat_lane_id;
 
-  if v_athlete_id is null then
-    return new;
+  if v_meet_volume_id is not null then
+    perform public.recompute_volume_leaderboard(v_meet_volume_id);
   end if;
 
-  insert into public.leaderboards (meet_volume_id, athlete_id, category, placement_points, improvement_points)
-  values (v_meet_volume_id, v_athlete_id, v_age_group, delta_placement, delta_improvement)
-  on conflict (meet_volume_id, athlete_id, category) do update
-    set placement_points = public.leaderboards.placement_points + excluded.placement_points,
-        improvement_points = public.leaderboards.improvement_points + excluded.improvement_points,
-        updated_at = now();
-
-  -- 'Open' is a combined ranking of every age group (Results Filter rule),
-  -- so non-Open athletes also accumulate into it.
-  if v_age_group <> 'Open' then
-    insert into public.leaderboards (meet_volume_id, athlete_id, category, placement_points, improvement_points)
-    values (v_meet_volume_id, v_athlete_id, 'Open', delta_placement, delta_improvement)
-    on conflict (meet_volume_id, athlete_id, category) do update
-      set placement_points = public.leaderboards.placement_points + excluded.placement_points,
-          improvement_points = public.leaderboards.improvement_points + excluded.improvement_points,
-          updated_at = now();
+  if TG_OP = 'DELETE' then
+    return old;
   end if;
-
   return new;
 end;
 $$;
 
-create or replace trigger results_apply_points
-  after insert or update on public.results
-  for each row execute function public.apply_result_points();
+-- Trigger first, then the function it referenced — dropping the function
+-- while the trigger still points at it would fail.
+drop trigger if exists results_apply_points on public.results;
+drop function if exists public.apply_result_points();
+
+create or replace trigger results_recompute_leaderboard_trigger
+  after insert or update or delete on public.results
+  for each row execute function public.results_recompute_leaderboard();
 
 create or replace trigger results_set_updated_at
   before update on public.results
@@ -4568,6 +4611,12 @@ create or replace trigger enforce_result_publish_trigger
 -- null). Recomputing server-side means every device sees identical,
 -- authoritative placements regardless of which referee most recently
 -- wrote a time.
+--
+-- NOTE: results.placement_points, written below, is a HEAT-scoped figure and
+-- no longer feeds the leaderboard — public.recompute_volume_leaderboard()
+-- derives board points from each board's own event standing instead. This
+-- column survives as immediate deck feedback ("you won your heat"); do not
+-- read it as a swimmer's contribution to any standing.
 create or replace function public.recompute_heat_finish_places()
 returns trigger
 language plpgsql
@@ -4577,7 +4626,7 @@ as $$
 declare
   v_heat_id uuid;
   v_is_skins_round boolean;
-  v_max_points numeric := 6;
+  v_max_points numeric := public.max_placement_points();
 begin
   select heat_id into v_heat_id from public.heat_lanes where id = new.heat_lane_id;
   if v_heat_id is null then
@@ -6242,7 +6291,16 @@ comment on view public.heat_projected_starts is
 
 grant select on public.heat_projected_starts to anon, authenticated;
 
-create or replace view public.event_results as
+-- Dropped before creating, like public.series_leaderboards above, because
+-- CREATE OR REPLACE VIEW can only APPEND columns to an existing view — it
+-- cannot insert one in the middle. session_number and event_order sit ahead
+-- of meet_volume_id here, so re-applying this file to a database built from
+-- an older copy would fail with 'cannot change name of view column'. A
+-- from-scratch build never hits that, which is exactly why it is worth
+-- guarding: the failure only ever appears on an upgrade.
+drop view if exists public.event_results;
+
+create view public.event_results as
 with scored as (
   select
     ev.id                                             as event_id,
@@ -6250,7 +6308,18 @@ with scored as (
     ev.stroke,
     ev.distance_m,
     ev.session_id,
+    -- Running order, so a standing can be listed in the order the races were
+    -- actually swum. Without these a caller has only event_name to sort by,
+    -- which is alphabetical: "100m Free" lands ahead of "50m Fly" and the
+    -- results read in an order that matches no session that ever took place.
+    ev.event_order,
+    s.session_number,
     s.meet_volume_id,
+    -- Time-drop points are a property of the SWIM, not of any board, so the
+    -- same value rides every board this swim appears on — matching how the
+    -- previous incremental trigger credited improvement to both the native
+    -- age group and Open.
+    r.improvement_points,
     coalesce(en.age_group_at_entry, a.age_group)      as own_age_group,
     a.gender,
     a.id                                              as athlete_id,
@@ -6304,7 +6373,10 @@ select
   event_id,
   event_name,
   session_id,
+  session_number,
+  event_order,
   meet_volume_id,
+  improvement_points,
   age_group,
   own_age_group,
   -- True when this row is a younger swimmer ranked up into an older board,
