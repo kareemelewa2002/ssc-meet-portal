@@ -718,6 +718,13 @@ export type Database = {
         Args: { p_team_id: string };
         Returns: string;
       };
+      /** Clears athletes.team_id — the column that IS the roster. Not a
+       * team_memberships delete: that table records how someone asked to
+       * join, and removing the row would leave them on the team. */
+      captain_remove_team_member: {
+        Args: { p_athlete_id: string };
+        Returns: void;
+      };
       redeem_team_invite_token: {
         Args: { p_token: string };
         Returns: string | null;

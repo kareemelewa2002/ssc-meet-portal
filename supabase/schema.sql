@@ -3159,6 +3159,95 @@ create or replace trigger sync_athlete_team_on_membership_accept_trigger
   for each row execute function public.sync_athlete_team_on_membership_accept();
 
 -- ---------------------------------------------------------------------------
+-- A captain drops a swimmer from their roster.
+--
+-- WHY THIS IS AN RPC AND NOT A DELETE FROM team_memberships.
+--
+-- Roster membership IS public.athletes.team_id. team_memberships records how
+-- someone ASKED to join and whether it was granted; the accept trigger above
+-- is what actually moves them onto the roster. Deleting the membership row
+-- therefore removes the paper trail and leaves the swimmer on the team — a
+-- removal that reports success and changes nothing on screen. Not everyone on
+-- a roster even has a membership row: an invited swimmer, or one an admin
+-- placed directly, has team_id set and nothing in that table.
+--
+-- Clearing team_id is the real operation, and no policy on public.athletes
+-- lets a captain do it (see athlete_update_own_row — a captain is not the
+-- athlete). Hence SECURITY DEFINER, with the captaincy check done here
+-- explicitly.
+--
+-- History is deliberately untouched. public.volume_team_affiliations records
+-- which team a swimmer represented in each volume, so removing them today
+-- never rewrites the team they swam for in a past meet.
+-- ---------------------------------------------------------------------------
+create or replace function public.captain_remove_team_member(p_athlete_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_team    uuid;
+  v_user    uuid;
+  v_captain uuid;
+  v_squads  integer;
+begin
+  select a.team_id, a.user_id into v_team, v_user
+  from public.athletes a
+  where a.id = p_athlete_id;
+
+  if v_team is null then
+    raise exception 'That swimmer is not on a team.';
+  end if;
+
+  if not public.is_team_captain_of(v_team) then
+    raise exception 'Only the team captain may remove a member.';
+  end if;
+
+  select captain_id into v_captain from public.teams where id = v_team;
+  if v_user is not null and v_user = v_captain then
+    raise exception
+      'A captain cannot remove themselves from their own team. Ask an admin to reassign the captaincy first.';
+  end if;
+
+  -- A relay squad requires every leg to be on the team
+  -- (public.validate_relay_squad). That validator only re-runs when the LEGS
+  -- change, so silently clearing team_id here would leave a committed squad
+  -- that is invalid and would never be re-checked — it would simply race with
+  -- an ineligible swimmer. Refusing is the honest outcome: the captain drops
+  -- them from the squad first, which is a decision only they should make.
+  select count(*) into v_squads
+  from public.relay_legs rl
+  join public.relay_squads rs on rs.id = rl.squad_id
+  where rl.athlete_id = p_athlete_id and rs.team_id = v_team;
+
+  if v_squads > 0 then
+    raise exception
+      'This swimmer is in % relay squad(s) for your team. Remove them from those squads first.',
+      v_squads;
+  end if;
+
+  update public.athletes set team_id = null where id = p_athlete_id;
+
+  -- Clear the membership record too, so they are free to apply again. The
+  -- one_pending_team_membership_per_user index means a stale accepted row
+  -- would otherwise sit in their way.
+  if v_user is not null then
+    delete from public.team_memberships
+    where user_id = v_user and team_id = v_team;
+  end if;
+end;
+$$;
+
+comment on function public.captain_remove_team_member(uuid) is
+  'Drops a swimmer from the caller''s team by clearing athletes.team_id — the '
+  'column that IS the roster — and removing their team_memberships row. '
+  'Refuses to remove the captain, or a swimmer still committed to one of the '
+  'team''s relay squads. Past volume affiliations are never rewritten.';
+
+grant execute on function public.captain_remove_team_member(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------------
 -- CONTACT PRIVACY
 -- ---------------------------------------------------------------------------
 -- Phone and email are only shared where there is a real relationship:

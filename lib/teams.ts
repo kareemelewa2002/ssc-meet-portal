@@ -203,6 +203,10 @@ export interface TeamCaptainContact {
 
 export interface TeamRosterMember {
   athleteId: string;
+  /** The member's public.users id. Needed to tell the captain's OWN row apart
+   * from everyone else's — a captain must not be offered a control that drops
+   * themselves from the team they run. */
+  userId: string | null;
   fullName: string;
   ageGroup: string;
   gender: string;
@@ -213,6 +217,9 @@ export interface TeamRosterMember {
 
 export interface TeamDetail {
   captain: TeamCaptainContact | null;
+  /** teams.captain_id, so a caller can match it against a roster row's
+   * userId without a second query. */
+  captainUserId: string | null;
   roster: TeamRosterMember[];
 }
 
@@ -220,7 +227,7 @@ export interface TeamDetail {
  * whose current team_id is this team; independent of any single volume's
  * representation, which volume_team_affiliations tracks separately). */
 export async function fetchTeamDetail(teamId: string): Promise<FetchResult<TeamDetail>> {
-  const EMPTY: TeamDetail = { captain: null, roster: [] };
+  const EMPTY: TeamDetail = { captain: null, captainUserId: null, roster: [] };
   try {
     const supabase = createClient();
     const [
@@ -293,6 +300,7 @@ export async function fetchTeamDetail(teamId: string): Promise<FetchResult<TeamD
       const contact = user ? contacts.get(user.id) : undefined;
       return {
         athleteId: row.id,
+        userId: user?.id ?? null,
         fullName: user?.full_name ?? "Athlete",
         ageGroup: row.age_group,
         gender: row.gender,
@@ -301,7 +309,7 @@ export async function fetchTeamDetail(teamId: string): Promise<FetchResult<TeamD
       };
     });
 
-    return ok({ captain, roster: members });
+    return ok({ captain, captainUserId: rawTeam?.captain_id ?? null, roster: members });
   } catch (err) {
     return failure(describeError("Loading team roster", err), EMPTY);
   }
@@ -342,4 +350,131 @@ export async function fetchTeamHistoryForAthlete(
       };
     }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Team branding — a captain editing their own team's identity.
+// ---------------------------------------------------------------------------
+
+/** Abbreviations are shown in fixed-width places (heat sheets, scoreboards,
+ * result tables) where a long string would break the column, and they read as
+ * a code rather than a word. */
+export const TEAM_ABBREVIATION_MAX = 6;
+export const TEAM_ABBREVIATION_MIN = 2;
+
+export interface TeamBrandingInput {
+  name: string;
+  abbreviation: string;
+  logoUrl: string;
+}
+
+/**
+ * Validates and normalises a branding edit, returning either the values to
+ * write or the reasons not to.
+ *
+ * Pure, so the same rules can be unit-tested and reused: the form shows these
+ * messages inline, and the submit path re-checks rather than trusting that
+ * the form did.
+ */
+export function validateTeamBranding(input: TeamBrandingInput): {
+  ok: boolean;
+  errors: string[];
+  values: { name: string; abbreviation: string | null; teamLogoUrl: string | null };
+} {
+  const errors: string[] = [];
+  const name = input.name.trim();
+  // Uppercased rather than rejected for being lowercase: the requirement is
+  // that stored abbreviations are uppercase, and silently fixing "rip" to
+  // "RIP" is friendlier than an error for something we can correct exactly.
+  const abbreviation = input.abbreviation.trim().toUpperCase();
+  const logo = input.logoUrl.trim();
+
+  if (name.length === 0) {
+    errors.push("A team needs a name.");
+  } else if (name.length > 60) {
+    errors.push("Team name must be 60 characters or fewer.");
+  }
+
+  if (abbreviation.length > 0) {
+    if (abbreviation.length < TEAM_ABBREVIATION_MIN || abbreviation.length > TEAM_ABBREVIATION_MAX) {
+      errors.push(
+        `Abbreviation must be ${TEAM_ABBREVIATION_MIN}–${TEAM_ABBREVIATION_MAX} characters.`,
+      );
+    }
+    if (!/^[A-Z0-9]+$/.test(abbreviation)) {
+      errors.push("Abbreviation may only contain letters and numbers.");
+    }
+  }
+
+  if (logo.length > 0 && !/^https:\/\/\S+$/i.test(logo)) {
+    // https only: a logo is rendered in the app, and an http URL would be
+    // blocked as mixed content on a site served over https — the image would
+    // simply never appear, with no error to explain why.
+    errors.push("Logo URL must be a full https:// address.");
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+    values: {
+      name,
+      // Empty means "unset", not an empty string — the column is nullable and
+      // a blank abbreviation would render as an empty badge.
+      abbreviation: abbreviation || null,
+      teamLogoUrl: logo || null,
+    },
+  };
+}
+
+/**
+ * Writes a captain's branding edit.
+ *
+ * RLS (captain_update_own_team) is the real gate: the WHERE clause below
+ * cannot be trusted on its own, and a non-captain's update matches zero rows
+ * rather than erroring. teams.name is UNIQUE, so a clash is reported as such
+ * instead of as a generic failure.
+ */
+export async function updateTeamBranding(
+  teamId: string,
+  input: TeamBrandingInput,
+): Promise<{ success: boolean; error?: string }> {
+  const check = validateTeamBranding(input);
+  if (!check.ok) return { success: false, error: check.errors.join(" ") };
+
+  const supabase = createClient();
+  const { error } = await supabase
+    .from("teams")
+    .update({
+      name: check.values.name,
+      abbreviation: check.values.abbreviation,
+      team_logo_url: check.values.teamLogoUrl,
+    })
+    .eq("id", teamId);
+
+  if (error) {
+    if (error.code === "23505") {
+      return { success: false, error: `Another team is already called "${check.values.name}".` };
+    }
+    return { success: false, error: error.message };
+  }
+  return { success: true };
+}
+
+/**
+ * Drops a swimmer from the caller's team.
+ *
+ * Calls public.captain_remove_team_member() rather than deleting a
+ * team_memberships row directly. The roster is athletes.team_id; a membership
+ * delete would leave that column set, so the swimmer would stay on the roster
+ * while the UI reported success. See the function's comment in schema.sql.
+ */
+export async function removeTeamMember(
+  athleteId: string,
+): Promise<{ success: boolean; error?: string }> {
+  const supabase = createClient();
+  const { error } = await supabase.rpc("captain_remove_team_member", {
+    p_athlete_id: athleteId,
+  });
+  if (error) return { success: false, error: error.message };
+  return { success: true };
 }

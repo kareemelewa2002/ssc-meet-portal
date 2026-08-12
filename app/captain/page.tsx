@@ -11,6 +11,9 @@ import { RelayPayments } from "@/components/captain/relay-payments";
 import { SkeletonRow } from "@/components/ui/skeleton";
 import { DataErrorBanner } from "@/components/ui/data-error-banner";
 import { fetchCaptainedTeams } from "@/lib/relays";
+import { fetchMyManagedTeam } from "@/lib/teams";
+import { EditTeamModal } from "@/components/captain/edit-team-modal";
+import type { TeamRow } from "@/lib/supabase/types";
 import { AthleteOverview } from "@/components/dashboard/athlete-overview";
 import { useCurrentUser } from "@/hooks/use-current-user";
 
@@ -25,15 +28,22 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 export default function CaptainPage() {
   const { user, loading: userLoading } = useCurrentUser();
   const [teams, setTeams] = useState<{ id: string; name: string }[] | null>(null);
+  // The full row (abbreviation, logo) for the branding editor. fetchCaptainedTeams
+  // returns only id and name, which is all the relay surfaces need.
+  const [managedTeam, setManagedTeam] = useState<TeamRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (userLoading) return;
     let cancelled = false;
     (async () => {
-      const res = await fetchCaptainedTeams(user?.id);
+      const [res, managed] = await Promise.all([
+        fetchCaptainedTeams(user?.id),
+        fetchMyManagedTeam(user?.id),
+      ]);
       if (cancelled) return;
       setTeams(res.data);
+      setManagedTeam(managed.data);
       setError(res.error);
     })();
     return () => {
@@ -55,7 +65,43 @@ export default function CaptainPage() {
               names, but only behind a teams.length > 1 picker — and a
               captain captains exactly one team, so it never showed. */}
           {teams && teams.length > 0 && (
-            <p className="text-base font-bold">{teams.map((t) => t.name).join(" · ")}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-base font-bold">
+                {managedTeam?.name ?? teams.map((t) => t.name).join(" · ")}
+              </p>
+              {managedTeam?.abbreviation && (
+                <span className="rounded-md border-2 border-border-strong px-1.5 font-mono text-xs font-bold">
+                  {managedTeam.abbreviation}
+                </span>
+              )}
+              {managedTeam && (
+                <EditTeamModal
+                  team={managedTeam}
+                  // Reflect the save without a refetch: this header and the
+                  // roster card both read from state, and the write has
+                  // already succeeded by the time this fires.
+                  onSaved={(updated) => {
+                    setManagedTeam((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            name: updated.name,
+                            abbreviation: updated.abbreviation,
+                            team_logo_url: updated.teamLogoUrl,
+                          }
+                        : prev,
+                    );
+                    setTeams((prev) =>
+                      prev
+                        ? prev.map((t) =>
+                            t.id === managedTeam.id ? { ...t, name: updated.name } : t,
+                          )
+                        : prev,
+                    );
+                  }}
+                />
+              )}
+            </div>
           )}
           <p className="text-sm text-muted-foreground">
             Your own races and payments, plus your team&rsquo;s roster, invitations and relay

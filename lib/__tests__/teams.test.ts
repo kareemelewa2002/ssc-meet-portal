@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildTeamCreateInsert, didTransferTeams, summarizeTeamHistory } from "@/lib/teams";
+import {
+  buildTeamCreateInsert,
+  didTransferTeams,
+  summarizeTeamHistory,
+  validateTeamBranding,
+} from "@/lib/teams";
 
 describe("buildTeamCreateInsert", () => {
   it("always starts a new team pending admin approval", () => {
@@ -62,5 +67,60 @@ describe("volume-by-volume team transfer", () => {
     expect(summarizeTeamHistory(history)).toBe(
       "Blue Marlins (Vol. 1) → Riptide (Vol. 2)",
     );
+  });
+});
+
+describe("validateTeamBranding", () => {
+  const base = { name: "Riptide Swim Club", abbreviation: "RIP", logoUrl: "" };
+
+  it("accepts a plain valid edit", () => {
+    const res = validateTeamBranding(base);
+    expect(res.ok).toBe(true);
+    expect(res.values.name).toBe("Riptide Swim Club");
+    expect(res.values.abbreviation).toBe("RIP");
+  });
+
+  it("uppercases the abbreviation rather than rejecting lowercase", () => {
+    // The requirement is that stored abbreviations are uppercase. Correcting
+    // "rip" exactly is friendlier than erroring on something unambiguous.
+    const res = validateTeamBranding({ ...base, abbreviation: "rip" });
+    expect(res.ok).toBe(true);
+    expect(res.values.abbreviation).toBe("RIP");
+  });
+
+  it("trims, and stores an empty abbreviation or logo as null", () => {
+    // The columns are nullable; an empty string would render as a blank badge
+    // and as a broken image rather than as "not set".
+    const res = validateTeamBranding({ name: "  Tidalwave  ", abbreviation: "  ", logoUrl: "  " });
+    expect(res.values.name).toBe("Tidalwave");
+    expect(res.values.abbreviation).toBeNull();
+    expect(res.values.teamLogoUrl).toBeNull();
+  });
+
+  it("rejects an empty name", () => {
+    const res = validateTeamBranding({ ...base, name: "   " });
+    expect(res.ok).toBe(false);
+    expect(res.errors.join(" ")).toMatch(/needs a name/);
+  });
+
+  it("enforces the abbreviation length limits", () => {
+    expect(validateTeamBranding({ ...base, abbreviation: "A" }).ok).toBe(false);
+    expect(validateTeamBranding({ ...base, abbreviation: "TOOLONG" }).ok).toBe(false);
+    expect(validateTeamBranding({ ...base, abbreviation: "AB" }).ok).toBe(true);
+    expect(validateTeamBranding({ ...base, abbreviation: "ABCDEF" }).ok).toBe(true);
+  });
+
+  it("rejects punctuation in an abbreviation", () => {
+    const res = validateTeamBranding({ ...base, abbreviation: "R-P" });
+    expect(res.ok).toBe(false);
+    expect(res.errors.join(" ")).toMatch(/letters and numbers/);
+  });
+
+  it("requires https for a logo, since http is blocked as mixed content", () => {
+    // An http image on an https page is silently blocked by the browser — the
+    // logo would simply never appear, with nothing to explain why.
+    expect(validateTeamBranding({ ...base, logoUrl: "http://x.test/a.png" }).ok).toBe(false);
+    expect(validateTeamBranding({ ...base, logoUrl: "x.test/a.png" }).ok).toBe(false);
+    expect(validateTeamBranding({ ...base, logoUrl: "https://x.test/a.png" }).ok).toBe(true);
   });
 });
